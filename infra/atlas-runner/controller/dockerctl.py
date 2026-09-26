@@ -48,8 +48,17 @@ WORKER_LABEL_VALUE = "owned"
 
 
 def validate_mount(root: Path, host_path: Path, *, label: str = "mount") -> Path:
-    """Require a mount source to live under the jobs root; fail closed."""
+    """Require a mount source to live under the jobs root; fail closed.
+
+    The jobs root itself is the single sanctioned exception to the forbidden
+    host prefixes: operators may legitimately place it under /var/lib (the
+    documented default). Paths outside the jobs root stay fully subject to
+    the forbidden-prefix policy.
+    """
     resolved = ensure_under_root(root, host_path, label=label)
+    root_resolved = root.resolve()
+    if resolved == root_resolved or resolved.is_relative_to(root_resolved):
+        return resolved
     text = str(resolved)
     for forbidden in FORBIDDEN_MOUNT_PREFIXES:
         if text == forbidden or text.startswith(forbidden + "/"):

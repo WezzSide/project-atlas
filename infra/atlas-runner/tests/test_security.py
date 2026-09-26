@@ -41,6 +41,31 @@ def test_mount_policy_rejects_host_paths(workspace, config):
         validate_mount(jobs_root, jobs_root / "link")
 
 
+def test_mount_policy_allows_jobs_root_under_forbidden_prefix(workspace, monkeypatch):
+    """The operator-configured jobs root is the sanctioned /var/lib exception.
+
+    Regression: the forbidden-prefix sweep rejected the default
+    /var/lib/atlas-runner/jobs workspace mount, failing every provisioning
+    with DockerError on the first live deploy (VPS-02, 2026-09-26).
+    """
+    from controller import dockerctl
+
+    jobs_root = workspace / "var-lib-sim" / "atlas-runner" / "jobs"
+    jobs_root.mkdir(parents=True)
+    outside = workspace / "var-lib-sim" / "other"
+    outside.mkdir(parents=True)
+    monkeypatch.setattr(
+        dockerctl,
+        "FORBIDDEN_MOUNT_PREFIXES",
+        (str(workspace / "var-lib-sim"),),
+    )
+    # Mounts INSIDE the jobs root are allowed even though the prefix is forbidden.
+    assert validate_mount(jobs_root, jobs_root / "ex-1", label="mount") == (jobs_root / "ex-1").resolve()
+    # Sibling paths under the same forbidden prefix remain rejected.
+    with pytest.raises(DockerError):
+        validate_mount(jobs_root, outside, label="mount")
+
+
 def test_run_worker_rejects_host_network(workspace):
     jobs_root = workspace / "jobs"
     jobs_root.mkdir(parents=True)
