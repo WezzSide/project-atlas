@@ -178,7 +178,13 @@ class WorkerManager:
             except Exception as exc:
                 self._safe_rm(reg["secret_file"])
                 raise WorkerFailure(f"provision_failed:{type(exc).__name__}") from exc
-            self._safe_rm(reg["secret_file"])
+            # NOTE: the secret file must NOT be deleted here. `docker run -d`
+            # returns once the container is created, but the entrypoint reads
+            # the registration material a moment later — deleting now races
+            # the container start and intermittently yields an empty
+            # --jitconfig ("Not configured"; observed live on VPS-02).
+            # Deletion happens after the worker exits (see cleanup below);
+            # the entrypoint also deletes the token file itself post-config.
             secrets = finally_secrets
 
             # --- run ------------------------------------------------------------
@@ -218,6 +224,7 @@ class WorkerManager:
 
             # --- deregister + destroy --------------------------------------------
             store.transition(execution_id, lifecycle.DEREGISTERING)
+            self._safe_rm(reg["secret_file"])  # worker has exited; safe now
             cleanup_status = self._deregister_and_destroy(worker_name, runner_name, secrets)
             evidence_doc["cleanup_status"] = cleanup_status
             self._write_evidence_checked(evidence_doc, execution_id)
