@@ -71,6 +71,14 @@ real-host measurement.
    it. Host-side evidence is VPS-02-produced and self-reported by
    construction; only the GitHub-hosted verifier's verdict carries
    independence weight.
+8. **The Atlas adapter is schema + documentation, not code.** The runner
+   fabric is an execution backend of Atlas, not a parallel control plane:
+   Atlas supplies task bindings validated against
+   `schemas/atlas-task-binding.schema.json` and owns all authority; the
+   fabric owns isolation/execution/cleanup and returns evidence. The
+   mapping to Atlas dispatch-record statuses is documented in
+   `infra/atlas-runner/docs/ATLAS-INTERFACE.md`. No Atlas code changes are
+   required in this milestone.
 
 ## Consequences
 

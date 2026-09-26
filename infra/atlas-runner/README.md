@@ -54,6 +54,7 @@ for v1. This documents the tension; it does not resolve fleet policy.
 | `docs/DEPLOYMENT.md` | Prerequisites, manual bootstrap, upgrade flow, rollback |
 | `docs/RECOVERY.md` | Crash/daemon/cleanup/outage/rollback runbooks |
 | `docs/EVIDENCE.md` | Evidence schema field-by-field, verification contract |
+| `docs/ATLAS-INTERFACE.md` | Machine-consumable Atlas ↔ fabric boundary (task binding, evidence mapping) |
 
 Workflows: `atlas-runner-ci.yml` (CI), `atlas-runner-smoke.yml` (executor
 smoke trigger), `atlas-agent-execute.yml` (executor-only agent runs),

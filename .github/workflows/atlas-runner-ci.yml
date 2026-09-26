@@ -59,7 +59,7 @@ jobs:
       - name: Shellcheck (-S warning)
         run: shellcheck -S warning infra/atlas-runner/scripts/*.sh infra/atlas-runner/entrypoint.sh
 
-      - name: JSON Schema validity check (3 schemas)
+      - name: JSON Schema validity check (4 schemas)
         run: |
           python - <<'PY'
           import json
@@ -73,7 +73,7 @@ jobs:
               validator_class = jsonschema.validators.validator_for(schema)
               validator_class.check_schema(schema)
               print(f"schema OK: {path}")
-          assert len(list(schema_dir.glob("*.schema.json"))) == 3, "expected exactly 3 schemas"
+          assert len(list(schema_dir.glob("*.schema.json"))) == 4, "expected exactly 4 schemas"
           PY
 
   docker-image:

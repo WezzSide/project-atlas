@@ -6995,3 +6995,29 @@ North-star daily journey still lacked a first-class **What next** step. Substrat
 - YAML parse of all 5 workflows: PASS (pyyaml).
 - Pinned action SHAs re-resolved via `gh api` against claimed versions: PASS (see report).
 - `actionlint`: NOT_AVAILABLE on this host — manual review pass performed (env indirection audit of every `${{` in `run:` blocks: none left; validated-input interpolation only).
+
+---
+
+## 2026-09-26 — AS-RUNNER-FABRIC-001 follow-up: adapter contract + ATLAS-RUNNER-E2E-001
+
+**Branch:** `feat/atlas-runner-fabric-001` atop `6e10a43e` (no commit made here)
+
+### Added
+
+- `infra/atlas-runner/schemas/atlas-task-binding.schema.json` — machine-consumable Atlas adapter contract (task binding: executor_type enum with claude as one backend, command|prompt execution, authority_reference, resource/timeout/platform defaults, evidence_requirements).
+- `infra/atlas-runner/docs/ATLAS-INTERFACE.md` — positioning (fabric = execution backend of Atlas; Atlas owns authority), binding example, evidence field mapping, explicit fabric terminal_status → dispatch-record status table (incl. cleanup_required→OWNER_REQUIRED, blocked→BLOCKED, verifier REJECTED→REJECTED), machine-consumability, non-goals.
+- `infra/atlas-runner/scripts/acceptance-workload.sh` + genesis fixture `infra/atlas-runner/tests/fixtures/acceptance/ATLAS-RUNNER-E2E-001.json` (counter 0) + `infra/atlas-runner/tests/test_acceptance_fixture.py` (genesis golden hash, structural determinism, chain continuity) — deterministic, offline.
+- `.github/workflows/atlas-runner-acceptance.yml` — ATLAS-RUNNER-E2E-001 acceptance task: dispatch-only, executor labels, dedicated `atlas/acceptance-<run_id>-<attempt>` result branch, fixture increment + fixture test, patch + sha256, evidence fragment, artifact upload. Never merges. Executor-only (`EXECUTOR_SUCCESS != VERIFIED`).
+- `atlas-runner-verify.yml` now also verifies `atlas-runner-acceptance.yml` runs; `atlas-runner-ci.yml` schema check updated 3→4 schemas. ADR-033 decision 8 added (adapter = schema + doc, not code). README docs index extended.
+
+### State
+
+- `DEPLOYED = NO`; `LIVE E2E NOT_RUN_REQUIRES_EXTERNAL_AUTHORITY` (unchanged: VPS-02 unreachable, GitHub secrets/Anthropic auth external).
+- Committed fixture remains genesis (counter 0); the workload was exercised only in a temp copy.
+
+### Local verification (this build host)
+
+- All 4 schemas parse as Draft 2020-12: PASS.
+- Infra suite: 92 passed (85 prior + 7 new fixture tests), 0 failed.
+- ruff clean on new test; bash -n + shellcheck -S warning clean on new script.
+- acceptance-workload.sh exercised in a temp copy: bump + chain + nonce deterministic in structure; committed fixture untouched.

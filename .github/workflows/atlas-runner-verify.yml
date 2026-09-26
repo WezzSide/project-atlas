@@ -19,6 +19,7 @@ on:
     workflows:
       - atlas-runner-smoke.yml
       - atlas-agent-execute.yml
+      - atlas-runner-acceptance.yml
     types: [completed]
     branches: [main]
   workflow_dispatch:
