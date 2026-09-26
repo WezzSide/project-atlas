@@ -356,7 +356,13 @@ def _resolve_diff_base_and_mode(
     if resolve.returncode != 0:
         try:
             fetch = subprocess.run(
-                ["git", "fetch", "--depth=1", "origin", "main"],
+                [
+                    "git",
+                    "fetch",
+                    "--depth=1",
+                    "origin",
+                    "main:refs/remotes/origin/main",
+                ],
                 cwd=root,
                 check=False,
                 capture_output=True,

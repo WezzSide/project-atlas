@@ -422,7 +422,7 @@ def test_git_preflight_fetches_stale_origin_before_judging_halt(tmp_path: Path) 
     _git(owner, "commit", "-q", "-m", "owner HALT")
     _git(owner, "push", "origin", "main")
     stale = _git(work, "rev-parse", "origin/main").strip()
-    remote_tip = _git(remote, "rev-parse", "refs/heads/main").strip()
+    remote_tip = _git(owner, "rev-parse", "HEAD").strip()
     assert stale != remote_tip
     grant = pf.load_grant(work, 1)
     grant = replace(grant, base_sha=base)
@@ -520,7 +520,7 @@ def test_scope_fails_closed_when_kill_switch_exists_on_refreshed_grant_ref(
     _git(owner, "commit", "-q", "-m", "owner kill switch")
     _git(owner, "push", "origin", "main")
     stale = _git(work, "rev-parse", "origin/main").strip()
-    remote_tip = _git(remote, "rev-parse", "refs/heads/main").strip()
+    remote_tip = _git(owner, "rev-parse", "HEAD").strip()
     assert stale != remote_tip
     _write(work / "src/ok.py", "ok = 1\n")
     _git(work, "add", "-A")
