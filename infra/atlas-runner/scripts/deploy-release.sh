@@ -69,7 +69,7 @@ if [ -z "${CONTRACTS_SRC}" ]; then
     echo "atlas-runner: atlas_contracts sources not found (expected under /opt)" >&2
     exit 1
 fi
-export PYTHONPATH="${CONTRACTS_SRC}"
+export PYTHONPATH="${RELEASE}:${CONTRACTS_SRC}"
 exec python3 -m controller --config "${ATLAS_RUNNER_CONFIG:-/etc/atlas-runner/config/atlas-runner.toml}" "$@"
 WRAPPER
 chmod 0755 "${RELEASE_DIR}/bin/atlas-runner"

@@ -3,18 +3,18 @@ Description=Atlas Runner Fabric controller (AS-RUNNER-FABRIC-001)
 Documentation=file:/opt/atlas-runner/current/README.md
 After=docker.service network-online.target
 Wants=docker.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
 User=atlas-runner
 Group=atlas-runner
 WorkingDirectory=/opt/atlas-runner/current
-ExecStart=/opt/atlas-runner/current/bin/atlas-runner run --config /etc/atlas-runner/config/atlas-runner.toml
+ExecStart=/opt/atlas-runner/current/bin/atlas-runner --config /etc/atlas-runner/config/atlas-runner.toml run
 EnvironmentFile=-/etc/atlas-runner/config/atlas-runner.env
 Restart=on-failure
 RestartSec=5
-StartLimitIntervalSec=300
-StartLimitBurst=5
 
 # Hardening (AF_UNIX is required for the docker CLI socket).
 NoNewPrivileges=true
