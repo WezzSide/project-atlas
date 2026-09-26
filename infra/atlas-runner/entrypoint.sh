@@ -34,6 +34,7 @@ elif [ -n "${RUNNER_REGISTRATION_TOKEN_FILE:-}" ]; then
         --token "$(cat "${RUNNER_REGISTRATION_TOKEN_FILE}")" \
         --ephemeral --unattended \
         --name "${RUNNER_NAME:?RUNNER_NAME required}" \
+        --labels "${RUNNER_LABELS:?RUNNER_LABELS required}" \
         --work "${RUNNER_WORK_FOLDER:-_work}" >>"${LOG_FILE}" 2>&1
     rm -f "${RUNNER_REGISTRATION_TOKEN_FILE}"
     ./run.sh --once >>"${LOG_FILE}" 2>&1 &

@@ -86,6 +86,10 @@ class WorkerManager:
         if self.github is None:
             raise WorkerFailure("no_github_client")
         env: dict[str, str] = {"RUNNER_NAME": runner_name, "RUNNER_WORK_FOLDER": "/workspace/_work"}
+        # Custom labels must also reach config.sh in the token fallback path,
+        # or GitHub never assigns label-gated jobs to the runner (observed
+        # live: runner registered with only the default self-hosted/linux/x64).
+        env["RUNNER_LABELS"] = ",".join(self.config.labels)
         try:
             jit = self.github.generate_jitconfig(
                 name=runner_name,
