@@ -26,7 +26,7 @@ LABEL org.opencontainers.image.title="atlas-runner-worker" \
 # need node). build-essential is included for trivial compile checks only.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       bash coreutils git curl ca-certificates jq ripgrep tar zip unzip \
-      openssh-client python3 python3-pip python3-pytest nodejs npm build-essential \
+      openssh-client python3 python3-pip python3-pytest python3-pytest-cov nodejs npm build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 # Pinned-digest verification step: download the official runner release from
