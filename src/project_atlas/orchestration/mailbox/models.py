@@ -273,6 +273,9 @@ class MailboxSuccessorRecord(BaseModel):
     lifecycle: SuccessorLifecycle = SuccessorLifecycle.PREPARED
     generation: int = Field(default=1, ge=1)
     supersedes_package_id: str | None = Field(default=None, max_length=128, pattern=ID_PATTERN)
+    retry_id: str | None = Field(default=None, max_length=128, pattern=ID_PATTERN)
+    lifecycle_revision: int = Field(default=0, ge=0)
+    materialization_owner_token: str | None = Field(default=None, min_length=1, max_length=128)
 
     @model_validator(mode="after")
     def _node_digest(self) -> MailboxSuccessorRecord:
@@ -281,6 +284,12 @@ class MailboxSuccessorRecord(BaseModel):
         self.binding.verify()
         if self.work_node.get("package_id") != self.binding.package_id:
             raise ValueError("successor WorkNode package binding mismatch")
+        if (self.lifecycle == SuccessorLifecycle.MATERIALIZING) != (
+            self.materialization_owner_token is not None
+        ):
+            raise ValueError("materialization lifecycle and owner token disagree")
+        if self.supersedes_package_id is None and self.retry_id is not None:
+            raise ValueError("retry identity has no superseded successor")
         return self
 
 
@@ -289,7 +298,7 @@ class MailboxState(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal[3] = 3
+    schema_version: Literal[4] = 4
     project_id: str = Field(min_length=1, max_length=128, pattern=ID_PATTERN)
     records: dict[str, MailboxRecord] = Field(default_factory=dict)
     quarantined: dict[str, QuarantineReceipt] = Field(default_factory=dict)

@@ -213,6 +213,7 @@ class AgentMailbox:
         work_node: dict[str, object],
         generation: int = 1,
         supersedes_package_id: str | None = None,
+        retry_id: str | None = None,
     ) -> tuple[MailboxSuccessorRecord, bool]:
         """Persist one routed successor identity before governor materialization."""
         binding.verify()
@@ -224,6 +225,21 @@ class AgentMailbox:
                     "source message is not processed", code="SUCCESSOR_SOURCE_INVALID"
                 )
             routing = source.routing or {}
+            if routing.get("classification") == "DUPLICATE_MESSAGE":
+                if not source.duplicate_of:
+                    raise MailboxError(
+                        "duplicate source reference is missing", code="SUCCESSOR_SOURCE_INVALID"
+                    )
+                duplicate_source = state.records.get(source.duplicate_of)
+                if (
+                    duplicate_source is None
+                    or duplicate_source.status != MailboxStatus.PROCESSED
+                    or duplicate_source.incident_id != source.incident_id
+                ):
+                    raise MailboxError(
+                        "duplicate source reference is invalid", code="SUCCESSOR_SOURCE_INVALID"
+                    )
+                routing = duplicate_source.routing or {}
             if routing.get("classification") not in {
                 "CONTINUATION_ELIGIBLE",
                 "TASK_DIRECTIVE_READY",
@@ -252,6 +268,7 @@ class AgentMailbox:
                 work_node_digest=record_sha256(work_node),
                 generation=generation,
                 supersedes_package_id=supersedes_package_id,
+                retry_id=retry_id,
             )
             prior = state.successors.get(binding.package_id)
             if prior is not None:
@@ -270,6 +287,9 @@ class AgentMailbox:
                 if (
                     stable_prior != stable_candidate
                     or prior.work_node_digest != candidate.work_node_digest
+                    or prior.retry_id != candidate.retry_id
+                    or prior.generation != candidate.generation
+                    or prior.supersedes_package_id != candidate.supersedes_package_id
                 ):
                     if prior.lifecycle in ACTIVE_SUCCESSOR_LIFECYCLES:
                         raise MailboxError(
@@ -304,13 +324,14 @@ class AgentMailbox:
                     latest.lifecycle != SuccessorLifecycle.TERMINAL
                     or supersedes_package_id != latest.binding.package_id
                     or generation != latest.generation + 1
+                    or retry_id is None
                     or binding.transition not in allowed_retries
                 ):
                     raise MailboxError(
                         "successor replacement requires explicit terminal supersession",
                         code="SUCCESSOR_SUPERSESSION_REQUIRED",
                     )
-            elif supersedes_package_id is not None or generation != 1:
+            elif supersedes_package_id is not None or generation != 1 or retry_id is not None:
                 raise MailboxError(
                     "successor generation has no prior terminal record",
                     code="SUCCESSOR_SUPERSESSION_INVALID",
@@ -330,15 +351,114 @@ class AgentMailbox:
             item = state.successors.get(package_id)
             if item is None:
                 raise MailboxError("successor is not recorded", code="SUCCESSOR_NOT_FOUND")
+            if lifecycle == SuccessorLifecycle.MATERIALIZING:
+                raise MailboxError(
+                    "materialization requires an atomic claim", code="MATERIALIZATION_CAS_REQUIRED"
+                )
+            if item.lifecycle == SuccessorLifecycle.MATERIALIZING:
+                raise MailboxError(
+                    "materialization is owned by its durable claimant",
+                    code="MATERIALIZATION_OWNER_REQUIRED",
+                )
+            if item.lifecycle == SuccessorLifecycle.PREPARED and lifecycle not in {
+                SuccessorLifecycle.PREPARED,
+                SuccessorLifecycle.WAIT_RECONCILIATION,
+                SuccessorLifecycle.TERMINAL,
+            }:
+                raise MailboxError(
+                    "prepared successor must be claimed before lifecycle advance",
+                    code="MATERIALIZATION_CAS_REQUIRED",
+                )
             if item.lifecycle == SuccessorLifecycle.TERMINAL and lifecycle != item.lifecycle:
                 raise MailboxError(
                     "terminal successor lifecycle cannot regress",
                     code="SUCCESSOR_LIFECYCLE_REGRESSION",
                 )
-            updated = item.model_copy(update={"lifecycle": lifecycle})
+            updated = item.model_copy(
+                update={"lifecycle": lifecycle, "lifecycle_revision": item.lifecycle_revision + 1}
+            )
             state.successors[package_id] = updated
             self._save_state(state)
             return updated
+
+        return self._locked_update(operation)
+
+    def claim_materialization(
+        self,
+        package_id: str,
+        *,
+        generation: int,
+        expected_revision: int,
+        owner_token: str,
+    ) -> tuple[MailboxSuccessorRecord, bool]:
+        """Atomically claim PREPARED -> MATERIALIZING for exactly one owner."""
+
+        if not re.fullmatch(ID_PATTERN, owner_token):
+            raise MailboxError("materialization owner token is invalid", code="OWNER_TOKEN_INVALID")
+
+        def operation(state: MailboxState) -> tuple[MailboxSuccessorRecord, bool]:
+            item = state.successors.get(package_id)
+            if item is None:
+                raise MailboxError("successor is not recorded", code="SUCCESSOR_NOT_FOUND")
+            if (
+                item.generation != generation
+                or item.lifecycle_revision != expected_revision
+                or item.lifecycle != SuccessorLifecycle.PREPARED
+            ):
+                return item, False
+            claimed = item.model_copy(
+                update={
+                    "lifecycle": SuccessorLifecycle.MATERIALIZING,
+                    "lifecycle_revision": item.lifecycle_revision + 1,
+                    "materialization_owner_token": owner_token,
+                }
+            )
+            state.successors[package_id] = claimed
+            self._save_state(state)
+            return claimed, True
+
+        return self._locked_update(operation)
+
+    def finalize_materialization(
+        self,
+        package_id: str,
+        *,
+        generation: int,
+        expected_revision: int,
+        owner_token: str,
+        lifecycle: SuccessorLifecycle,
+    ) -> MailboxSuccessorRecord:
+        """Finalize only the still-current CAS owner; stale owners cannot commit."""
+        if lifecycle in {
+            SuccessorLifecycle.PREPARED,
+            SuccessorLifecycle.MATERIALIZING,
+            SuccessorLifecycle.WAIT_RECONCILIATION,
+        }:
+            raise MailboxError("invalid materialization final state", code="LIFECYCLE_INVALID")
+
+        def operation(state: MailboxState) -> MailboxSuccessorRecord:
+            item = state.successors.get(package_id)
+            if item is None:
+                raise MailboxError("successor is not recorded", code="SUCCESSOR_NOT_FOUND")
+            if (
+                item.generation != generation
+                or item.lifecycle_revision != expected_revision
+                or item.lifecycle != SuccessorLifecycle.MATERIALIZING
+                or item.materialization_owner_token != owner_token
+            ):
+                raise MailboxError(
+                    "materialization owner is stale", code="MATERIALIZATION_STALE_OWNER"
+                )
+            finalized = item.model_copy(
+                update={
+                    "lifecycle": lifecycle,
+                    "lifecycle_revision": item.lifecycle_revision + 1,
+                    "materialization_owner_token": None,
+                }
+            )
+            state.successors[package_id] = finalized
+            self._save_state(state)
+            return finalized
 
         return self._locked_update(operation)
 
@@ -367,6 +487,22 @@ class AgentMailbox:
                     }
                 )
             else:
+                duplicate_of = self._validated_duplicate_of(state, current.message, outcome)
+                if duplicate_of is not None:
+                    updated = current.model_copy(
+                        update={
+                            "status": MailboxStatus.PROCESSED,
+                            "duplicate_of": duplicate_of,
+                            "routing": {
+                                "classification": "DUPLICATE_MESSAGE",
+                                "duplicate_of": duplicate_of,
+                                "validated_routing": outcome.model_dump(mode="json"),
+                            },
+                        }
+                    )
+                    state.records[current.message.message_id] = updated
+                    self._save_state(state)
+                    return updated
                 updated = current.model_copy(
                     update={
                         "status": MailboxStatus.PROCESSED,
@@ -399,37 +535,15 @@ class AgentMailbox:
                 "classification"
             ) in {"DUPLICATE_MESSAGE", "QUARANTINE"}:
                 continue
-            if item.message.idempotency_key == message.idempotency_key:
-                if item.message.idempotency_sha256() != message.idempotency_sha256():
-                    return self._quarantine_locked(
-                        state, message.model_dump(mode="json"), "IDEMPOTENCY_KEY_COLLISION"
-                    )
-                return self._record_duplicate(state, message, item.message.message_id)
-
-        result_kinds = {"AGENT_RESULT", "BLOCKED", "VERIFICATION_RESULT"}
-        duplicate_of = None
-        if message.message_kind.value in result_kinds and message.dispatch_id is not None:
-            for item in state.records.values():
-                if (
-                    item.status == MailboxStatus.PROCESSED
-                    and (item.routing or {}).get("classification")
-                    not in {"DUPLICATE_MESSAGE", "QUARANTINE"}
-                    and item.message.message_kind == message.message_kind
-                    and item.message.task_id == message.task_id
-                    and item.message.run_id == message.run_id
-                    and item.message.dispatch_id == message.dispatch_id
-                    and item.message.attempt_id == message.attempt_id
-                    and item.message.requester_id == message.requester_id
-                    and item.message.reason_code == message.reason_code
-                    and item.message.trusted_head == message.trusted_head
-                    and item.message.trusted_tree == message.trusted_tree
-                    and item.message.payload_digest == message.payload_digest
-                ):
-                    duplicate_of = item.message.message_id
-                    break
+            if (
+                item.message.idempotency_key == message.idempotency_key
+                and item.message.idempotency_sha256() != message.idempotency_sha256()
+            ):
+                return self._quarantine_locked(
+                    state, message.model_dump(mode="json"), "IDEMPOTENCY_KEY_COLLISION"
+                )
+            # Cross-message replay is decided only after current routing validates.
         incident_id = message.incident_id()
-        if duplicate_of is not None:
-            return self._record_duplicate(state, message, duplicate_of)
         state.records[message.message_id] = MailboxRecord(
             message=message, status=MailboxStatus.PENDING, incident_id=incident_id
         )
@@ -439,6 +553,91 @@ class AgentMailbox:
             message_id=message.message_id,
             incident_id=incident_id,
         )
+
+    @staticmethod
+    def _routing_context_digest(message: AgentInboxMessage, routing: InboxRoutingResult) -> str:
+        envelope = message.payload.get("result_envelope")
+        envelope = envelope if isinstance(envelope, dict) else {}
+        envelope_task = envelope.get("task")
+        envelope_task = envelope_task if isinstance(envelope_task, dict) else {}
+        producer = envelope.get("producer")
+        producer = producer if isinstance(producer, dict) else {}
+        receipt = envelope.get("receipt")
+        receipt = receipt if isinstance(receipt, dict) else {}
+        observations = envelope.get("observations")
+        observations = observations if isinstance(observations, dict) else {}
+        extras = observations.get("extras")
+        extras = extras if isinstance(extras, dict) else {}
+        blockers = envelope.get("blockers")
+        blocker_codes = (
+            [item.get("code") for item in blockers if isinstance(item, dict)]
+            if isinstance(blockers, list)
+            else []
+        )
+        context = {
+            "project_id": message.project_id,
+            "task_id": message.task_id,
+            "task_class": message.task_class,
+            "run_id": message.run_id,
+            "dispatch_id": message.dispatch_id,
+            "attempt_id": message.attempt_id,
+            "requester_id": message.requester_id,
+            "authority_reference": message.authority_reference,
+            "message_kind": message.message_kind.value,
+            "reason_code": message.reason_code,
+            "trusted_head": message.trusted_head,
+            "trusted_tree": message.trusted_tree,
+            "retryable": message.retryable,
+            "owner_required": message.owner_required,
+            "result": {
+                "producer_role": producer.get("role"),
+                "task_id": envelope_task.get("id"),
+                "task_attempt": envelope_task.get("attempt"),
+                "outcome": envelope.get("outcome"),
+                "state": envelope.get("state"),
+                "requested_transition": envelope.get("requested_transition"),
+                "authority_grant": envelope.get("authority_grant"),
+                "merge_authorized": envelope.get("merge_authorized"),
+                "receipt_status": receipt.get("status"),
+                "receipt_event_id": receipt.get("event_id"),
+                "target_moved": observations.get("target_moved"),
+                "unauthorized_mutations": observations.get("unauthorized_mutations"),
+                "retryable": extras.get("retryable"),
+                "process_started": extras.get("process_started"),
+                "blocker_codes": blocker_codes,
+            },
+            "routing": routing.model_dump(mode="json"),
+        }
+        return record_sha256(context)
+
+    def _validated_duplicate_of(
+        self,
+        state: MailboxState,
+        message: AgentInboxMessage,
+        routing: InboxRoutingResult,
+    ) -> str | None:
+        result_kinds = {"AGENT_RESULT", "BLOCKED", "VERIFICATION_RESULT"}
+        if message.message_kind.value not in result_kinds or message.dispatch_id is None:
+            return None
+        candidate = self._routing_context_digest(message, routing)
+        for item in state.records.values():
+            if (
+                item.status != MailboxStatus.PROCESSED
+                or item.duplicate_of is not None
+                or item.routing is None
+                or item.routing.get("classification") in {"QUARANTINE", "DUPLICATE_MESSAGE"}
+                or item.message.message_kind.value not in result_kinds
+                or item.message.task_id != message.task_id
+                or item.message.dispatch_id != message.dispatch_id
+            ):
+                continue
+            try:
+                prior_routing = InboxRoutingResult.model_validate(item.routing)
+            except (ValidationError, TypeError, ValueError):
+                continue
+            if self._routing_context_digest(item.message, prior_routing) == candidate:
+                return item.message.message_id
+        return None
 
     def _record_duplicate(
         self, state: MailboxState, message: AgentInboxMessage, duplicate_of: str
@@ -509,7 +708,7 @@ class AgentMailbox:
             raw = json.loads(self.state_path.read_text(encoding="utf-8"))
             if not isinstance(raw, dict):
                 raise ValueError("state root is not an object")
-            if raw.get("schema_version") in {1, 2}:
+            if raw.get("schema_version") in {1, 2, 3}:
                 legacy_digest = raw.get("state_digest")
                 legacy_unsigned = dict(raw)
                 legacy_unsigned.pop("state_digest", None)
@@ -540,8 +739,8 @@ class AgentMailbox:
                         for key, value in legacy_quarantine.items()
                     },
                     successors={
-                        str(key): MailboxSuccessorRecord.model_validate(value).model_copy(
-                            update={"lifecycle": SuccessorLifecycle.WAIT_RECONCILIATION}
+                        str(key): self._migrate_successor(
+                            value, schema_version=int(raw.get("schema_version", 1))
                         )
                         for key, value in legacy_successors.items()
                     },
@@ -558,6 +757,20 @@ class AgentMailbox:
         if state.project_id != self.project_id:
             raise MailboxError("mailbox store project mismatch", code="PROJECT_MISMATCH")
         return state
+
+    @staticmethod
+    def _migrate_successor(value: object, *, schema_version: int) -> MailboxSuccessorRecord:
+        if not isinstance(value, dict):
+            raise MailboxError("legacy successor record is invalid", code="STORE_CORRUPT")
+        migrated = dict(value)
+        lifecycle = migrated.get("lifecycle")
+        if schema_version < 3 or lifecycle not in {
+            SuccessorLifecycle.PREPARED.value,
+            SuccessorLifecycle.TERMINAL.value,
+        }:
+            migrated["lifecycle"] = SuccessorLifecycle.WAIT_RECONCILIATION.value
+            migrated["materialization_owner_token"] = None
+        return MailboxSuccessorRecord.model_validate(migrated)
 
     def _save_state(self, state: MailboxState) -> None:
         sealed = state.seal()
