@@ -300,6 +300,19 @@ def _ensure_commit_fetched(sha: str, *, root: Path) -> None:
             f"could not fetch commit {sha} needed for the freeze-guard "
             f"comparison: {fetch.stderr.strip()}"
         )
+    verify = subprocess.run(
+        ["git", "cat-file", "-e", f"{sha}^{{commit}}"],
+        cwd=root,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=_LOCAL_GIT_TIMEOUT_SECONDS,
+    )
+    if verify.returncode != 0:
+        raise DemoIsolationGuardError(
+            f"fetched commit {sha} for the freeze-guard comparison but it "
+            "is still not locally resolvable"
+        )
 
 
 def _resolve_diff_base_and_mode(
@@ -355,13 +368,12 @@ def _resolve_diff_base_and_mode(
     )
     if resolve.returncode != 0:
         try:
-            fetch = subprocess.run(
+            remote_main = subprocess.run(
                 [
                     "git",
-                    "fetch",
-                    "--depth=1",
+                    "ls-remote",
                     "origin",
-                    "main:refs/remotes/origin/main",
+                    "refs/heads/main",
                 ],
                 cwd=root,
                 check=False,
@@ -371,19 +383,19 @@ def _resolve_diff_base_and_mode(
             )
         except subprocess.TimeoutExpired as exc:
             raise DemoIsolationGuardError(
-                f"fetching origin/main for local freeze-guard base resolution did "
+                f"resolving origin/main for local freeze-guard base resolution did "
                 f"not complete within {_NETWORK_GIT_TIMEOUT_SECONDS}s"
             ) from exc
-        if fetch.returncode == 0:
-            resolve = subprocess.run(
-                ["git", "rev-parse", "--verify", "origin/main"],
-                cwd=root,
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=_LOCAL_GIT_TIMEOUT_SECONDS,
-            )
-    if resolve.returncode != 0:
+        if remote_main.returncode == 0 and remote_main.stdout.strip():
+            remote_sha = ""
+            for line in remote_main.stdout.splitlines():
+                fields = line.split()
+                if len(fields) >= 2 and fields[1] == "refs/heads/main":
+                    remote_sha = fields[0].strip()
+                    break
+            if remote_sha:
+                _ensure_commit_fetched(remote_sha, root=root)
+                return remote_sha, False
         raise DemoIsolationGuardError(
             "a git remote is configured but origin/main is not resolvable "
             "locally, and no pull_request/push CI event context is present "
