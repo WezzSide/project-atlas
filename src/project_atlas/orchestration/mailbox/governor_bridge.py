@@ -589,7 +589,12 @@ class MailboxGovernorBridge:
             if existing.model_copy(update={"state": NodeState.DISCOVERED}) != node:
                 raise SuccessorAdmissionError("WORKNODE_IDENTITY_COLLISION")
             if existing.state == NodeState.DISCOVERED:
-                self.governor.mark_ready(node.package_id)
+                # A DISCOVERED node can be visible while another caller owns
+                # the durable PREPARED -> MATERIALIZING claim. Its existence
+                # is not proof that this caller won that claim. The winning
+                # caller promotes its own newly-added node below, while every
+                # competing/replay path must reconcile rather than promote.
+                raise SuccessorAdmissionError("SUCCESSOR_MATERIALIZATION_CLAIM_REQUIRED")
             observed = next(
                 item
                 for item in self.governor.snapshot().nodes

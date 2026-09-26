@@ -18,6 +18,7 @@ from project_atlas.orchestration.autonomy.models import (
     CANONICAL_REPOSITORY_IDENTITY,
     AgentCapability,
     AgentRecord,
+    NodeState,
     TrustedAnchorRecord,
     WorkNode,
 )
@@ -1465,6 +1466,165 @@ def test_n3_two_bridges_with_two_governors_have_one_materializer(
     assert bridges[1].reconcile() == ()
     assert len(bridges[1].governor.snapshot().nodes) == 0
     assert mailbox.successor_records()[0].lifecycle == SuccessorLifecycle.WAIT_RECONCILIATION
+
+
+def test_n3_same_governor_loser_cannot_promote_discovered_node(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mailbox = AgentMailbox(tmp_path, project_id="project-atlas")
+    _processed_for_admission(mailbox, _message(message_id="n3-same-governor"))
+    governor = _governor()
+    bridge = MailboxGovernorBridge(
+        mailbox=mailbox, governor=governor, authority_verifier=lambda _item: True
+    )
+
+    node_discovered = threading.Event()
+    allow_claim_owner_to_continue = threading.Event()
+    ready_callers: list[str] = []
+    results: list[WorkNode] = []
+    errors: list[BaseException] = []
+    original_add_node = governor.add_node
+    original_mark_ready = governor.mark_ready
+    original_materialize = bridge._materialize
+
+    def pause_after_discovery(node: WorkNode) -> None:
+        original_add_node(node)
+        if threading.current_thread().name == "claim-owner":
+            node_discovered.set()
+            assert allow_claim_owner_to_continue.wait(3)
+
+    def track_ready(package_id: str) -> None:
+        ready_callers.append(threading.current_thread().name)
+        original_mark_ready(package_id)
+
+    def route_loser_after_discovery(successor: MailboxSuccessorRecord) -> WorkNode:
+        if threading.current_thread().name == "claim-loser":
+            assert node_discovered.wait(3)
+        return original_materialize(successor)
+
+    monkeypatch.setattr(governor, "add_node", pause_after_discovery)
+    monkeypatch.setattr(governor, "mark_ready", track_ready)
+    monkeypatch.setattr(bridge, "_materialize", route_loser_after_discovery)
+
+    def admit() -> None:
+        try:
+            results.append(bridge.admit("n3-same-governor"))
+        except BaseException as exc:
+            errors.append(exc)
+
+    owner = threading.Thread(target=admit, name="claim-owner")
+    loser = threading.Thread(target=admit, name="claim-loser")
+    owner.start()
+    assert node_discovered.wait(3)
+    loser.start()
+    loser.join(3)
+    assert not loser.is_alive()
+
+    # The losing caller must not promote the shared DISCOVERED node while the
+    # materialization owner is paused between add_node and mark_ready.
+    assert ready_callers == []
+    discovered = next(node for node in governor.snapshot().nodes)
+    assert discovered.state == NodeState.DISCOVERED
+
+    allow_claim_owner_to_continue.set()
+    owner.join(3)
+    assert not owner.is_alive()
+    assert len(results) == 1
+    assert len(errors) == 1
+    assert isinstance(errors[0], SuccessorAdmissionError)
+    assert errors[0].code == "SUCCESSOR_MATERIALIZATION_CLAIM_REQUIRED"
+    assert governor.snapshot().nodes[0].state == NodeState.READY
+    assert ready_callers == ["claim-owner"]
+    assert mailbox.successor_records()[0].lifecycle == SuccessorLifecycle.READY
+
+
+def _n3_prepared_discovered(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, message_id: str
+) -> tuple[AgentMailbox, AutonomousGovernor, MailboxGovernorBridge, MailboxSuccessorRecord]:
+    mailbox = AgentMailbox(tmp_path, project_id="project-atlas")
+    _processed_for_admission(mailbox, _message(message_id=message_id))
+    governor = _governor()
+    bridge = MailboxGovernorBridge(
+        mailbox=mailbox, governor=governor, authority_verifier=lambda _item: True
+    )
+    original_materialize = bridge._materialize
+    captured: list[MailboxSuccessorRecord] = []
+
+    def leave_prepared(successor: MailboxSuccessorRecord) -> WorkNode:
+        captured.append(successor)
+        return WorkNode.model_validate(successor.work_node)
+
+    monkeypatch.setattr(bridge, "_materialize", leave_prepared)
+    node = bridge.admit(message_id)
+    monkeypatch.setattr(bridge, "_materialize", original_materialize)
+    governor.add_node(node)
+    assert captured and mailbox.successor_records()[0].lifecycle == SuccessorLifecycle.PREPARED
+    return mailbox, governor, bridge, mailbox.successor_records()[0]
+
+
+def test_n3_r3_no_durable_materializing_claim_cannot_promote_discovered(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _mailbox, governor, bridge, successor = _n3_prepared_discovered(
+        tmp_path, monkeypatch, "n3-r3-no-claim"
+    )
+
+    with pytest.raises(SuccessorAdmissionError) as blocked:
+        bridge._materialize(successor)
+
+    assert blocked.value.code == "SUCCESSOR_MATERIALIZATION_CLAIM_REQUIRED"
+    assert governor.snapshot().nodes[0].state == NodeState.DISCOVERED
+
+
+def test_n3_r3_generation_mismatch_cannot_promote_discovered(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _mailbox, governor, bridge, successor = _n3_prepared_discovered(
+        tmp_path, monkeypatch, "n3-r3-generation-mismatch"
+    )
+
+    with pytest.raises(SuccessorAdmissionError) as blocked:
+        bridge._materialize(successor.model_copy(update={"generation": successor.generation + 1}))
+
+    assert blocked.value.code == "SUCCESSOR_MATERIALIZATION_CLAIM_REQUIRED"
+    assert governor.snapshot().nodes[0].state == NodeState.DISCOVERED
+
+
+def test_n3_r3_durable_owner_token_alone_cannot_promote_discovered(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mailbox, governor, bridge, successor = _n3_prepared_discovered(
+        tmp_path, monkeypatch, "n3-r3-owner-token"
+    )
+    claimed, won = mailbox.claim_materialization(
+        successor.binding.package_id,
+        generation=successor.generation,
+        expected_revision=successor.lifecycle_revision,
+        owner_token="materializer-A",
+    )
+    assert won and claimed.materialization_owner_token == "materializer-A"
+
+    # A persisted token is not ambient authority for a replay/competitor; only
+    # the stack that won the CAS performs READY promotion.
+    with pytest.raises(SuccessorAdmissionError) as blocked:
+        bridge._materialize(claimed)
+
+    assert blocked.value.code == "SUCCESSOR_MATERIALIZATION_CLAIM_REQUIRED"
+    assert governor.snapshot().nodes[0].state == NodeState.DISCOVERED
+
+
+def test_n3_r3_reconcile_does_not_promote_discovered_without_claim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _mailbox, governor, bridge, _successor = _n3_prepared_discovered(
+        tmp_path, monkeypatch, "n3-r3-reconcile"
+    )
+
+    with pytest.raises(SuccessorAdmissionError) as blocked:
+        bridge.reconcile()
+
+    assert blocked.value.code == "SUCCESSOR_MATERIALIZATION_CLAIM_REQUIRED"
+    assert governor.snapshot().nodes[0].state == NodeState.DISCOVERED
 
 
 def test_n3_stale_materialization_owner_cannot_finalize(tmp_path: Path) -> None:
