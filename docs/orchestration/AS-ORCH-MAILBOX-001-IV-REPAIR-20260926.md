@@ -41,6 +41,11 @@ remain non-authoritative.
 - These are local deterministic tests with the real mailbox/governor code and
   a test governor. No live provider or real-agent E2E, remote CI, independent
   re-review, merge, or deployment is established.
+- Initial repair code commit `c2807a10872dfcde8f8b83b4f16fb54f3b1481ac` was
+  created from the frozen baseline. The configured signing attempt failed
+  because the session's `.gnupg` directory is read-only and no gpg-agent was
+  available; the local candidate is unsigned. Do not treat unsigned status as
+  review or merge approval.
 
 ## Remaining limitations
 
