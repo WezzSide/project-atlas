@@ -1,7 +1,8 @@
 # AS-ORCH-MAILBOX-001 — IV repair record
 
-Repair baseline: `b8ffd36f75a9b8793a50d2bc1c506a01dac18229`  
-Baseline tree: `8ad4fa5e050c7ef35fd567c8a91c5eee00b1badc`  
+Repair baseline: `b8ffd36f75a9b8793a50d2bc1c506a01dac18229`
+
+Baseline tree: `8ad4fa5e050c7ef35fd567c8a91c5eee00b1badc`
 Independent review: exact-baseline findings F1, F2 and F3, each P1. The
 historical review remains a FAIL for those findings; this document records a
 new repair candidate and does not rewrite that verdict.
