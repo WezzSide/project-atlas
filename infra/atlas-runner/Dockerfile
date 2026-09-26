@@ -32,7 +32,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # pydantic v2 for atlas_contracts (imported by the controller's test conftest
 # inside worker jobs). Debian ships pydantic v1, so install v2 from PyPI at
 # image build time (build-time only; runtime pip stays PEP 668 protected).
-RUN python3 -m pip install --break-system-packages --quiet "pydantic>=2"
+RUN python3 -m pip install --break-system-packages --quiet "pydantic>=2" "PyYAML>=6"
 
 # Pinned-digest verification step: download the official runner release from
 # the canonical GitHub URL. If RUNNER_SHA256 is set, enforce it (fail closed).
