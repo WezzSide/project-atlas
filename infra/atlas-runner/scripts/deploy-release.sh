@@ -127,6 +127,15 @@ rollback() {
 if systemctl is-active --quiet "${UNIT_NAME}" || systemctl is-enabled --quiet "${UNIT_NAME}"; then
     systemctl restart "${UNIT_NAME}"
     sleep 5
+    # The health gate must see the same credential environment as the service
+    # (systemd EnvironmentFile is not ambient for direct CLI calls); without
+    # it the GitHub connectivity check degrades and the gate false-negatives.
+    if [ -r /etc/atlas-runner/config/atlas-runner.env ]; then
+        set -a
+        # shellcheck disable=SC1091
+        . /etc/atlas-runner/config/atlas-runner.env
+        set +a
+    fi
     if ! "${CURRENT_LINK}/bin/atlas-runner" health >/dev/null 2>&1; then
         rollback
     fi
