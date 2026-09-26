@@ -158,7 +158,9 @@ def test_evidence_tamper_detectable(workspace):
     assert verify_artifact_hashes(workspace, hashes) == {"artifact.bin": False}
 
 
-def test_secret_file_mode_0644_container_readable(config, store, fake_docker, fake_github, workspace):
+def test_secret_file_mode_0644_container_readable(
+    config, store, fake_docker, fake_github, workspace
+):
     """Registration material must be readable by the non-root in-container user.
 
     Regression: 0600/atlas-runner-owned was unreadable inside the worker,
