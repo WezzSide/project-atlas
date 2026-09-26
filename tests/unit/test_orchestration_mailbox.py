@@ -816,9 +816,17 @@ def test_concurrent_same_incident_admission_claims_one_successor(tmp_path: Path)
     barrier.wait()
     for worker in workers:
         worker.join(3)
-    assert len(results) == 2, errors
-    assert len(set(results)) == 1
+    assert 1 <= len(results) <= 2, errors
+    assert len(errors) <= 1
+    if errors:
+        assert len(results) == 1
+        assert isinstance(errors[0], SuccessorAdmissionError)
+        assert errors[0].code == "SUCCESSOR_MATERIALIZATION_CLAIM_LOST"
+    else:
+        assert len(results) == 2 and len(set(results)) == 1
     assert len(mailbox.successor_records()) == 1
+    assert len(governor.snapshot().nodes) == 1
+    assert bridge.reconcile()[0].package_id == results[0]
     assert len(governor.snapshot().nodes) == 1
 
 
@@ -1454,6 +1462,9 @@ def test_n3_two_bridges_with_two_governors_have_one_materializer(
     assert errors[0].code == "SUCCESSOR_MATERIALIZATION_CLAIM_LOST"
     assert sum(len(bridge.governor.snapshot().nodes) for bridge in bridges) == 1
     assert mailbox.successor_records()[0].lifecycle == SuccessorLifecycle.READY
+    assert bridges[1].reconcile() == ()
+    assert len(bridges[1].governor.snapshot().nodes) == 0
+    assert mailbox.successor_records()[0].lifecycle == SuccessorLifecycle.WAIT_RECONCILIATION
 
 
 def test_n3_stale_materialization_owner_cannot_finalize(tmp_path: Path) -> None:
