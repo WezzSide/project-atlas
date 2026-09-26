@@ -22,7 +22,10 @@ pids = 512
 timeout_seconds = 1800
 storage_mb = 10240
 image = "atlas-runner-worker:latest"
-network = "bridge"
+# Docker network for workers. On hosts with a default-DROP DOCKER-USER guard
+# (e.g. VPS-02's atlas-docker-guard) use the dedicated bootstrap-created
+# "atlas-runner-net" bridge, which carries an explicit egress permit.
+network = "atlas-runner-net"
 # Extra controller-managed env passed to workers (allow-listed keys only;
 # deny-list substrings TOKEN/SECRET/KEY/PASSWORD are rejected unless the key
 # is listed in allow_secret_env).

@@ -72,5 +72,32 @@ else
     log "WARNING: unit file not found at ${UNIT_SRC}; deploy-release.sh installs releases"
 fi
 
+# --- dedicated worker network + firewall permit --------------------------------
+# Workers run on a dedicated bridge so the pre-existing Atlas DOCKER-USER
+# guard's default-DROP can be lifted for workers ONLY (see
+# scripts/atlas-runner-firewall.sh for the recorded change).
+WORKER_NET="${ATLAS_WORKER_NET:-atlas-runner-net}"
+WORKER_BRIDGE="${ATLAS_WORKER_BRIDGE:-br-atlas-runner}"
+if docker network inspect "${WORKER_NET}" >/dev/null 2>&1; then
+    log "worker network ${WORKER_NET} already present"
+else
+    docker network create --opt "com.docker.network.bridge.name=${WORKER_BRIDGE}" "${WORKER_NET}" >/dev/null
+    log "created worker network ${WORKER_NET} (bridge ${WORKER_BRIDGE})"
+fi
+FIREWALL_SRC="${BASE_DIR}/scripts/atlas-runner-firewall.sh"
+FIREWALL_DST="/usr/local/sbin/atlas-runner-firewall"
+FIREWALL_UNIT_SRC="${BASE_DIR}/systemd/atlas-runner-firewall.service"
+FIREWALL_UNIT_DST="/etc/systemd/system/atlas-runner-firewall.service"
+if [ -f "${FIREWALL_SRC}" ] && [ -f "${FIREWALL_UNIT_SRC}" ]; then
+    install -m 0755 "${FIREWALL_SRC}" "${FIREWALL_DST}"
+    install -m 0644 "${FIREWALL_UNIT_SRC}" "${FIREWALL_UNIT_DST}"
+    systemctl daemon-reload
+    systemctl enable --now atlas-runner-firewall.service >/dev/null 2>&1 || true
+    log "installed worker-network firewall permit (recorded change, see ${FIREWALL_DST})"
+else
+    log "WARNING: firewall helper not found; workers on hosts with a DOCKER-USER default-DROP guard need manual permit"
+fi
+
 log "bootstrap complete. Next: mint the GitHub token (scripts/gh-token-helper.md),"
-log "edit ${CONFIG_DIR}/atlas-runner.toml, then run scripts/deploy-release.sh <rev>."
+log "edit ${CONFIG_DIR}/atlas-runner.toml (set [worker] network = \"${WORKER_NET}\" on guarded hosts),"
+log "then run scripts/deploy-release.sh <rev>."
