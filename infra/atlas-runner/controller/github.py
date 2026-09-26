@@ -195,7 +195,7 @@ class GitHubClient:
             self._request(
                 "POST",
                 self.repo_path("/actions/runners/generate-jitconfig"),
-                {"name": name, "labels": labels, "work_folder": work_folder},
+                {"name": name, "labels": labels, "work_folder": work_folder, "runner_group_id": 1},
             )
         )
 

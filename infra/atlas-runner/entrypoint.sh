@@ -29,13 +29,25 @@ if [ -n "${RUNNER_JIT_CONFIG_FILE:-}" ]; then
     _Listener_PID=$!
 elif [ -n "${RUNNER_REGISTRATION_TOKEN_FILE:-}" ]; then
     log "starting ephemeral runner via registration token"
-    ./config.sh \
+    # Registration tokens can be rejected when presented immediately after
+    # minting (backend propagation; observed intermittently on VPS-02), so
+    # retry configuration with backoff before giving up.
+    attempt=1
+    until ./config.sh \
         --url "https://github.com/${GITHUB_REPOSITORY}" \
         --token "$(cat "${RUNNER_REGISTRATION_TOKEN_FILE}")" \
         --ephemeral --unattended \
         --name "${RUNNER_NAME:?RUNNER_NAME required}" \
         --labels "${RUNNER_LABELS:?RUNNER_LABELS required}" \
-        --work "${RUNNER_WORK_FOLDER:-_work}" >>"${LOG_FILE}" 2>&1
+        --work "${RUNNER_WORK_FOLDER:-_work}" >>"${LOG_FILE}" 2>&1; do
+        if [ "${attempt}" -ge 3 ]; then
+            log "FATAL: runner registration failed after ${attempt} attempts"
+            exit 1
+        fi
+        attempt=$((attempt + 1))
+        log "registration attempt ${attempt} failed; retrying in 10s"
+        sleep 10
+    done
     rm -f "${RUNNER_REGISTRATION_TOKEN_FILE}"
     ./run.sh --once >>"${LOG_FILE}" 2>&1 &
     _Listener_PID=$!
