@@ -30,6 +30,7 @@ from project_atlas.orchestration.autonomy.governor import AutonomousGovernor, Go
 from project_atlas.orchestration.autonomy.leases import expand_lease
 from project_atlas.orchestration.autonomy.models import (
     CANONICAL_REPOSITORY_IDENTITY,
+    AgentCapability,
     NodeState,
     OwnerGateKind,
     StopReason,
@@ -248,9 +249,10 @@ class AutonomousLoop:
         self._branch = branch
         self._worktree = worktree
         snapshot = governor.snapshot()
-        if evaluate_target_moved(
-            snapshot.current_main, snapshot.current_tree, trusted
-        ) or snapshot.target_moved:
+        if (
+            evaluate_target_moved(snapshot.current_main, snapshot.current_tree, trusted)
+            or snapshot.target_moved
+        ):
             raise LoopError("refusing loop on moved target", code="TARGET_MOVED")
         if not store.exists():
             persist_loop_state(store, initial_loop_state(trusted))
@@ -391,27 +393,39 @@ class AutonomousLoop:
         if node.state is NodeState.LEASED:
             self._governor.transition(package_id, NodeState.ACTIVE, "LOOP_PROCESS_STARTED")
         if passed:
-            self._governor.transition(package_id, NodeState.VERIFYING, "LOOP_RESULT_VALIDATED")
-            try:
-                self._governor.complete_verification(package_id, passed=True)
-            except OwnerGateError:
-                return self._stop(StopReason.OWNER_GATE)
-        else:
-            self._governor.transition(package_id, NodeState.VERIFYING, "LOOP_RESULT_FAILED")
-            self._governor.complete_verification(package_id, passed=False)
-            node = next(
-                item for item in self._governor.snapshot().nodes if item.package_id == package_id
-            )
-            if node.state == NodeState.BLOCKED:
-                return self._stop(StopReason.HARD_BLOCKER)
-            if node.state == NodeState.REMEDIATING:
-                self._governor.remediate_and_resume(package_id)
-                self._save(
-                    phase=LoopPhase.LEASED,
-                    active_dispatch_id=None,
-                    sequence=self._state.sequence + 1,
+            if node.iv_requirements.certification_required:
+                # A successful implementation/process result is not independent
+                # verification. Route to an independent reviewer, but leave the
+                # node VERIFYING until a separately bound verifier result arrives.
+                lease = next(
+                    (
+                        item
+                        for item in self._governor.snapshot().leases
+                        if item.lease_id == lease_id
+                    ),
+                    None,
                 )
-                return self._result(recovered=recovered)
+                if lease is None:
+                    raise LoopError("implementer lease identity is missing", code="LEASE_MISMATCH")
+                try:
+                    self._governor.route_and_verify(
+                        package_id,
+                        implementer_id=lease.agent_id,
+                    )
+                except Exception as exc:
+                    raise LoopError(
+                        "independent verifier could not be selected", code="VERIFIER_UNAVAILABLE"
+                    ) from exc
+            else:
+                self._governor.transition(package_id, NodeState.VERIFYING, "LOOP_RESULT_VALIDATED")
+                try:
+                    self._governor.complete_verification(package_id, passed=True)
+                except OwnerGateError:
+                    return self._stop(StopReason.OWNER_GATE)
+        else:
+            # A failed worker/process result is not an IV FAIL verdict. Only a
+            # separately authenticated verifier result may trigger remediation.
+            self._governor.transition(package_id, NodeState.BLOCKED, "LOOP_EXECUTION_FAILED")
         completed_leases = self._state.completed_lease_ids
         completed_dispatches = self._state.completed_dispatch_ids
         completed_results = self._state.completed_result_digests
@@ -447,7 +461,7 @@ class AutonomousLoop:
         try:
             lease = self._governor.lease(
                 node.package_id,
-                self._first_agent(),
+                self._first_agent(node.agent_capabilities_required),
                 branch=self._branch,
                 worktree=self._worktree,
             )
@@ -526,11 +540,15 @@ class AutonomousLoop:
             safe_dag_work_remains=True,
         )
 
-    def _first_agent(self) -> str:
+    def _first_agent(self, required: tuple[AgentCapability, ...]) -> str:
+        required_set = frozenset(required)
         for agent in self._governor.snapshot().agents:
-            if agent.available:
+            if agent.available and required_set.issubset(frozenset(agent.capabilities)):
                 return agent.agent_id
-        raise LoopError("no available agent", code="AGENT_UNAVAILABLE")
+        raise LoopError(
+            "no available agent has the required capabilities",
+            code="CAPABILITY_UNAVAILABLE",
+        )
 
 
 class CallableDispatchPort:

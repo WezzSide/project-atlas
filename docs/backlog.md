@@ -568,6 +568,20 @@ Honesty (mandatory):
 - [ ] ORCH001E-008 Independent verification
 - [ ] ORCH001E-009 Owner merge gate (not this package)
 
+## AS-ORCH-MAILBOX-001 — Durable Agent Inbox (isolated candidate)
+
+_Status: **LOCAL CANDIDATE — FOCUSED TESTS PASS; PROVIDER/IV VERTICAL INCOMPLETE**. Adds project-scoped durable ingress, 001A/001B composition, and typed read-only successor admission through the existing governor. Not merged, not owner-approved, and not a production queue. Inbox receipt creates no authority._
+
+- [x] Versioned `AgentInboxMessage` contract and payload digest
+- [x] Atomic project-isolated ingress, exact/idempotency replay handling, incident correlation, quarantine, and restart recovery
+- [x] Result validation/classification through existing 001A and route through existing 001B
+- [x] Narrow pre-start launcher-failure recovery classification to existing `AUTONOMOUS_RECONCILE` policy
+- [x] Unit/schema and bridge tests (focused mailbox/orchestration regression selection passes in isolated `.[dev]` venv)
+- [x] Bind eligible non-authoritative directive to deterministic governor-owned read-only successor WorkNode
+- [ ] Concrete 001E `DispatchPort` provider wiring and durable verifier-result/candidate binding
+- [ ] Independent verification and owner merge gate
+- [ ] Atlas documentation normalization/receipt
+
 ## AS-ORCH-AUTONOMY-001 — Autonomous governor / operating-model transition
 
 _Status: **IMPLEMENTED ON MAIN**. Formalizes a single logical autonomous governor, work DAG, leases, overlap gate, continuation, bounded remediation, IV routing, adversarial trigger, evidence hashing, and owner gates A–F. Process dispatch is owned by AS-ORCH-001D (this tree). Does **not** start AS-ORCH-001E, mutate #396, or merge._
@@ -746,4 +760,3 @@ Historical roadmaps are classified as inputs and are not erased._
 - [ ] AT3-046 Incremental live provider sync (EXTERNAL_BLOCKED; credentials / history API)
 - [ ] Chronicle / Ambient Knowledge runtime (ROADMAP_HORIZON)
 - [ ] AT3-003/014 certified-surface implementation after `FULL_LIVE_DEMO_READY = YES`
-

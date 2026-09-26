@@ -127,9 +127,7 @@ def test_scenario_b_target_moved_recertification() -> None:
 
 
 def test_scenario_c_merge_eligible_owner_gate() -> None:
-    _envelope, decision, routed = _pipeline(
-        _payload(role="integration", state="MERGE_ELIGIBLE")
-    )
+    _envelope, decision, routed = _pipeline(_payload(role="integration", state="MERGE_ELIGIBLE"))
     assert decision.next_transition == NextTransition.OWNER_REQUIRED
     assert routed.route_kind == RouteKind.OWNER_GATE
     assert routed.owner_gate is True
@@ -208,6 +206,54 @@ def test_requested_transition_is_advisory_only() -> None:
         assert routed.execution_authorized is False
         if expected == NextTransition.INTEGRATION_VERIFY:
             assert routed.task_type == TaskType.CANDIDATE_VERIFICATION
+
+
+def test_known_prestart_launcher_failure_is_recoverable_without_authority() -> None:
+    payload = _payload(
+        outcome="BLOCKED",
+        state="BLOCKED",
+        blockers=[
+            {
+                "code": "LOCAL_EXECUTOR_SETUP_REFRESH_FAILED",
+                "detail": (
+                    "Failed to create unified exec process: helper_unknown_error: "
+                    "setup refresh had errors"
+                ),
+            }
+        ],
+        extras={"retryable": True, "process_started": False},
+        requested_transition="OWNER_REQUIRED",
+    )
+    decision = validate_and_classify(payload)
+    routed = route_payload(payload)
+
+    assert decision.next_transition == NextTransition.AUTONOMOUS_RECONCILE
+    assert decision.owner_required is False
+    assert routed.route_kind == RouteKind.TASK
+    assert routed.task_type == TaskType.PROGRAM_RECONCILIATION
+    assert routed.dispatchable is True
+    assert routed.execution_authorized is False
+    _assert_non_privileged(routed)
+
+
+def test_launcher_failure_is_not_recoverable_without_exact_prestart_facts() -> None:
+    cases = (
+        _payload(outcome="BLOCKED", blockers=[{"code": "LOCAL_EXECUTOR_SETUP_REFRESH_FAILED"}]),
+        _payload(
+            outcome="BLOCKED",
+            blockers=[{"code": "LOCAL_EXECUTOR_SETUP_REFRESH_FAILED"}],
+            extras={"retryable": True, "process_started": True},
+        ),
+        _payload(
+            outcome="BLOCKED",
+            blockers=[{"code": "LOCAL_EXECUTOR_SETUP_REFRESH_FAILED"}],
+            extras={"retryable": False, "process_started": False},
+        ),
+    )
+    for payload in cases:
+        decision = validate_and_classify(payload)
+        assert decision.next_transition == NextTransition.BLOCKED
+        assert decision.owner_required is False
 
 
 def test_owner_required_with_malicious_extras_stays_non_privileged() -> None:

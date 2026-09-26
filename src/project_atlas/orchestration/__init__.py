@@ -55,6 +55,13 @@ from project_atlas.orchestration.dispatcher import (
     DispatchRecord,
     run_dispatch_once,
 )
+from project_atlas.orchestration.mailbox import (
+    AgentInboxMessage,
+    AgentMailbox,
+    InboxMessageKind,
+    InboxRouter,
+    MailboxStatus,
+)
 from project_atlas.orchestration.models import (
     PACKAGE_ID,
     SCHEMA_KIND,
@@ -99,6 +106,8 @@ __all__ = [
     "ROUTING_PACKAGE_ID",
     "SCHEMA_KIND",
     "TRUTH_BOUNDARY",
+    "AgentInboxMessage",
+    "AgentMailbox",
     "AgentResultEnvelope",
     "CompletionTransport",
     "CursorBridgeResponse",
@@ -107,6 +116,9 @@ __all__ = [
     "DispatchReceipt",
     "DispatchRecord",
     "HandoffPacket",
+    "InboxMessageKind",
+    "InboxRouter",
+    "MailboxStatus",
     "NextTransition",
     "OrchestrationDecision",
     "OrchestrationRoute",

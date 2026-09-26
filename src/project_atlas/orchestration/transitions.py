@@ -29,6 +29,8 @@ from project_atlas.orchestration.models import (
     WorkflowState,
 )
 
+_RECOVERABLE_PRESTART_BLOCKER = "LOCAL_EXECUTOR_SETUP_REFRESH_FAILED"
+
 
 def classify_envelope(envelope: AgentResultEnvelope) -> OrchestrationDecision:
     """Classify a schema-valid envelope. Equivalent inputs yield equivalent decisions."""
@@ -63,6 +65,30 @@ def classify_envelope(envelope: AgentResultEnvelope) -> OrchestrationDecision:
             envelope,
             next_transition=NextTransition.REJECTED,
             workflow_state=WorkflowState.REJECTED,
+            owner_required=False,
+            reasons=reasons,
+        )
+
+    # A narrowly identified launcher failure happened before a worker process
+    # started. Route it to the existing reconciliation policy, but only when
+    # the structured result carries all fail-closed facts. This remains a
+    # classification: 001B emits a non-authoritative directive and the
+    # governor/lease/001E path still decides whether any work can run.
+    if (
+        envelope.outcome == ResultOutcome.BLOCKED
+        and envelope.state == "BLOCKED"
+        and len(envelope.blockers) == 1
+        and envelope.blockers[0].code == _RECOVERABLE_PRESTART_BLOCKER
+        and envelope.observations.target_moved is False
+        and envelope.observations.unauthorized_mutations == 0
+        and envelope.observations.extras.get("retryable") is True
+        and envelope.observations.extras.get("process_started") is False
+    ):
+        reasons.append("known_prestart_infrastructure_failure")
+        return _decision(
+            envelope,
+            next_transition=NextTransition.AUTONOMOUS_RECONCILE,
+            workflow_state=WorkflowState.BLOCKED,
             owner_required=False,
             reasons=reasons,
         )

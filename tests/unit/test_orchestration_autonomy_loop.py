@@ -31,6 +31,7 @@ from project_atlas.orchestration.autonomy.models import (
     CANONICAL_REPOSITORY_IDENTITY,
     AdvancementReason,
     AgentCapability,
+    AgentRecord,
     ExecutionHostClass,
     IvRequirements,
     MutationSurface,
@@ -136,7 +137,9 @@ def test_schema_registered() -> None:
     validate_record(initial_loop_state(_anchor()).model_dump(mode="json"), "autonomy-loop-state")
 
 
-def test_in_process_ready_completes_and_stops_without_owner(tmp_path: Path) -> None:
+def test_in_process_implementation_waits_for_independent_verification(
+    tmp_path: Path,
+) -> None:
     gov = _governor(_node("AS-ORCH-NEXT-001"))
     loop = _loop(tmp_path, gov)
     result = loop.run_until_stop()
@@ -145,7 +148,124 @@ def test_in_process_ready_completes_and_stops_without_owner(tmp_path: Path) -> N
     assert result.merge_authorized is False
     assert result.authority_granted is False
     node = next(item for item in gov.snapshot().nodes if item.package_id == "AS-ORCH-NEXT-001")
-    assert node.state in {NodeState.CERTIFIED, NodeState.OWNER_HELD, NodeState.CLOSED}
+    assert node.state is NodeState.VERIFYING
+    assert gov.snapshot().certification_state.value != "CERTIFIED"
+
+
+def test_successful_implementer_result_does_not_certify_required_iv(tmp_path: Path) -> None:
+    gov = _governor(_node("AS-ORCH-IV-BOUNDARY-001"))
+    loop = _loop(tmp_path, gov)
+
+    loop.tick()
+
+    node = next(
+        item for item in gov.snapshot().nodes if item.package_id == "AS-ORCH-IV-BOUNDARY-001"
+    )
+    assert node.state is NodeState.VERIFYING
+    assert gov.snapshot().certification_state.value != "CERTIFIED"
+
+
+def test_loop_selects_worker_that_has_required_capability(tmp_path: Path) -> None:
+    agents = (
+        AgentRecord(
+            agent_id="verify-first",
+            capabilities=(AgentCapability.VERIFY, AgentCapability.ADVERSARIAL_REVIEW),
+        ),
+        AgentRecord(
+            agent_id="implement-second",
+            capabilities=(AgentCapability.IMPLEMENT,),
+        ),
+    )
+    gov = AutonomousGovernor(
+        current_main=PIN,
+        current_tree=TREE,
+        trusted_anchor=_anchor(),
+        agents=agents,
+    )
+    gov.add_node(
+        _node(
+            "AS-ORCH-CAPABILITY-001",
+            host=ExecutionHostClass.EXTERNAL_AGENT,
+        )
+    )
+    port = CallableDispatchPort(
+        lambda _root: {"dispatch_id": "disp-capability", "status": "RUNNING"}
+    )
+
+    result = _loop(tmp_path, gov, port).tick()
+
+    assert result.dispatched is True
+    assert gov.snapshot().leases[-1].agent_id == "implement-second"
+
+
+def test_loop_selects_verifier_capability_for_verification_node(tmp_path: Path) -> None:
+    agents = (
+        AgentRecord(agent_id="implement-first", capabilities=(AgentCapability.IMPLEMENT,)),
+        AgentRecord(
+            agent_id="verify-second",
+            capabilities=(AgentCapability.VERIFY, AgentCapability.ADVERSARIAL_REVIEW),
+        ),
+    )
+    gov = AutonomousGovernor(
+        current_main=PIN,
+        current_tree=TREE,
+        trusted_anchor=_anchor(),
+        agents=agents,
+    )
+    node = _node("AS-ORCH-IV-CAPABILITY-001", host=ExecutionHostClass.EXTERNAL_AGENT)
+    node = node.model_copy(update={"agent_capabilities_required": (AgentCapability.VERIFY,)})
+    gov.add_node(node)
+    port = CallableDispatchPort(
+        lambda _root: {"dispatch_id": "disp-verify-cap", "status": "RUNNING"}
+    )
+
+    result = _loop(tmp_path, gov, port).tick()
+
+    assert result.dispatched is True
+    assert gov.snapshot().leases[-1].agent_id == "verify-second"
+
+
+def test_loop_does_not_dispatch_when_no_worker_has_required_capability(tmp_path: Path) -> None:
+    agents = (
+        AgentRecord(
+            agent_id="verify-only",
+            capabilities=(AgentCapability.VERIFY, AgentCapability.ADVERSARIAL_REVIEW),
+        ),
+    )
+    gov = AutonomousGovernor(
+        current_main=PIN,
+        current_tree=TREE,
+        trusted_anchor=_anchor(),
+        agents=agents,
+    )
+    gov.add_node(_node("AS-ORCH-CAPABILITY-MISSING-001", host=ExecutionHostClass.EXTERNAL_AGENT))
+    calls: list[str] = []
+    port = CallableDispatchPort(
+        lambda _root: (
+            calls.append("dispatch") or {"dispatch_id": "wrong-agent", "status": "RUNNING"}
+        )
+    )
+
+    with pytest.raises(LoopError) as exc:
+        _loop(tmp_path, gov, port).tick()
+
+    assert exc.value.code == "CAPABILITY_UNAVAILABLE"
+    assert calls == []
+    assert not gov.snapshot().leases
+
+
+def test_failed_worker_result_is_not_treated_as_independent_review_failure(
+    tmp_path: Path,
+) -> None:
+    gov = _governor(_node("AS-ORCH-EXEC-FAIL-001", host=ExecutionHostClass.EXTERNAL_AGENT))
+    port = CallableDispatchPort(lambda _root: {"dispatch_id": "disp-exec-fail", "status": "FAILED"})
+
+    _loop(tmp_path, gov, port).tick()
+
+    node = next(item for item in gov.snapshot().nodes if item.package_id == "AS-ORCH-EXEC-FAIL-001")
+    assert node.state is NodeState.BLOCKED
+    assert node.retry_policy.cycles_used == 0
+    assert gov.snapshot().iv_state.value != "FAIL"
 
 
 def test_owner_gate_stop_no_dispatch(tmp_path: Path) -> None:
@@ -271,8 +391,9 @@ def test_crash_recover_does_not_respawn(tmp_path: Path) -> None:
     recover_calls: list[str] = []
     port = CallableDispatchPort(
         lambda _root: {"dispatch_id": "disp-crash", "status": "RUNNING"},
-        recover=lambda _root, did: recover_calls.append(did)
-        or {"dispatch_id": did, "status": "RUNNING"},
+        recover=lambda _root, did: (
+            recover_calls.append(did) or {"dispatch_id": did, "status": "RUNNING"}
+        ),
     )
     loop = _loop(tmp_path, gov, port)
     loop.tick()
@@ -311,9 +432,12 @@ def test_digest_roundtrip(tmp_path: Path) -> None:
     state = initial_loop_state(_anchor())
     persisted = persist_loop_state(tmp_path / "s", state)
     assert verify_loop_state(persisted).record_digest == hash_payload(persisted.unsigned_payload())
-    assert persisted.record_digest != seal_loop_state(
-        persisted.model_copy(update={"sequence": 1, "record_digest": "00" * 32})
-    ).record_digest
+    assert (
+        persisted.record_digest
+        != seal_loop_state(
+            persisted.model_copy(update={"sequence": 1, "record_digest": "00" * 32})
+        ).record_digest
+    )
 
 
 def test_package_id_constant() -> None:
