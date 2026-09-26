@@ -18,8 +18,11 @@ from project_atlas.orchestration.autonomy.models import (
     WorkNode,
 )
 from project_atlas.orchestration.mailbox.models import (
+    ACTIVE_SUCCESSOR_LIFECYCLES,
     AgentInboxMessage,
     MailboxSuccessorBindingV1,
+    MailboxSuccessorRecord,
+    SuccessorLifecycle,
     canonical_json,
 )
 from project_atlas.orchestration.mailbox.store import AgentMailbox
@@ -68,6 +71,16 @@ class MailboxGovernorBridge:
         if record is None or record.status.value != "PROCESSED":
             raise SuccessorAdmissionError("SUCCESSOR_SOURCE_NOT_PROCESSED")
         message = record.message
+        if (record.routing or {}).get("classification") == "DUPLICATE_MESSAGE":
+            duplicate_matches = [
+                item
+                for item in self.mailbox.successor_records()
+                if item.binding.incident_id == record.incident_id
+                and item.lifecycle in ACTIVE_SUCCESSOR_LIFECYCLES
+            ]
+            if len(duplicate_matches) == 1:
+                return self._materialize(duplicate_matches[0])
+            raise SuccessorAdmissionError("DUPLICATE_RESULT_HAS_NO_ACTIVE_SUCCESSOR")
         snapshot = self.governor.snapshot()
         if snapshot.target_moved or (snapshot.current_main, snapshot.current_tree) != (
             message.trusted_head,
@@ -149,12 +162,32 @@ class MailboxGovernorBridge:
             else (AgentCapability.VERIFY,)
         )
         route_digest = self._route_digest(route, candidate_head, candidate_tree)
+        incident_records = tuple(
+            item
+            for item in self.mailbox.successor_records()
+            if item.binding.incident_id == record.incident_id
+        )
+        active = [item for item in incident_records if item.lifecycle.value != "TERMINAL"]
+        if len(active) > 1:
+            raise SuccessorAdmissionError("SUCCESSOR_REQUIRES_RECONCILIATION")
+        generation = 1
+        supersedes_package_id = None
+        if active:
+            generation = active[0].generation
+        elif incident_records:
+            previous = max(incident_records, key=lambda item: item.generation)
+            if directive.transition.value not in {
+                "AUTONOMOUS_RECONCILE",
+                "RECERTIFY_REQUIRED",
+                "REMEDIATION_REQUIRED",
+            }:
+                raise SuccessorAdmissionError("SUCCESSOR_SUPERSESSION_REQUIRED")
+            generation = previous.generation + 1
+            supersedes_package_id = previous.binding.package_id
         package_material = {
             "project_id": message.project_id,
-            "requester_id": message.requester_id,
             "incident_id": record.incident_id,
-            "source_task_id": message.task_id,
-            "route_digest": route_digest,
+            "generation": generation,
         }
         package_id = "MBX-SUCC-" + hashlib.sha256(canonical_json(package_material)).hexdigest()[:24]
         task_type_value = cast(
@@ -164,6 +197,38 @@ class MailboxGovernorBridge:
         capability_values: tuple[Literal["DISCOVER", "VERIFY"], ...] = (
             ("DISCOVER",) if task_type == TaskType.PROGRAM_RECONCILIATION else ("VERIFY",)
         )
+        active_records = [
+            item
+            for item in self.mailbox.successor_records()
+            if item.binding.incident_id == record.incident_id
+            and item.lifecycle in ACTIVE_SUCCESSOR_LIFECYCLES
+        ]
+        if active_records:
+            if len(active_records) != 1:
+                raise SuccessorAdmissionError("SUCCESSOR_REQUIRES_RECONCILIATION")
+            active_successor = active_records[0]
+            existing_source = self.mailbox.get_record(active_successor.binding.message_id)
+            existing_route_value = (
+                (existing_source.routing or {}).get("route") if existing_source else None
+            )
+            try:
+                existing_route = OrchestrationRoute.model_validate(existing_route_value)
+            except (ValidationError, TypeError, ValueError):
+                raise SuccessorAdmissionError("SUCCESSOR_ROUTE_INVALID") from None
+            if (
+                active_successor.binding.requester_id != message.requester_id
+                or active_successor.binding.source_task_id != message.task_id
+                or active_successor.binding.trusted_main != message.trusted_head
+                or active_successor.binding.trusted_tree != message.trusted_tree
+                or active_successor.binding.task_type != task_type.value
+                or active_successor.binding.transition != directive.transition.value
+                or active_successor.binding.candidate_head != candidate_head
+                or active_successor.binding.candidate_tree != candidate_tree
+                or self._route_policy_signature(existing_route)
+                != self._route_policy_signature(route)
+            ):
+                raise SuccessorAdmissionError("DUPLICATE_ACTIVE_SUCCESSOR")
+            return self._materialize(active_successor)
         binding = MailboxSuccessorBindingV1(
             package_id=package_id,
             message_id=message.message_id,
@@ -196,8 +261,10 @@ class MailboxGovernorBridge:
             message_id=message_id,
             binding=binding,
             work_node=work_node.model_dump(mode="json"),
+            generation=generation,
+            supersedes_package_id=supersedes_package_id,
         )
-        return self._materialize(persisted.work_node)
+        return self._materialize(persisted)
 
     def reconcile(self) -> tuple[WorkNode, ...]:
         """Rebuild missing governor nodes from the mailbox admission journal."""
@@ -254,7 +321,23 @@ class MailboxGovernorBridge:
                 raise SuccessorAdmissionError("PERSISTED_WORKNODE_INVALID") from None
             if persisted_node != expected_node:
                 raise SuccessorAdmissionError("PERSISTED_WORKNODE_BINDING_MISMATCH")
-            nodes.append(self._materialize(item.work_node))
+            existing = next(
+                (
+                    node
+                    for node in self.governor.snapshot().nodes
+                    if node.package_id == item.binding.package_id
+                ),
+                None,
+            )
+            if existing is None:
+                if item.lifecycle == SuccessorLifecycle.PREPARED:
+                    nodes.append(self._materialize(item))
+                elif item.lifecycle != SuccessorLifecycle.TERMINAL:
+                    self.mailbox.set_successor_lifecycle(
+                        item.binding.package_id, SuccessorLifecycle.WAIT_RECONCILIATION
+                    )
+                continue
+            nodes.append(self._materialize(item))
         return tuple(nodes)
 
     def _verify_authority(self, message: AgentInboxMessage) -> bool:
@@ -281,7 +364,8 @@ class MailboxGovernorBridge:
         if directive is None:
             raise SuccessorAdmissionError("SUCCESSOR_ROUTE_MISSING")
         semantic_route = {
-            "source": directive.source.model_dump(mode="json"),
+            # Provenance is bound separately by the successor binding; the route digest
+            # identifies policy/action semantics so cross-producer observations coalesce.
             "transition": directive.transition.value,
             "target": directive.target.model_dump(mode="json"),
             "task_type": directive.task_type.value,
@@ -295,6 +379,25 @@ class MailboxGovernorBridge:
             "candidate_tree": candidate_tree,
         }
         return hashlib.sha256(canonical_json(semantic_route)).hexdigest()
+
+    @staticmethod
+    def _route_policy_signature(route: OrchestrationRoute) -> bytes:
+        directive = route.task
+        if directive is None:
+            raise SuccessorAdmissionError("SUCCESSOR_ROUTE_MISSING")
+        return canonical_json(
+            {
+                "task_type": directive.task_type.value,
+                "transition": directive.transition.value,
+                "target": directive.target.model_dump(mode="json"),
+                "permissions": directive.permissions.model_dump(mode="json"),
+                "owner_gate": directive.owner_gate,
+                "execution_authorized": directive.execution_authorized,
+                "policy_id": directive.policy_id,
+                "policy_version": directive.policy_version,
+                "inputs": directive.inputs.model_dump(mode="json"),
+            }
+        )
 
     @staticmethod
     def _node_for_binding(binding: MailboxSuccessorBindingV1) -> WorkNode:
@@ -386,7 +489,8 @@ class MailboxGovernorBridge:
             execution_authorized=False,
         )
 
-    def _materialize(self, raw_node: dict[str, object]) -> WorkNode:
+    def _materialize(self, successor: MailboxSuccessorRecord) -> WorkNode:
+        raw_node = successor.work_node
         try:
             node = WorkNode.model_validate(raw_node)
         except (ValidationError, TypeError, ValueError):
@@ -400,11 +504,25 @@ class MailboxGovernorBridge:
                 raise SuccessorAdmissionError("WORKNODE_IDENTITY_COLLISION")
             if existing.state == NodeState.DISCOVERED:
                 self.governor.mark_ready(node.package_id)
-            return next(
+            observed = next(
                 item
                 for item in self.governor.snapshot().nodes
                 if item.package_id == node.package_id
             )
+            observed_lifecycle = self._lifecycle_for_state(observed.state)
+            if (
+                successor.lifecycle == SuccessorLifecycle.TERMINAL
+                and observed_lifecycle != SuccessorLifecycle.TERMINAL
+            ):
+                raise SuccessorAdmissionError("SUCCESSOR_LIFECYCLE_REGRESSION")
+            self.mailbox.set_successor_lifecycle(node.package_id, observed_lifecycle)
+            return observed
+        if successor.lifecycle != SuccessorLifecycle.PREPARED:
+            self.mailbox.set_successor_lifecycle(
+                node.package_id, SuccessorLifecycle.WAIT_RECONCILIATION
+            )
+            raise SuccessorAdmissionError("SUCCESSOR_REQUIRES_RECONCILIATION")
+        self.mailbox.set_successor_lifecycle(node.package_id, SuccessorLifecycle.MATERIALIZING)
         try:
             self.governor.add_node(node)
             self.governor.mark_ready(node.package_id)
@@ -412,6 +530,32 @@ class MailboxGovernorBridge:
             raise SuccessorAdmissionError(
                 getattr(exc, "code", "GOVERNOR_ADMISSION_FAILED")
             ) from None
-        return next(
+        observed = next(
             item for item in self.governor.snapshot().nodes if item.package_id == node.package_id
         )
+        self.mailbox.set_successor_lifecycle(
+            node.package_id, self._lifecycle_for_state(observed.state)
+        )
+        return observed
+
+    @staticmethod
+    def _lifecycle_for_state(state: NodeState) -> SuccessorLifecycle:
+        mapping = {
+            NodeState.DISCOVERED: SuccessorLifecycle.MATERIALIZING,
+            NodeState.READY: SuccessorLifecycle.READY,
+            NodeState.LEASED: SuccessorLifecycle.LEASED,
+            NodeState.ACTIVE: SuccessorLifecycle.ACTIVE,
+            NodeState.VERIFYING: SuccessorLifecycle.VERIFYING,
+            NodeState.REMEDIATING: SuccessorLifecycle.REMEDIATING,
+            NodeState.BLOCKED: SuccessorLifecycle.WAITING_EXTERNAL,
+            NodeState.OWNER_HELD: SuccessorLifecycle.WAITING_EXTERNAL,
+            NodeState.MERGE_ELIGIBLE: SuccessorLifecycle.WAITING_EXTERNAL,
+            NodeState.CERTIFIED: SuccessorLifecycle.TERMINAL,
+            NodeState.MERGED: SuccessorLifecycle.TERMINAL,
+            NodeState.SUPERSEDED: SuccessorLifecycle.TERMINAL,
+            NodeState.CLOSED: SuccessorLifecycle.TERMINAL,
+        }
+        try:
+            return mapping[state]
+        except KeyError:
+            return SuccessorLifecycle.WAIT_RECONCILIATION
