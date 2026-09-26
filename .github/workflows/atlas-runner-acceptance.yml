@@ -34,16 +34,13 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 0
 
-      # The worker image ships Debian's python3 + pip; setup-python cannot
-      # satisfy distro-specific python builds on this self-hosted image
-      # (observed live: "version '3.12' ... not found for debian 12"), and
-      # the acceptance fixture test needs pytest only — no editable install.
-      - name: Prepare python test tooling on worker image
+      # The worker image ships Debian python3 + baked-in pytest (PEP 668 blocks
+      # pip installs at job time; observed live on VPS-02).
+      - name: Verify python test tooling on worker image
         run: |
           set -euo pipefail
           python3 --version
-          python3 -m pip --version
-          python3 -m pip install --quiet --user pytest
+          python3 -m pytest --version
 
       - name: Validate run identity and create dedicated branch
         env:
