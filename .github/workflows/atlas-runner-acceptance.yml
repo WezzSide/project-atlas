@@ -9,6 +9,11 @@ name: atlas-runner-acceptance
 
 on:
   workflow_dispatch:
+  # Test/acceptance trigger: workflow_dispatch cannot target workflows that do
+  # not yet exist on the default branch, so the live E2E uses an explicit
+  # trigger branch on this same ref. Runs ONLY when that branch is pushed.
+  push:
+    branches: [atlas/acceptance-trigger]
 
 permissions:
   contents: write # push the dedicated atlas/acceptance-<run_id> branch only
