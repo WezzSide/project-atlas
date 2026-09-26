@@ -1,0 +1,212 @@
+name: atlas-runner-verify
+
+# ATLAS-RUNNER-FABRIC-001 — INDEPENDENT verification of executor evidence.
+#
+# Independent verifier. The executor cannot self-certify. Same-host
+# executor/verifier separation is NOT host-level independence — v1 uses
+# GitHub-hosted runners for that boundary (this job runs on ubuntu-latest,
+# never on VPS-02).
+#
+# EXECUTOR_SUCCESS != VERIFIED. Verdicts: VERIFIED / REJECTED. A REJECTED
+# verdict is a signal for a human; it is not itself merge authorization.
+#
+# Note: workflow_run only fires for runs whose workflows completed on the
+# default branch, and this workflow must exist on the default branch to be
+# triggered.
+
+on:
+  workflow_run:
+    workflows:
+      - atlas-runner-smoke.yml
+      - atlas-agent-execute.yml
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: "Run id of the executor workflow run to verify."
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read # download artifacts from the source executor run
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install package with dev dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Resolve source run id
+        id: source
+        env:
+          EVENT_RUN_ID: ${{ github.event.workflow_run.id }}
+          INPUT_RUN_ID: ${{ inputs.source_run_id }}
+        run: |
+          set -euo pipefail
+          if [ -n "${EVENT_RUN_ID}" ]; then
+            run_id="${EVENT_RUN_ID}"
+          else
+            run_id="${INPUT_RUN_ID}"
+          fi
+          # run ids are decimal integers; validate before use anywhere.
+          case "${run_id}" in
+            (''|*[!0-9]*) echo "invalid source run id: ${run_id}" >&2; exit 2 ;;
+          esac
+          echo "run-id=${run_id}" >> "${GITHUB_OUTPUT}"
+
+      - name: Download executor evidence artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: atlas-*
+          path: executor-evidence
+          merge-multiple: true
+          run-id: ${{ steps.source.outputs.run-id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify evidence (schema, hashes, semantics) and emit report
+        env:
+          SOURCE_RUN_ID: ${{ steps.source.outputs.run-id }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import json
+          import re
+          import sys
+          from pathlib import Path
+
+          import jsonschema
+
+          ALLOWED_LABELS = {"self-hosted", "linux", "x64", "atlas", "executor"}
+          GITHUB_HOSTED_NAME = re.compile(r"^(GitHub Actions|Hosted Ubuntu|Hosted Windows|Hosted macOS)")
+
+          ev_dir = Path("executor-evidence")
+          report = {
+              "verifier": "atlas-runner-verify.yml",
+              "source_run_id": int(__import__("os").environ["SOURCE_RUN_ID"]),
+              "checks": [],
+              "verdict": None,
+          }
+
+          def record(name, ok, detail):
+              report["checks"].append({"check": name, "result": "PASS" if ok else "FAIL", "detail": detail})
+              print(f"{'PASS' if ok else 'FAIL'}: {name} — {detail}")
+
+          fragment_path = ev_dir / "evidence" / "fragment.json"
+          ok = fragment_path.is_file()
+          record("evidence_fragment_present", ok, str(fragment_path))
+          if not ok:
+              report["verdict"] = "REJECTED"
+              Path("verification-report.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+              print("::error::evidence fragment missing")
+              sys.exit(1)
+
+          fragment = json.loads(fragment_path.read_text(encoding="utf-8"))
+
+          # 1. Validate every present field against the execution-evidence schema
+          #    (the in-job fragment is a subset of the full evidence record, so
+          #    each present key is checked against its schema definition).
+          schema = json.loads(Path("infra/atlas-runner/schemas/execution-evidence.schema.json").read_text(encoding="utf-8"))
+          validator_class = jsonschema.validators.validator_for(schema)
+          sub_ok = True
+          details = []
+          for key, value in fragment.items():
+              subschema = schema["properties"].get(key)
+              if subschema is None:
+                  sub_ok = False
+                  details.append(f"unknown field {key}")
+                  continue
+              try:
+                  validator_class(subschema).validate(value)
+              except jsonschema.ValidationError as exc:
+                  sub_ok = False
+                  details.append(f"{key}: {exc.message}")
+          record("fragment_fields_match_schema", sub_ok, "; ".join(details) or "all present fields conform")
+
+          # 2. Recompute artifact SHA-256 and compare to the claimed digest.
+          hash_ok = True
+          hash_details = []
+          claimed = fragment.get("artifact_sha256", {})
+          for name, digest in claimed.items():
+              artifact = ev_dir / name
+              if not artifact.is_file():
+                  hash_ok = False
+                  hash_details.append(f"missing artifact {name}")
+                  continue
+              actual = hashlib.sha256(artifact.read_bytes()).hexdigest()
+              if actual != digest:
+                  hash_ok = False
+                  hash_details.append(f"{name}: claimed {digest} != actual {actual}")
+              else:
+                  hash_details.append(f"{name}: {actual}")
+          record("artifact_sha256_recomputed", hash_ok, "; ".join(hash_details) or "no artifacts claimed")
+
+          # 3. Runner identity: labels must be a subset of the atlas executor
+          #    label set; runner_name must not look GitHub-hosted.
+          labels = set(fragment.get("runner_labels") or [])
+          label_ok = labels <= ALLOWED_LABELS
+          record("runner_labels_subset", label_ok, f"labels={sorted(labels) or 'NOT_PRESENT (fragment omits; full evidence is host-side)'}")
+          name = fragment.get("runner_name", "")
+          name_ok = bool(name) and not GITHUB_HOSTED_NAME.match(str(name))
+          record("runner_name_not_github_hosted", name_ok, f"runner_name={name or 'NOT_PRESENT'}")
+
+          # 4. cleanup_status semantics (when present).
+          cleanup = fragment.get("cleanup_status")
+          if cleanup is None:
+              record("cleanup_status", True, "NOT_PRESENT (full evidence is host-side)")
+          else:
+              record("cleanup_status_ok", cleanup in {"ok", "failed", "unknown"}, f"cleanup_status={cleanup}")
+
+          # 5. terminal_status semantics: a 'complete' claim requires a
+          #    non-empty tests section AND exit_code 0, else REJECTED.
+          terminal = fragment.get("terminal_status")
+          exit_code = fragment.get("exit_code", fragment.get("runner_exit_code"))
+          tests = fragment.get("tests") or {}
+          if terminal == "complete":
+              sem_ok = bool(tests) and exit_code == 0
+              record("complete_claim_semantics", sem_ok,
+                     f"terminal=complete requires tests non-empty AND exit_code 0; tests={len(tests)} exit_code={exit_code}")
+          elif terminal is None:
+              # Fragments without terminal_status carry a self-test marker instead.
+              sem_ok = bool(tests)
+              record("complete_claim_semantics", sem_ok,
+                     "terminal_status NOT_PRESENT in fragment; requiring non-empty tests section")
+          else:
+              sem_ok = True
+              record("complete_claim_semantics", True, f"terminal_status={terminal} (not a complete claim)")
+
+          all_ok = all(c["result"] == "PASS" for c in report["checks"])
+          report["verdict"] = "VERIFIED" if all_ok else "REJECTED"
+          Path("verification-report.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+          print(f"VERDICT: {report['verdict']}")
+          summary = Path(__import__("os").environ["GITHUB_STEP_SUMMARY"])
+          with summary.open("a", encoding="utf-8") as handle:
+              handle.write("## Atlas Runner Independent Verification\n\n")
+              handle.write(f"- Source run: `{report['source_run_id']}`\n")
+              for check in report["checks"]:
+                  handle.write(f"- **{check['result']}** — {check['check']}: {check['detail']}\n")
+              handle.write(f"\n**Verdict: {report['verdict']}**\n")
+          if not all_ok:
+              print(f"::error::verification REJECTED for run {report['source_run_id']}")
+              sys.exit(1)
+          PY
+
+      - name: Upload verification report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: atlas-verification-report
+          path: verification-report.json
+          if-no-files-found: error

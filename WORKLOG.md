@@ -6962,3 +6962,36 @@ North-star daily journey still lacked a first-class **What next** step. Substrat
 - `NEW_HEAD != LOST_HEAD` (required)
 - `MERGE_AUTHORIZATION = NOT_GRANTED`
 - `MERGE_PERFORMED = NO`
+
+---
+
+## 2026-09-26 — AS-RUNNER-FABRIC-001 workflows, operator documentation, ADR-033
+
+**Branch:** `feat/atlas-runner-fabric-001` (no commit made here; parent handles git)
+**Baseline:** MAIN `57a0a61d7c1b2410c96b5c26c507279d5f82c48d` / TREE `44e654882fc58c3ce59f11f9368a3a848170ba7a`
+
+### Implemented (workflows, all new, SHA-pinned third-party actions)
+
+- `.github/workflows/atlas-runner-ci.yml` — controller tests, ruff, `bash -n`, shellcheck, 3-schema check, worker-image build (no push) with label verification. `contents: read`, 20-min timeouts, concurrency cancel.
+- `.github/workflows/atlas-runner-smoke.yml` — `workflow_dispatch` ONLY, no secrets; the job sits queued until the VPS-02 controller admits it from the queued-runs poll (documented in header). Exact-SHA checkout, evidence-fragment check, artifact sha256 in `::group::`, artifact upload.
+- `.github/workflows/atlas-agent-execute.yml` — `workflow_dispatch` ONLY, executor-only; dedicated `atlas/agent-<run_id>-<attempt>` branch; bounded prompt; `anthropics/claude-code-action` pinned to v1 release commit; deterministic infra tests; commit+push restricted to the dedicated branch; smoke evidence. Never merges. `EXECUTOR_SUCCESS != VERIFIED` documented.
+- `.github/workflows/atlas-runner-verify.yml` — INDEPENDENT verification on GitHub-hosted `ubuntu-latest` (host-level trust boundary; same-host separation != independence). `workflow_run` (both executor workflows, default branch filter) + manual `source_run_id`; `contents: read` + `actions: read`; schema field validation, artifact SHA-256 recomputation, runner-identity checks, `complete`-claim semantics; VERIFIED/REJECTED verdict as artifact + step summary.
+- `.github/workflows/atlas-runner-deploy.yml` — `workflow_dispatch` ONLY; job-level default-branch gate + step re-assertion (§25-style: no PR path can reach the SSH key); 40-hex ancestor-only revision validation with env indirection; infra tests pre-deploy; pinned-host-key SSH (`StrictHostKeyChecking=yes`, 0600 key); `deploy-release.sh` on host; health gate; deploy log artifact. `environment: atlas-vps02` (required reviewers = human gate, to be configured).
+
+### Implemented (documentation)
+
+- `infra/atlas-runner/docs/ARCHITECTURE.md`, `SECURITY.md`, `OPERATIONS.md`, `DEPLOYMENT.md`, `RECOVERY.md`, `EVIDENCE.md`; README docs index added.
+- `docs/adr/ADR-033-atlas-runner-fabric-001.md` — seven decisions (stdlib sibling deliverable; poll/no-inbound; ephemeral JIT one-job-one-worker; SQLite WAL source of truth; GitHub-hosted independent verification; dispatch-only + default-branch gate; evidence schema) and three non-decisions (K8s/ARC fleet, Windows, GitHub App token provider).
+
+### State
+
+- Controller implementation pre-exists (85 tests passing, stdlib-only); this slice adds the GitHub surface, operator docs, and ADR.
+- `DEPLOYED = NO`. VPS-02 unreachable from the build network at the TCP level — all three documented public IPs and the Tailscale 100.x address time out; preflight NOT_RUN.
+- `LIVE E2E NOT_RUN_REQUIRES_EXTERNAL_AUTHORITY`: network reachability, GitHub secret provisioning (`VPS02_DEPLOY_SSH_KEY`, `VPS02_KNOWN_HOSTS`, `ANTHROPIC_API_KEY`, `atlas-vps02` environment reviewers, host-side `ATLAS_GITHUB_TOKEN`), and Anthropic auth are all external authorities.
+- `MERGE_AUTHORIZATION = NOT_GRANTED`, `MERGE_PERFORMED = NO`. PASS != MERGE AUTHORIZATION; EXECUTOR_SUCCESS != VERIFIED.
+
+### Local verification (this build host)
+
+- YAML parse of all 5 workflows: PASS (pyyaml).
+- Pinned action SHAs re-resolved via `gh api` against claimed versions: PASS (see report).
+- `actionlint`: NOT_AVAILABLE on this host — manual review pass performed (env indirection audit of every `${{` in `run:` blocks: none left; validated-input interpolation only).
