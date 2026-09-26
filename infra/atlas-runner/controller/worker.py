@@ -63,12 +63,22 @@ class WorkerManager:
 
     # -- registration ---------------------------------------------------------
     def _write_secret_file(self, workspace: Path, name: str, content: str) -> Path:
-        """Write registration material mode 0600; caller deletes after use."""
+        """Write registration material readable by the in-container runner user.
+
+        Mode 0644 (not 0600): the worker container runs as a non-root user
+        whose host uid is not atlas-runner, so a 0600 file is unreadable
+        inside the container and registration fails with an empty token
+        (observed live on VPS-02: "Invalid configuration provided for
+        token"). Exposure is bounded: the file lives in a 0750
+        controller-owned directory, is mounted only into the disposable
+        single-use worker, and the entrypoint deletes it right after
+        registration.
+        """
         target = workspace / name
-        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(content)
-        os.chmod(target, 0o600)
+        os.chmod(target, 0o644)
         return target
 
     def register(self, execution_id: str, workspace: Path, runner_name: str) -> dict[str, str]:
