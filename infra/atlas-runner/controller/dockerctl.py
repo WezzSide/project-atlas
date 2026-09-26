@@ -186,7 +186,11 @@ class DockerCtl:
             "--cpus", str(cpus),
             "--memory", f"{memory_mb}m",
             "--memory-swap", f"{memory_mb}m",
-            "--read-only",
+            # NOTE: no --read-only rootfs. The actions/runner writes _diag
+            # traces, .env and .path under its install dir and aborts
+            # (exit 134) on a read-only root. Hardening is preserved by the
+            # single-use lifecycle: the container layer is destroyed with
+            # the worker, and only the workspace is mounted from the host.
             "--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=256m",
             "--stop-timeout", str(min(timeout_seconds, 65535)),
             "--workdir", "/workspace",
