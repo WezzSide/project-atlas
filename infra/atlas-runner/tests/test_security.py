@@ -60,9 +60,12 @@ def test_mount_policy_allows_jobs_root_under_forbidden_prefix(workspace, monkeyp
         (str(workspace / "var-lib-sim"),),
     )
     # Mounts INSIDE the jobs root are allowed even though the prefix is forbidden.
-    assert validate_mount(jobs_root, jobs_root / "ex-1", label="mount") == (jobs_root / "ex-1").resolve()
-    # Sibling paths under the same forbidden prefix remain rejected.
-    with pytest.raises(DockerError):
+    assert validate_mount(jobs_root, jobs_root / "ex-1", label="mount") == (
+        jobs_root / "ex-1"
+    ).resolve()
+    # Sibling paths under the same forbidden prefix remain rejected
+    # (ensure_under_root rejects the escape first with ValueError).
+    with pytest.raises((DockerError, ValueError)):
         validate_mount(jobs_root, outside, label="mount")
 
 
