@@ -7021,3 +7021,24 @@ North-star daily journey still lacked a first-class **What next** step. Substrat
 - Infra suite: 92 passed (85 prior + 7 new fixture tests), 0 failed.
 - ruff clean on new test; bash -n + shellcheck -S warning clean on new script.
 - acceptance-workload.sh exercised in a temp copy: bump + chain + nonce deterministic in structure; committed fixture untouched.
+
+## 2026-09-26/27 — ATLAS-RUNNER-FABRIC-001: VPS-02 DEPLOYED + LIVE E2E PASS
+
+DEPLOYED=YES (atlas-eu-verify-01, release ad5f7545, controller 0.1.0, runner 2.337.0).
+LIVE E2E=PASS: acceptance run 36271297201 executed on ephemeral worker
+atlas-worker-ex-8e89ee978a604e65; fixture mutation + deterministic test +
+evidence fragment + result branch atlas/acceptance-36271297201-1 @ c28c5bc3;
+runner deregistered, worker destroyed, cleanup_status=ok, 0 residual
+containers/runners/credential files; controller health=healthy.
+INDEPENDENT VERIFICATION=VERIFIED (9/9 checks, workstation-side re-hash of
+artifacts vs fragment claims; host-independent of VPS-02).
+Ten real defects found and fixed during live bring-up (systemd arg order,
+deploy health env, DOCKER-USER guard permit, mount-policy exemption,
+read-only rootfs, secret-file readability, custom labels, JIT
+runner_group_id, secret-deletion race, worker-image test deps).
+Known limitations: controller-side evidence.json carries base/result
+revision as null (rich data lives in the worker evidence fragment +
+GitHub artifacts; fragment merge is future work); setup-python unsupported
+on the worker image (use the image's python3); CLAUDE_E2E=
+NOT_RUN_REQUIRES_EXTERNAL_AUTHORITY (no ANTHROPIC_API_KEY).
+EXECUTOR_SUCCESS != VERIFIED; PASS != MERGE AUTHORIZATION.
