@@ -47,6 +47,34 @@ class MailboxStatus(StrEnum):
     QUARANTINED = "QUARANTINED"
 
 
+class SuccessorLifecycle(StrEnum):
+    PREPARED = "PREPARED"
+    MATERIALIZING = "MATERIALIZING"
+    READY = "READY"
+    LEASED = "LEASED"
+    ACTIVE = "ACTIVE"
+    VERIFYING = "VERIFYING"
+    REMEDIATING = "REMEDIATING"
+    WAITING_EXTERNAL = "WAITING_EXTERNAL"
+    WAIT_RECONCILIATION = "WAIT_RECONCILIATION"
+    TERMINAL = "TERMINAL"
+
+
+ACTIVE_SUCCESSOR_LIFECYCLES = frozenset(
+    {
+        SuccessorLifecycle.PREPARED,
+        SuccessorLifecycle.MATERIALIZING,
+        SuccessorLifecycle.READY,
+        SuccessorLifecycle.LEASED,
+        SuccessorLifecycle.ACTIVE,
+        SuccessorLifecycle.VERIFYING,
+        SuccessorLifecycle.REMEDIATING,
+        SuccessorLifecycle.WAITING_EXTERNAL,
+        SuccessorLifecycle.WAIT_RECONCILIATION,
+    }
+)
+
+
 def canonical_json(payload: object) -> bytes:
     try:
         return json.dumps(
@@ -242,6 +270,9 @@ class MailboxSuccessorRecord(BaseModel):
     binding: MailboxSuccessorBindingV1
     work_node: dict[str, Any]
     work_node_digest: str = Field(pattern=HASH_PATTERN)
+    lifecycle: SuccessorLifecycle = SuccessorLifecycle.PREPARED
+    generation: int = Field(default=1, ge=1)
+    supersedes_package_id: str | None = Field(default=None, max_length=128, pattern=ID_PATTERN)
 
     @model_validator(mode="after")
     def _node_digest(self) -> MailboxSuccessorRecord:
@@ -258,7 +289,7 @@ class MailboxState(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal[2] = 2
+    schema_version: Literal[3] = 3
     project_id: str = Field(min_length=1, max_length=128, pattern=ID_PATTERN)
     records: dict[str, MailboxRecord] = Field(default_factory=dict)
     quarantined: dict[str, QuarantineReceipt] = Field(default_factory=dict)
@@ -279,6 +310,14 @@ class MailboxState(BaseModel):
             raise MailboxError("cross-project mailbox row", code="STORE_CORRUPT")
         if any(key != item.binding.package_id for key, item in self.successors.items()):
             raise MailboxError("successor index mismatch", code="STORE_CORRUPT")
+        active_incidents: set[str] = set()
+        for item in self.successors.values():
+            if item.lifecycle not in ACTIVE_SUCCESSOR_LIFECYCLES:
+                continue
+            incident_id = item.binding.incident_id
+            if incident_id in active_incidents:
+                raise MailboxError("multiple active successors for incident", code="STORE_CORRUPT")
+            active_incidents.add(incident_id)
         return self
 
     def seal(self) -> MailboxState:

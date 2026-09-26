@@ -3,6 +3,11 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import multiprocessing
+import os
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -26,7 +31,12 @@ from project_atlas.orchestration.mailbox import (
     SuccessorAdmissionError,
     payload_sha256,
 )
-from project_atlas.orchestration.mailbox.models import MailboxSuccessorRecord
+from project_atlas.orchestration.mailbox.models import (
+    MailboxSuccessorRecord,
+    SuccessorLifecycle,
+    record_sha256,
+)
+from project_atlas.orchestration.mailbox.store import _MailboxFileLock
 from project_atlas.schema import available_schemas, validate_record
 
 HEAD = "f6b2495a03196901a5a72c2cf3451d4504b54d5f"
@@ -223,6 +233,7 @@ def test_same_message_id_with_changed_content_is_quarantined(tmp_path: Path) -> 
 def test_idempotency_key_replay_suppresses_new_message_id(tmp_path: Path) -> None:
     mailbox = AgentMailbox(tmp_path, project_id="project-atlas")
     mailbox.enqueue(_message(message_id="original"))
+    mailbox.process_next(_router())
     replay = _message(message_id="replay")
     replay["idempotency_key"] = "idem-original"
     receipt = mailbox.enqueue(replay)
@@ -235,6 +246,7 @@ def test_idempotency_key_replay_suppresses_new_message_id(tmp_path: Path) -> Non
 def test_idempotency_key_reuse_with_changed_payload_is_quarantined(tmp_path: Path) -> None:
     mailbox = AgentMailbox(tmp_path, project_id="project-atlas")
     mailbox.enqueue(_message(message_id="original"))
+    mailbox.process_next(_router())
     changed = _message(message_id="changed", agent_id="builder-b")
     changed["idempotency_key"] = "idem-original"
     receipt = mailbox.enqueue(changed)
@@ -383,6 +395,102 @@ def test_stale_source_pin_is_quarantined_before_routing(tmp_path: Path) -> None:
     assert record.routing is None
 
 
+def test_stale_result_cannot_suppress_later_valid_context(tmp_path: Path) -> None:
+    mailbox = AgentMailbox(tmp_path, project_id="project-atlas")
+    stale = mailbox.enqueue(_message(message_id="stale", head=OTHER_HEAD, tree=OTHER_TREE))
+    assert stale.status == MailboxStatus.PENDING
+    rejected = mailbox.process_next(_router())
+    assert rejected is not None and rejected.status == MailboxStatus.QUARANTINED
+
+    valid = mailbox.enqueue(_message(message_id="valid", head=HEAD, tree=TREE))
+    assert valid.status == MailboxStatus.PENDING
+    assert not valid.duplicate
+    accepted = mailbox.process_next(_router())
+    assert accepted is not None and accepted.message.message_id == "valid"
+    assert accepted.status == MailboxStatus.PROCESSED
+
+
+def test_unvalidated_stale_record_cannot_reserve_idempotency_key(tmp_path: Path) -> None:
+    mailbox = AgentMailbox(tmp_path, project_id="project-atlas")
+    stale = _message(message_id="stale-reservation", head=OTHER_HEAD, tree=OTHER_TREE)
+    mailbox.enqueue(stale)
+    valid = _message(message_id="valid-reservation")
+    valid["idempotency_key"] = stale["idempotency_key"]
+    receipt = mailbox.enqueue(valid)
+    assert receipt.status == MailboxStatus.PENDING
+    assert not receipt.duplicate
+
+
+def test_invalid_cross_project_message_cannot_consume_valid_result(tmp_path: Path) -> None:
+    mailbox = AgentMailbox(tmp_path, project_id="project-atlas")
+    invalid = _message(message_id="cross-project")
+    invalid["project_id"] = "other-project"
+    assert mailbox.enqueue(invalid).status == MailboxStatus.QUARANTINED
+
+    valid = mailbox.enqueue(_message(message_id="valid-after-reject"))
+    assert valid.status == MailboxStatus.PENDING
+    assert mailbox.process_next(_router()).message.message_id == "valid-after-reject"
+
+
+def test_rejected_identity_record_cannot_consume_valid_transport_retry(tmp_path: Path) -> None:
+    mailbox = AgentMailbox(tmp_path, project_id="project-atlas")
+    raw = _message(message_id="rejected-identity")
+    mailbox.enqueue(raw)
+    rejecting_router = InboxRouter(
+        trusted_head=HEAD,
+        trusted_tree=TREE,
+        identity_verifier=lambda _message: False,
+        binding_verifier=lambda _message: True,
+    )
+    rejected = mailbox.process_next(rejecting_router)
+    assert rejected is not None and rejected.status == MailboxStatus.QUARANTINED
+
+    valid = _message(message_id="valid-retry")
+    valid["idempotency_key"] = raw["idempotency_key"]
+    receipt = mailbox.enqueue(valid)
+    assert receipt.status == MailboxStatus.PENDING
+    assert not receipt.duplicate
+    accepted = mailbox.process_next(_router())
+    assert accepted is not None and accepted.message.message_id == "valid-retry"
+
+
+def test_processed_exact_transport_replay_remains_idempotent(tmp_path: Path) -> None:
+    mailbox = AgentMailbox(tmp_path, project_id="project-atlas")
+    raw = _message(message_id="validated-result")
+    mailbox.enqueue(raw)
+    mailbox.process_next(_router())
+
+    replay = mailbox.enqueue(raw)
+    assert replay.duplicate
+    assert replay.message_id == "validated-result"
+    assert replay.status == MailboxStatus.PROCESSED
+
+
+def test_validated_equivalent_result_dedupes_after_validation(tmp_path: Path) -> None:
+    mailbox = AgentMailbox(tmp_path, project_id="project-atlas")
+    mailbox.enqueue(_message(message_id="result-one"))
+    assert mailbox.process_next(_router()).status == MailboxStatus.PROCESSED
+
+    duplicate = mailbox.enqueue(_message(message_id="result-two"))
+    assert duplicate.status == MailboxStatus.PROCESSED
+    assert duplicate.duplicate
+    assert duplicate.duplicate_of == "result-one"
+
+
+def test_stale_result_dedupe_context_survives_restart_without_consuming_valid_result(
+    tmp_path: Path,
+) -> None:
+    mailbox = AgentMailbox(tmp_path, project_id="project-atlas")
+    mailbox.enqueue(_message(message_id="stale-before-restart", head=OTHER_HEAD, tree=OTHER_TREE))
+    stale = mailbox.process_next(_router())
+    assert stale is not None and stale.status == MailboxStatus.QUARANTINED
+
+    reopened = AgentMailbox(tmp_path, project_id="project-atlas")
+    valid = reopened.enqueue(_message(message_id="valid-after-restart"))
+    assert valid.status == MailboxStatus.PENDING
+    assert not valid.duplicate
+
+
 def test_unverified_producer_identity_is_quarantined(tmp_path: Path) -> None:
     mailbox = AgentMailbox(tmp_path, project_id="project-atlas")
     mailbox.enqueue(_message())
@@ -451,13 +559,109 @@ def test_malformed_embedded_result_is_quarantined_on_processing(tmp_path: Path) 
 def test_duplicate_result_digest_does_not_get_processed_twice(tmp_path: Path) -> None:
     mailbox = AgentMailbox(tmp_path, project_id="project-atlas")
     mailbox.enqueue(_message(message_id="result-one"))
+    assert mailbox.process_next(_router()).message.message_id == "result-one"
     duplicate = mailbox.enqueue(_message(message_id="result-two"))
 
     assert duplicate.status == MailboxStatus.PROCESSED
     assert duplicate.duplicate is True
     assert duplicate.duplicate_of == "result-one"
-    assert mailbox.process_next(_router()).message.message_id == "result-one"
     assert mailbox.process_next(_router()) is None
+
+
+def test_mailbox_lock_age_never_revokes_live_owner(tmp_path: Path) -> None:
+    lock_path = tmp_path / "live.lock"
+    entered = threading.Event()
+    release = threading.Event()
+    outcome: list[str] = []
+
+    def owner() -> None:
+        with _MailboxFileLock(lock_path, wait_seconds=0.5):
+            entered.set()
+            assert release.wait(2)
+
+    def contender() -> None:
+        try:
+            with _MailboxFileLock(lock_path, wait_seconds=0.1):
+                outcome.append("acquired")
+        except TimeoutError:
+            outcome.append("blocked")
+
+    first = threading.Thread(target=owner)
+    first.start()
+    assert entered.wait(1)
+    old = time.time() - 3600
+    os.utime(lock_path, (old, old))
+    second = threading.Thread(target=contender)
+    second.start()
+    second.join(1)
+    assert outcome == ["blocked"]
+    release.set()
+    first.join(1)
+    assert not first.is_alive()
+
+
+def test_released_lock_owner_cannot_unlock_new_owner(tmp_path: Path) -> None:
+    lock_path = tmp_path / "ownership.lock"
+    old_owner = _MailboxFileLock(lock_path, wait_seconds=0.2)
+    old_owner.__enter__()
+    old_owner.__exit__(None, None, None)
+
+    new_owner = _MailboxFileLock(lock_path, wait_seconds=0.2)
+    new_owner.__enter__()
+    old_owner.__exit__(None, None, None)
+    with pytest.raises(TimeoutError), _MailboxFileLock(lock_path, wait_seconds=0.05):
+        pass
+    new_owner.__exit__(None, None, None)
+    with _MailboxFileLock(lock_path, wait_seconds=0.2):
+        pass
+
+
+def _hold_mailbox_lock(lock_path: str, ready: object) -> None:
+    with _MailboxFileLock(Path(lock_path), wait_seconds=1):
+        ready.set()  # type: ignore[attr-defined]
+        time.sleep(10)
+
+
+def test_dead_process_releases_kernel_owned_lock(tmp_path: Path) -> None:
+    context = multiprocessing.get_context("spawn")
+    ready = context.Event()
+    lock_path = tmp_path / "process-owned.lock"
+    process = context.Process(target=_hold_mailbox_lock, args=(str(lock_path), ready))
+    process.start()
+    assert ready.wait(5)
+    process.terminate()
+    process.join(5)
+    assert not process.is_alive()
+    with _MailboxFileLock(lock_path, wait_seconds=0.5):
+        pass
+
+
+def test_concurrent_mailbox_writes_retain_both_messages(tmp_path: Path) -> None:
+    mailbox = AgentMailbox(tmp_path, project_id="project-atlas")
+    barrier = threading.Barrier(3)
+    errors: list[BaseException] = []
+
+    def write(message_id: str) -> None:
+        try:
+            barrier.wait()
+            mailbox.enqueue(_message(message_id=message_id))
+        except BaseException as exc:
+            errors.append(exc)
+
+    writers = [
+        threading.Thread(target=write, args=(message_id,))
+        for message_id in ("parallel-a", "parallel-b")
+    ]
+    for writer in writers:
+        writer.start()
+    barrier.wait()
+    for writer in writers:
+        writer.join(3)
+    assert errors == []
+    assert {item.message.message_id for item in mailbox.records()} == {
+        "parallel-a",
+        "parallel-b",
+    }
 
 
 def test_processed_message_is_idempotent_and_has_no_dispatch_side_effect(
@@ -531,9 +735,214 @@ def test_cross_agent_successor_dedupes_and_rehydrates_after_restart(tmp_path: Pa
         governor=_governor(),
         authority_verifier=lambda _item: True,
     ).reconcile()
-    assert len(recovered) == 1
-    assert recovered[0].package_id == one.package_id
-    assert recovered[0].state.value == "READY"
+    assert recovered == ()
+    assert len(_governor().snapshot().nodes) == 0
+    assert mailbox.successor_records()[0].lifecycle.value == "WAIT_RECONCILIATION"
+
+
+def _processed_for_admission(mailbox: AgentMailbox, raw: dict[str, Any]) -> None:
+    receipt = mailbox.enqueue(raw)
+    if receipt.status == MailboxStatus.PROCESSED:
+        return
+    record = mailbox.process_next(_router())
+    assert record is not None and record.status == MailboxStatus.PROCESSED
+
+
+def test_same_incident_different_producer_roles_admits_one_successor(tmp_path: Path) -> None:
+    mailbox = AgentMailbox(tmp_path, project_id="project-atlas")
+    first = _message(message_id="local-observation", agent_id="builder-a")
+    second = _message(message_id="autonomous-observation", agent_id="builder-b")
+    second["producer"] = {"role": "autonomous", "agent_id": "builder-b"}
+    second["payload"]["result_envelope"]["producer"] = {
+        "role": "autonomous",
+        "agent_id": "builder-b",
+    }
+    second["payload_digest"] = payload_sha256(second["payload"])
+    _processed_for_admission(mailbox, first)
+    _processed_for_admission(mailbox, second)
+    governor = _governor()
+    bridge = MailboxGovernorBridge(
+        mailbox=mailbox, governor=governor, authority_verifier=lambda _message: True
+    )
+
+    one = bridge.admit("local-observation")
+    two = bridge.admit("autonomous-observation")
+    assert one.package_id == two.package_id
+    assert (
+        len(mailbox.incident_message_ids(AgentInboxMessage.model_validate(first).incident_id()))
+        == 2
+    )
+    assert len(mailbox.successor_records()) == 1
+    assert len(governor.snapshot().nodes) == 1
+
+
+def test_concurrent_same_incident_admission_claims_one_successor(tmp_path: Path) -> None:
+    mailbox = AgentMailbox(tmp_path, project_id="project-atlas")
+    first = _message(message_id="concurrent-local", agent_id="builder-a")
+    second = _message(message_id="concurrent-autonomous", agent_id="builder-b")
+    second["producer"] = {"role": "autonomous", "agent_id": "builder-b"}
+    second["payload"]["result_envelope"]["producer"] = {
+        "role": "autonomous",
+        "agent_id": "builder-b",
+    }
+    second["payload_digest"] = payload_sha256(second["payload"])
+    _processed_for_admission(mailbox, first)
+    _processed_for_admission(mailbox, second)
+    governor = _governor()
+    bridge = MailboxGovernorBridge(
+        mailbox=mailbox, governor=governor, authority_verifier=lambda _message: True
+    )
+    barrier = threading.Barrier(3)
+    results: list[str] = []
+    errors: list[BaseException] = []
+
+    def admit(message_id: str) -> None:
+        try:
+            barrier.wait()
+            results.append(bridge.admit(message_id).package_id)
+        except BaseException as exc:
+            errors.append(exc)
+
+    workers = [
+        threading.Thread(target=admit, args=(message_id,))
+        for message_id in ("concurrent-local", "concurrent-autonomous")
+    ]
+    for worker in workers:
+        worker.start()
+    barrier.wait()
+    for worker in workers:
+        worker.join(3)
+    assert len(results) == 2, errors
+    assert len(set(results)) == 1
+    assert len(mailbox.successor_records()) == 1
+    assert len(governor.snapshot().nodes) == 1
+
+
+def test_same_incident_new_attempt_and_message_preserves_observation_without_second_node(
+    tmp_path: Path,
+) -> None:
+    mailbox = AgentMailbox(tmp_path, project_id="project-atlas")
+    first = _message(message_id="attempt-one")
+    second = _message(message_id="attempt-two")
+    second["attempt_id"] = "attempt-2"
+    second["payload"]["result_envelope"]["task"]["attempt"] = 2
+    second["payload_digest"] = payload_sha256(second["payload"])
+    _processed_for_admission(mailbox, first)
+    _processed_for_admission(mailbox, second)
+    governor = _governor()
+    bridge = MailboxGovernorBridge(
+        mailbox=mailbox, governor=governor, authority_verifier=lambda _message: True
+    )
+
+    first_node = bridge.admit("attempt-one")
+    second_node = bridge.admit("attempt-two")
+    assert first_node.package_id == second_node.package_id
+    assert len(mailbox.successor_records()) == 1
+    assert len(governor.snapshot().nodes) == 1
+    assert len(mailbox.records()) == 2
+
+
+def test_same_producer_new_message_id_has_one_successor(tmp_path: Path) -> None:
+    mailbox = AgentMailbox(tmp_path, project_id="project-atlas")
+    for message_id in ("same-producer-one", "same-producer-two"):
+        _processed_for_admission(mailbox, _message(message_id=message_id))
+    governor = _governor()
+    bridge = MailboxGovernorBridge(
+        mailbox=mailbox, governor=governor, authority_verifier=lambda _message: True
+    )
+    assert (
+        bridge.admit("same-producer-one").package_id == bridge.admit("same-producer-two").package_id
+    )
+    assert len(mailbox.successor_records()) == 1
+
+
+def test_distinct_incident_can_admit_distinct_successor(tmp_path: Path) -> None:
+    mailbox = AgentMailbox(tmp_path, project_id="project-atlas")
+    first = _message(message_id="incident-one")
+    second = _message(message_id="incident-two", task_id="SOURCE-DELEGATION-002")
+    _processed_for_admission(mailbox, first)
+    _processed_for_admission(mailbox, second)
+    governor = _governor()
+    bridge = MailboxGovernorBridge(
+        mailbox=mailbox, governor=governor, authority_verifier=lambda _message: True
+    )
+    one, two = bridge.admit("incident-one"), bridge.admit("incident-two")
+    assert one.package_id != two.package_id
+    assert len(mailbox.successor_records()) == 2
+    assert len(governor.snapshot().nodes) == 2
+
+
+def test_terminal_successor_requires_explicit_transition_before_new_generation(
+    tmp_path: Path,
+) -> None:
+    mailbox = AgentMailbox(tmp_path, project_id="project-atlas")
+    first = _message(message_id="generation-one")
+    second = _message(message_id="generation-two")
+    second["attempt_id"] = "attempt-2"
+    second["payload"]["result_envelope"]["task"]["attempt"] = 2
+    second["payload_digest"] = payload_sha256(second["payload"])
+    _processed_for_admission(mailbox, first)
+    _processed_for_admission(mailbox, second)
+    governor = _governor()
+    bridge = MailboxGovernorBridge(
+        mailbox=mailbox, governor=governor, authority_verifier=lambda _message: True
+    )
+    original = bridge.admit("generation-one")
+    mailbox.set_successor_lifecycle(original.package_id, SuccessorLifecycle.TERMINAL)
+
+    retry = bridge.admit("generation-two")
+    assert retry.package_id != original.package_id
+    records = mailbox.successor_records()
+    assert len(records) == 2
+    new = next(item for item in records if item.binding.package_id == retry.package_id)
+    assert new.generation == 2
+    assert new.supersedes_package_id == original.package_id
+
+
+def test_completed_successor_is_not_recreated_ready_after_restart(tmp_path: Path) -> None:
+    mailbox = AgentMailbox(tmp_path, project_id="project-atlas")
+    _processed_for_admission(mailbox, _message(message_id="completed-node"))
+    original_bridge = MailboxGovernorBridge(
+        mailbox=mailbox,
+        governor=_governor(),
+        authority_verifier=lambda _message: True,
+    )
+    node = original_bridge.admit("completed-node")
+    mailbox.set_successor_lifecycle(node.package_id, SuccessorLifecycle.TERMINAL)
+    new_governor = _governor()
+    assert (
+        MailboxGovernorBridge(
+            mailbox=AgentMailbox(tmp_path, project_id="project-atlas"),
+            governor=new_governor,
+            authority_verifier=lambda _message: True,
+        ).reconcile()
+        == ()
+    )
+    assert new_governor.snapshot().nodes == ()
+
+
+def test_schema_v2_successor_migrates_to_reconciliation_required(tmp_path: Path) -> None:
+    mailbox = AgentMailbox(tmp_path, project_id="project-atlas")
+    _processed_for_admission(mailbox, _message(message_id="legacy-successor"))
+    bridge = MailboxGovernorBridge(
+        mailbox=mailbox,
+        governor=_governor(),
+        authority_verifier=lambda _message: True,
+    )
+    bridge.admit("legacy-successor")
+    raw = json.loads(mailbox.state_path.read_text(encoding="utf-8"))
+    raw["schema_version"] = 2
+    for item in raw["successors"].values():
+        item.pop("lifecycle")
+        item.pop("generation")
+        item.pop("supersedes_package_id")
+    unsigned = dict(raw)
+    unsigned.pop("state_digest")
+    raw["state_digest"] = record_sha256(unsigned)
+    mailbox.state_path.write_text(json.dumps(raw), encoding="utf-8")
+
+    migrated = AgentMailbox(tmp_path, project_id="project-atlas").successor_records()[0]
+    assert migrated.lifecycle == SuccessorLifecycle.WAIT_RECONCILIATION
 
 
 def test_reconcile_rejects_successor_binding_not_matching_persisted_route(

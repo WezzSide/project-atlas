@@ -3,18 +3,23 @@
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
 import os
 import re
 import tempfile
+import time
 from collections.abc import Callable
+from contextlib import AbstractContextManager
 from pathlib import Path
-from typing import Protocol, TypeVar
+from types import TracebackType
+from typing import Any, BinaryIO, Protocol, TypeVar, cast
 
 from pydantic import ValidationError
 
 from atlas_contracts.versions import ID_PATTERN
 from project_atlas.orchestration.mailbox.models import (
+    ACTIVE_SUCCESSOR_LIFECYCLES,
     MAX_PAYLOAD_BYTES,
     AgentInboxMessage,
     EnqueueReceipt,
@@ -26,15 +31,87 @@ from project_atlas.orchestration.mailbox.models import (
     MailboxSuccessorBindingV1,
     MailboxSuccessorRecord,
     QuarantineReceipt,
+    SuccessorLifecycle,
     canonical_json,
     record_sha256,
 )
-from project_atlas.source_identity import IdentityLockError, ProjectIdentityLock
 
 STATE_RELATIVE = Path(".atlas") / "orchestration" / "inbox"
 STATE_NAME = "state.json"
 LOCK_NAME = ".inbox.lock"
 T = TypeVar("T")
+
+
+class _MailboxFileLock(AbstractContextManager["_MailboxFileLock"]):
+    """Kernel-owned exclusive lock; lock-file age never revokes a live owner."""
+
+    def __init__(self, path: Path, *, wait_seconds: float = 2.0) -> None:
+        self.path = path
+        self.wait_seconds = wait_seconds
+        self._handle: BinaryIO | None = None
+        self._locked = False
+
+    def __enter__(self) -> _MailboxFileLock:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        handle = self.path.open("a+b")
+        if os.name == "nt":
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() == 0:
+                handle.write(b"0")
+                handle.flush()
+            handle.seek(0)
+        deadline = time.monotonic() + self.wait_seconds
+        while True:
+            try:
+                if os.name == "nt":
+                    handle.seek(0)
+                    msvcrt = cast(Any, importlib.import_module("msvcrt"))
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                self._handle = handle
+                self._locked = True
+                return self
+            except OSError as exc:
+                if isinstance(exc, OSError) and exc.errno not in {
+                    11,
+                    13,
+                    35,
+                    36,
+                    33,
+                }:
+                    handle.close()
+                    raise
+                if time.monotonic() >= deadline:
+                    handle.close()
+                    raise TimeoutError("mailbox lock wait expired") from exc
+                time.sleep(min(0.01, max(0.0, deadline - time.monotonic())))
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        handle = self._handle
+        if handle is None or not self._locked:
+            return None
+        self._locked = False
+        try:
+            if os.name == "nt":
+                handle.seek(0)
+                msvcrt = cast(Any, importlib.import_module("msvcrt"))
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            handle.close()
+            self._handle = None
+        return None
 
 
 class _InboxRouter(Protocol):
@@ -134,6 +211,8 @@ class AgentMailbox:
         message_id: str,
         binding: MailboxSuccessorBindingV1,
         work_node: dict[str, object],
+        generation: int = 1,
+        supersedes_package_id: str | None = None,
     ) -> tuple[MailboxSuccessorRecord, bool]:
         """Persist one routed successor identity before governor materialization."""
         binding.verify()
@@ -171,6 +250,8 @@ class AgentMailbox:
                 binding=binding,
                 work_node=work_node,
                 work_node_digest=record_sha256(work_node),
+                generation=generation,
+                supersedes_package_id=supersedes_package_id,
             )
             prior = state.successors.get(binding.package_id)
             if prior is not None:
@@ -190,13 +271,74 @@ class AgentMailbox:
                     stable_prior != stable_candidate
                     or prior.work_node_digest != candidate.work_node_digest
                 ):
+                    if prior.lifecycle in ACTIVE_SUCCESSOR_LIFECYCLES:
+                        raise MailboxError(
+                            "logical incident already has an active successor",
+                            code="DUPLICATE_ACTIVE_SUCCESSOR",
+                        )
                     raise MailboxError(
                         "successor identity collision", code="SUCCESSOR_ID_COLLISION"
                     )
                 return prior, True
+            same_incident = [
+                item
+                for item in state.successors.values()
+                if item.binding.incident_id == binding.incident_id
+            ]
+            active = [
+                item for item in same_incident if item.lifecycle in ACTIVE_SUCCESSOR_LIFECYCLES
+            ]
+            if active:
+                raise MailboxError(
+                    "logical incident already has an active successor",
+                    code="DUPLICATE_ACTIVE_SUCCESSOR",
+                )
+            if same_incident:
+                latest = max(same_incident, key=lambda item: item.generation)
+                allowed_retries = {
+                    "AUTONOMOUS_RECONCILE",
+                    "RECERTIFY_REQUIRED",
+                    "REMEDIATION_REQUIRED",
+                }
+                if (
+                    latest.lifecycle != SuccessorLifecycle.TERMINAL
+                    or supersedes_package_id != latest.binding.package_id
+                    or generation != latest.generation + 1
+                    or binding.transition not in allowed_retries
+                ):
+                    raise MailboxError(
+                        "successor replacement requires explicit terminal supersession",
+                        code="SUCCESSOR_SUPERSESSION_REQUIRED",
+                    )
+            elif supersedes_package_id is not None or generation != 1:
+                raise MailboxError(
+                    "successor generation has no prior terminal record",
+                    code="SUCCESSOR_SUPERSESSION_INVALID",
+                )
             state.successors[binding.package_id] = candidate
             self._save_state(state)
             return candidate, False
+
+        return self._locked_update(operation)
+
+    def set_successor_lifecycle(
+        self, package_id: str, lifecycle: SuccessorLifecycle
+    ) -> MailboxSuccessorRecord:
+        """Persist lifecycle observed from the governor; this method grants no authority."""
+
+        def operation(state: MailboxState) -> MailboxSuccessorRecord:
+            item = state.successors.get(package_id)
+            if item is None:
+                raise MailboxError("successor is not recorded", code="SUCCESSOR_NOT_FOUND")
+            if item.lifecycle == SuccessorLifecycle.TERMINAL and lifecycle != item.lifecycle:
+                raise MailboxError(
+                    "terminal successor lifecycle cannot regress",
+                    code="SUCCESSOR_LIFECYCLE_REGRESSION",
+                )
+            updated = item.model_copy(update={"lifecycle": lifecycle})
+            state.successors[package_id] = updated
+            self._save_state(state)
+            return updated
 
         return self._locked_update(operation)
 
@@ -253,6 +395,10 @@ class AgentMailbox:
             )
 
         for item in state.records.values():
+            if item.status != MailboxStatus.PROCESSED or (item.routing or {}).get(
+                "classification"
+            ) in {"DUPLICATE_MESSAGE", "QUARANTINE"}:
+                continue
             if item.message.idempotency_key == message.idempotency_key:
                 if item.message.idempotency_sha256() != message.idempotency_sha256():
                     return self._quarantine_locked(
@@ -265,10 +411,18 @@ class AgentMailbox:
         if message.message_kind.value in result_kinds and message.dispatch_id is not None:
             for item in state.records.values():
                 if (
-                    item.message.message_kind == message.message_kind
+                    item.status == MailboxStatus.PROCESSED
+                    and (item.routing or {}).get("classification")
+                    not in {"DUPLICATE_MESSAGE", "QUARANTINE"}
+                    and item.message.message_kind == message.message_kind
                     and item.message.task_id == message.task_id
                     and item.message.run_id == message.run_id
                     and item.message.dispatch_id == message.dispatch_id
+                    and item.message.attempt_id == message.attempt_id
+                    and item.message.requester_id == message.requester_id
+                    and item.message.reason_code == message.reason_code
+                    and item.message.trusted_head == message.trusted_head
+                    and item.message.trusted_tree == message.trusted_tree
                     and item.message.payload_digest == message.payload_digest
                 ):
                     duplicate_of = item.message.message_id
@@ -336,9 +490,9 @@ class AgentMailbox:
     def _locked_update(self, operation: Callable[[MailboxState], T]) -> T:
         self.store_dir.mkdir(parents=True, exist_ok=True)
         try:
-            with ProjectIdentityLock(self.lock_path, wait_seconds=2.0, stale_seconds=30.0):
+            with _MailboxFileLock(self.lock_path, wait_seconds=2.0):
                 return operation(self._load_state())
-        except IdentityLockError as exc:
+        except TimeoutError as exc:
             raise MailboxError("mailbox lock is unavailable", code="STORE_LOCKED") from exc
         except MailboxError:
             raise
@@ -355,7 +509,7 @@ class AgentMailbox:
             raw = json.loads(self.state_path.read_text(encoding="utf-8"))
             if not isinstance(raw, dict):
                 raise ValueError("state root is not an object")
-            if raw.get("schema_version") == 1:
+            if raw.get("schema_version") in {1, 2}:
                 legacy_digest = raw.get("state_digest")
                 legacy_unsigned = dict(raw)
                 legacy_unsigned.pop("state_digest", None)
@@ -366,7 +520,12 @@ class AgentMailbox:
                     raise MailboxError("legacy mailbox digest mismatch", code="STORE_CORRUPT")
                 legacy_records = raw.get("records", {})
                 legacy_quarantine = raw.get("quarantined", {})
-                if not isinstance(legacy_records, dict) or not isinstance(legacy_quarantine, dict):
+                legacy_successors = raw.get("successors", {})
+                if (
+                    not isinstance(legacy_records, dict)
+                    or not isinstance(legacy_quarantine, dict)
+                    or not isinstance(legacy_successors, dict)
+                ):
                     raise MailboxError(
                         "legacy mailbox collections are invalid", code="STORE_CORRUPT"
                     )
@@ -380,7 +539,12 @@ class AgentMailbox:
                         str(key): QuarantineReceipt.model_validate(value)
                         for key, value in legacy_quarantine.items()
                     },
-                    successors={},
+                    successors={
+                        str(key): MailboxSuccessorRecord.model_validate(value).model_copy(
+                            update={"lifecycle": SuccessorLifecycle.WAIT_RECONCILIATION}
+                        )
+                        for key, value in legacy_successors.items()
+                    },
                     state_digest="0" * 64,
                 ).seal()
             else:
