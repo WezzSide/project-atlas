@@ -158,7 +158,12 @@ def test_evidence_tamper_detectable(workspace):
     assert verify_artifact_hashes(workspace, hashes) == {"artifact.bin": False}
 
 
-def test_secret_file_mode_0600(config, store, fake_docker, fake_github, workspace):
+def test_secret_file_mode_0644_container_readable(config, store, fake_docker, fake_github, workspace):
+    """Registration material must be readable by the non-root in-container user.
+
+    Regression: 0600/atlas-runner-owned was unreadable inside the worker,
+    so registration received an empty token (live failure on VPS-02).
+    """
     import os
     import stat as statmod
 
@@ -170,4 +175,4 @@ def test_secret_file_mode_0600(config, store, fake_docker, fake_github, workspac
     ws.mkdir(parents=True)
     path = manager._write_secret_file(ws, ".runner-jit", "secret-material")
     mode = statmod.S_IMODE(os.stat(path).st_mode)
-    assert mode == 0o600
+    assert mode == 0o644
