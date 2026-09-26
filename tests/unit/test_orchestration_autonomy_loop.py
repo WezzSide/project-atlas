@@ -268,6 +268,30 @@ def test_failed_worker_result_is_not_treated_as_independent_review_failure(
     assert gov.snapshot().iv_state.value != "FAIL"
 
 
+def test_missing_verifier_blocks_only_its_node_and_finalizes_attempt(tmp_path: Path) -> None:
+    agents = (AgentRecord(agent_id="implement-only", capabilities=(AgentCapability.IMPLEMENT,)),)
+    gov = AutonomousGovernor(
+        current_main=PIN,
+        current_tree=TREE,
+        trusted_anchor=_anchor(),
+        agents=agents,
+    )
+    gov.add_node(_node("AS-ORCH-NO-VERIFIER-001", host=ExecutionHostClass.EXTERNAL_AGENT))
+    port = CallableDispatchPort(
+        lambda _root: {"dispatch_id": "disp-no-verifier", "status": "COMPLETED"}
+    )
+
+    result = _loop(tmp_path, gov, port).tick()
+
+    node = next(
+        item for item in gov.snapshot().nodes if item.package_id == "AS-ORCH-NO-VERIFIER-001"
+    )
+    assert result.phase is LoopPhase.IDLE
+    assert node.state is NodeState.BLOCKED
+    assert result.dispatch_id is None
+    assert gov.snapshot().certification_state.value != "CERTIFIED"
+
+
 def test_owner_gate_stop_no_dispatch(tmp_path: Path) -> None:
     gov = _governor(
         _node(

@@ -412,10 +412,14 @@ class AutonomousLoop:
                         package_id,
                         implementer_id=lease.agent_id,
                     )
-                except Exception as exc:
-                    raise LoopError(
-                        "independent verifier could not be selected", code="VERIFIER_UNAVAILABLE"
-                    ) from exc
+                except Exception:
+                    # Keep this lane blocked without wedging the single active
+                    # loop slot; another READY lane can still be selected.
+                    self._governor.transition(
+                        package_id,
+                        NodeState.BLOCKED,
+                        "IV_VERIFIER_UNAVAILABLE",
+                    )
             else:
                 self._governor.transition(package_id, NodeState.VERIFYING, "LOOP_RESULT_VALIDATED")
                 try:
