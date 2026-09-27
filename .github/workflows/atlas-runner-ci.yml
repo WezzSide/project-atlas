@@ -42,6 +42,22 @@ jobs:
           PYTHONPATH: src
         run: python -m pytest infra/atlas-runner/tests -q --no-cov -p no:cacheprovider
 
+      - name: Controller test suite (staged-release context)
+        # Regression for the failed deploy run 36331676633: deploy-release.sh
+        # runs this suite FROM the staged release on the host
+        # (/opt/atlas-runner/releases/<rev>/tests), not from a git checkout.
+        # Replicate that context here so checkout-only assumptions cannot pass
+        # CI and then fail the production deploy gate again.
+        env:
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          stage="$(mktemp -d)"
+          git archive HEAD infra/atlas-runner | tar -x -C "${stage}"
+          PYTHONPATH="${PWD}/src" python -m pytest \
+            "${stage}/infra/atlas-runner/tests" -q --no-cov -p no:cacheprovider
+          rm -rf "${stage}"
+
       - name: Ruff (infra/atlas-runner)
         run: python -m ruff check --config infra/atlas-runner/pyproject.toml infra/atlas-runner
 
