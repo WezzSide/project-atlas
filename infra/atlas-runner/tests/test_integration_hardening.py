@@ -362,17 +362,23 @@ def test_committed_atlas_admission_resumes_after_controller_restart(
     first.attach_grants(grants)
     with pytest.raises(RuntimeError, match="after admission commit"):
         first.submit_task(definition, validate=False)
-    assert store.get_execution("restart-execution")["status"] == "ADMITTED"
-
+    # P1-2: a committed admission whose execution could not start is
+    # compensated deterministically: FAILED + REJECTED + exactly one refund.
+    execution = store.get_execution("restart-execution")
+    assert execution["status"] == "FAILED"
+    assert execution["failure_reason"].startswith("start_failed")
+    assert store.get_task("restart-task")["status"] == "REJECTED"
+    assert grants.get("restart-grant")["consumed"] == 0
+    # idempotent resubmission: existing terminal state, no re-consumption,
+    # and no second execution for the canonical execution_id
     restarted = Controller(
         config=config, store=store, docker=fake_docker, github=fake_github,
         worker_manager=fake_worker_manager,
     )
     restarted.attach_grants(grants)
     outcome, execution_id = restarted.submit_task(definition, validate=False)
-    assert (outcome, execution_id) == ("existing_active", "restart-execution")
-    assert store.get_execution("restart-execution")["status"] == "COMPLETE"
-    assert grants.get("restart-grant")["consumed"] == 1
+    assert (outcome, execution_id) == ("existing_terminal", "restart-execution")
+    assert grants.get("restart-grant")["consumed"] == 0
     assert store._conn.execute("SELECT COUNT(*) FROM executions").fetchone()[0] == 1
 
 

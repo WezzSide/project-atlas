@@ -239,6 +239,7 @@ def make_config(tmp_path: Path, **overrides) -> ControllerConfig:
         "min_free_memory_mb": 1,
         "min_free_disk_mb": 1,
         "transport_grant_id": "grant-transport",
+        "queued_transport_enabled": True,
     }
     kwargs.update(overrides)
     return ControllerConfig(**kwargs)

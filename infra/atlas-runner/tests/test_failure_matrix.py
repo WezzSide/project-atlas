@@ -200,6 +200,7 @@ def test_h_controller_restart_recovers(
         "job_name": "",
         "labels": ["self-hosted"],
         "authority_reference": config.transport_grant_id,
+        "execution_class": "github_transport",
     }
     store.submit_task(task_id, definition)
     execution_id = store.create_execution(

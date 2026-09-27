@@ -148,23 +148,73 @@ class Controller:
             # Dedupe identity: (run_id, run_attempt, job_id) — distinct jobs in one
             # run/attempt are distinct admissions; reruns are separate identities.
             task_id = f"gh-{job.run_id}-{job.run_attempt}-{job.job_id}"
-            if not self.allow_internal_queued_jobs:
+            # P1-1 (overnight admission mission): the GitHub queued transport is
+            # SUPPORTED but executes only when BOTH gates hold:
+            #   A. config.queued_transport_enabled (explicit production enablement)
+            #   B. config.transport_grant_id resolves to a valid grant bound to
+            #      this repository (never consumed per job: standing transport
+            #      grant). Neither gate may bypass the other.
+            # Explicit test/dev bypass (fixture/dedupe tests only): loudly
+            # audited, never production authority; no grant validation implied.
+            test_bypass = self.allow_internal_queued_jobs
+            if not (self.config.queued_transport_enabled or test_bypass):
                 self.store.audit(
                     "blocked_authority",
                     task_id=task_id,
-                    detail={"reason": "queued_job_has_no_atlas_task_binding"},
+                    detail={"reason": "queued_transport_disabled"},
                 )
                 continue
+            transport = None
+            if test_bypass:
+                self.store.audit(
+                    "test_only_queue_bypass", task_id=task_id,
+                    detail={"flag": "allow_internal_queued_jobs"},
+                )
+            else:
+                transport = self.config.transport_grant_id
+                if not transport:
+                    self.store.audit(
+                        "blocked_authority",
+                        task_id=task_id,
+                        detail={"reason": "no_transport_grant_configured"},
+                    )
+                    continue
+                if self.grants is None:
+                    self.store.audit(
+                        "blocked_authority", task_id=task_id,
+                        detail={"reason": "grant_registry_required"},
+                    )
+                    continue
+                repository = f"{self.config.github.owner}/{self.config.github.repo}"
+                try:
+                    self.grants.validate(transport, repository=repository)
+                except Exception as exc:
+                    self.store.audit(
+                        "blocked_authority", task_id=task_id,
+                        detail={"reason": f"transport_grant_invalid: {exc}"},
+                    )
+                    continue
             reason = self.admission_reason(self.capacity())
             definition = {
                 "task_id": task_id,
-                "execution_class": "internal_non_production",
+                "execution_class": (
+                    "internal_non_production"
+                    if self.allow_internal_queued_jobs
+                    else "github_transport"
+                ),
                 "github_run_id": job.run_id,
                 "github_run_attempt": job.run_attempt,
                 "github_job_id": job.job_id,
                 "job_name": job.job_name,
                 "labels": list(job.labels),
+                "authority_reference": transport,
             }
+            if transport:
+                self.store.audit(
+                    "transport_grant_validated",
+                    task_id=task_id,
+                    detail={"grant_id": transport},
+                )
             outcome, _status = self.store.submit_task(task_id, definition)
             if outcome != "admitted":
                 # existing_terminal / existing_active: duplicate suppression keyed on
@@ -228,13 +278,25 @@ class Controller:
                 definition=definition,
             )
             if outcome == "admitted" or self._can_resume_execution(execution_id):
-                self._start_execution(
-                    task_id,
-                    definition,
-                    run_id=definition.get("github_run_id"),
-                    run_attempt=definition.get("github_run_attempt", 1),
-                    execution_id=execution_id,
-                )
+                try:
+                    self._start_execution(
+                        task_id,
+                        definition,
+                        run_id=definition.get("github_run_id"),
+                        run_attempt=definition.get("github_run_attempt", 1),
+                        execution_id=execution_id,
+                    )
+                except Exception as exc:
+                    # P1-2 (overnight admission mission): the admission transaction
+                    # already committed; a start failure must NOT strand consumed
+                    # budget or an ambiguous REQUESTED task. Single idempotent
+                    # refund + REJECTED, durable and reconciliation-safe.
+                    self.store.fail_admitted_start(
+                        task_id=task_id,
+                        execution_id=execution_id,
+                        reason=f"start_failed: {exc}"[:200],
+                    )
+                    raise
             return outcome, execution_id
         outcome, status = self.store.submit_task(task_id, definition)
         if outcome == "admitted":
