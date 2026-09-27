@@ -51,6 +51,11 @@ class _MailboxFileLock(AbstractContextManager["_MailboxFileLock"]):
         self._handle: BinaryIO | None = None
         self._locked = False
 
+    @property
+    def held(self) -> bool:
+        """Whether this lock object currently owns its kernel lock."""
+        return self._locked and self._handle is not None
+
     def __enter__(self) -> _MailboxFileLock:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         handle = self.path.open("a+b")
@@ -200,6 +205,36 @@ class AgentMailbox:
 
     def get_record(self, message_id: str) -> MailboxRecord | None:
         return self._load_state().records.get(message_id)
+
+    def get_successor(self, package_id: str) -> MailboxSuccessorRecord | None:
+        """Read one durable successor record without exposing mutable state."""
+        return self._load_state().successors.get(package_id)
+
+    def materialization_guard(
+        self, package_id: str, generation: int, *, wait_seconds: float = 2.0
+    ) -> _MailboxFileLock:
+        """Return a process-owned lock scoped to one successor generation.
+
+        The lock must cover admission revalidation, claim/recovery CAS, governor
+        reconciliation, READY promotion, and durable finalization. Its kernel
+        ownership is the evidence that a previous materializer is no longer
+        active; file age is never used to revoke ownership.
+        """
+        if not re.fullmatch(ID_PATTERN, package_id) or generation < 1:
+            raise MailboxError("materialization lock identity is invalid", code="LOCK_ID_INVALID")
+        key = hashlib.sha256(canonical_json([self.project_id, package_id, generation])).hexdigest()
+        path = self.store_dir / ".materialization-locks" / f"{key}.lock"
+        return _MailboxFileLock(path, wait_seconds=wait_seconds)
+
+    def _require_materialization_guard(
+        self, package_id: str, generation: int, guard: _MailboxFileLock
+    ) -> None:
+        expected = self.materialization_guard(package_id, generation).path
+        if not guard.held or guard.path != expected:
+            raise MailboxError(
+                "materialization operation requires its generation guard",
+                code="MATERIALIZATION_GUARD_REQUIRED",
+            )
 
     def successor_records(self) -> tuple[MailboxSuccessorRecord, ...]:
         state = self._load_state()
@@ -390,9 +425,11 @@ class AgentMailbox:
         generation: int,
         expected_revision: int,
         owner_token: str,
+        guard: _MailboxFileLock,
     ) -> tuple[MailboxSuccessorRecord, bool]:
         """Atomically claim PREPARED -> MATERIALIZING for exactly one owner."""
 
+        self._require_materialization_guard(package_id, generation, guard)
         if not re.fullmatch(ID_PATTERN, owner_token):
             raise MailboxError("materialization owner token is invalid", code="OWNER_TOKEN_INVALID")
 
@@ -419,6 +456,118 @@ class AgentMailbox:
 
         return self._locked_update(operation)
 
+    def recover_materialization_claim(
+        self,
+        package_id: str,
+        *,
+        generation: int,
+        expected_revision: int,
+        expected_owner_token: str | None,
+        expected_lifecycle: SuccessorLifecycle,
+        new_owner_token: str,
+        guard: _MailboxFileLock,
+    ) -> tuple[MailboxSuccessorRecord, bool]:
+        """Rotate a stale materialization fence under the generation guard.
+
+        A MATERIALIZING record can be recovered only after the caller has
+        acquired the process-owned guard, which proves the prior critical
+        section is no longer live. READY may be temporarily claimed for
+        validated reconstruction of the same node after governor restart.
+        """
+        self._require_materialization_guard(package_id, generation, guard)
+        if expected_lifecycle not in {
+            SuccessorLifecycle.MATERIALIZING,
+            SuccessorLifecycle.READY,
+        }:
+            raise MailboxError("recovery lifecycle is invalid", code="RECOVERY_STATE_INVALID")
+        if not re.fullmatch(ID_PATTERN, new_owner_token):
+            raise MailboxError("materialization owner token is invalid", code="OWNER_TOKEN_INVALID")
+
+        def operation(state: MailboxState) -> tuple[MailboxSuccessorRecord, bool]:
+            item = state.successors.get(package_id)
+            if item is None:
+                raise MailboxError("successor is not recorded", code="SUCCESSOR_NOT_FOUND")
+            if (
+                item.generation != generation
+                or item.lifecycle_revision != expected_revision
+                or item.lifecycle != expected_lifecycle
+                or item.materialization_owner_token != expected_owner_token
+            ):
+                return item, False
+            claimed = item.model_copy(
+                update={
+                    "lifecycle": SuccessorLifecycle.MATERIALIZING,
+                    "lifecycle_revision": item.lifecycle_revision + 1,
+                    "materialization_owner_token": new_owner_token,
+                }
+            )
+            state.successors[package_id] = claimed
+            self._save_state(state)
+            return claimed, True
+
+        return self._locked_update(operation)
+
+    def assert_materialization_claim(
+        self,
+        package_id: str,
+        *,
+        generation: int,
+        expected_revision: int,
+        owner_token: str,
+        guard: _MailboxFileLock,
+    ) -> MailboxSuccessorRecord:
+        """Re-read and verify the current generation/revision/token fence."""
+        self._require_materialization_guard(package_id, generation, guard)
+        item = self.get_successor(package_id)
+        if item is None:
+            raise MailboxError("successor is not recorded", code="SUCCESSOR_NOT_FOUND")
+        if (
+            item.generation != generation
+            or item.lifecycle_revision != expected_revision
+            or item.lifecycle != SuccessorLifecycle.MATERIALIZING
+            or item.materialization_owner_token != owner_token
+        ):
+            raise MailboxError("materialization owner is stale", code="MATERIALIZATION_STALE_OWNER")
+        return item
+
+    def defer_materialization_recovery(
+        self,
+        package_id: str,
+        *,
+        generation: int,
+        expected_revision: int,
+        owner_token: str,
+        guard: _MailboxFileLock,
+    ) -> MailboxSuccessorRecord:
+        """Fence a recovered materialization into an explicit wait state."""
+        self._require_materialization_guard(package_id, generation, guard)
+
+        def operation(state: MailboxState) -> MailboxSuccessorRecord:
+            item = state.successors.get(package_id)
+            if item is None:
+                raise MailboxError("successor is not recorded", code="SUCCESSOR_NOT_FOUND")
+            if (
+                item.generation != generation
+                or item.lifecycle_revision != expected_revision
+                or item.lifecycle != SuccessorLifecycle.MATERIALIZING
+                or item.materialization_owner_token != owner_token
+            ):
+                raise MailboxError(
+                    "materialization owner is stale", code="MATERIALIZATION_STALE_OWNER"
+                )
+            deferred = item.model_copy(
+                update={
+                    "lifecycle": SuccessorLifecycle.WAIT_RECONCILIATION,
+                    "lifecycle_revision": item.lifecycle_revision + 1,
+                    "materialization_owner_token": None,
+                }
+            )
+            state.successors[package_id] = deferred
+            self._save_state(state)
+            return deferred
+
+        return self._locked_update(operation)
+
     def finalize_materialization(
         self,
         package_id: str,
@@ -427,8 +576,10 @@ class AgentMailbox:
         expected_revision: int,
         owner_token: str,
         lifecycle: SuccessorLifecycle,
+        guard: _MailboxFileLock,
     ) -> MailboxSuccessorRecord:
         """Finalize only the still-current CAS owner; stale owners cannot commit."""
+        self._require_materialization_guard(package_id, generation, guard)
         if lifecycle in {
             SuccessorLifecycle.PREPARED,
             SuccessorLifecycle.MATERIALIZING,

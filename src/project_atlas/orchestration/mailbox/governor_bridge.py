@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import uuid
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Literal, cast
 
 from pydantic import ValidationError
@@ -47,6 +48,37 @@ class SuccessorAdmissionError(ValueError):
         super().__init__(code)
 
 
+@dataclass(frozen=True)
+class MaterializationRecoveryRequest:
+    """Observed durable state a reconciler requests to recover, not authority."""
+
+    package_id: str
+    generation: int
+    lifecycle_revision: int
+    lifecycle: SuccessorLifecycle
+    owner_token: str | None
+
+    @classmethod
+    def from_record(cls, item: MailboxSuccessorRecord) -> MaterializationRecoveryRequest:
+        return cls(
+            item.binding.package_id,
+            item.generation,
+            item.lifecycle_revision,
+            item.lifecycle,
+            item.materialization_owner_token,
+        )
+
+
+@dataclass(frozen=True)
+class MaterializationClaim:
+    """Durable generation/revision/token fence required for governor effects."""
+
+    package_id: str
+    generation: int
+    lifecycle_revision: int
+    owner_token: str
+
+
 class MailboxGovernorBridge:
     """Persists a governed successor binding, then idempotently adds its WorkNode.
 
@@ -69,6 +101,14 @@ class MailboxGovernorBridge:
         self.authority_verifier = authority_verifier
         self.candidate_identity_verifier = candidate_identity_verifier
         self.retry_verifier = retry_verifier
+        # A READY record may be restored only when this bridge observed that
+        # exact generation/revision as READY at startup. This distinguishes a
+        # genuine restarted governor from a second live bridge that was already
+        # present before a competing admission completed.
+        self._startup_successors = {
+            item.binding.package_id: (item.generation, item.lifecycle_revision, item.lifecycle)
+            for item in mailbox.successor_records()
+        }
 
     def admit(
         self,
@@ -210,7 +250,7 @@ class MailboxGovernorBridge:
                 raise SuccessorAdmissionError("SUCCESSOR_RETRY_ID_COLLISION")
             if message_successor.lifecycle == SuccessorLifecycle.TERMINAL:
                 raise SuccessorAdmissionError("SUCCESSOR_ALREADY_TERMINAL")
-            return self._materialize(message_successor)
+            return self._materialize_for_admission(message_successor)
         if retry_id is not None:
             prior = next((item for item in incident_records if item.retry_id == retry_id), None)
             if prior is not None:
@@ -231,7 +271,7 @@ class MailboxGovernorBridge:
                     raise SuccessorAdmissionError("SUCCESSOR_RETRY_ID_COLLISION")
                 if prior_source is None or not self._verify_retry(message, retry_id, prior_source):
                     raise SuccessorAdmissionError("SUCCESSOR_RETRY_NOT_AUTHORIZED")
-                return self._materialize(prior)
+                return self._materialize_for_admission(prior)
         generation = 1
         supersedes_package_id = None
         if active:
@@ -302,7 +342,7 @@ class MailboxGovernorBridge:
                 != self._route_policy_signature(route)
             ):
                 raise SuccessorAdmissionError("DUPLICATE_ACTIVE_SUCCESSOR")
-            return self._materialize(active_successor)
+            return self._materialize_for_admission(active_successor)
         binding = MailboxSuccessorBindingV1(
             package_id=package_id,
             message_id=message.message_id,
@@ -339,7 +379,13 @@ class MailboxGovernorBridge:
             supersedes_package_id=supersedes_package_id,
             retry_id=retry_id,
         )
-        return self._materialize(persisted)
+        return self._materialize_for_admission(persisted)
+
+    def _materialize_for_admission(self, successor: MailboxSuccessorRecord) -> WorkNode:
+        materialized = self._materialize(successor)
+        if materialized is None:
+            raise SuccessorAdmissionError("SUCCESSOR_MATERIALIZATION_REQUIRES_RECONCILIATION")
+        return materialized
 
     def _verify_retry(
         self, message: AgentInboxMessage, retry_id: str, prior: MailboxSuccessorRecord
@@ -350,60 +396,14 @@ class MailboxGovernorBridge:
             return False
 
     def reconcile(self) -> tuple[WorkNode, ...]:
-        """Rebuild missing governor nodes from the mailbox admission journal."""
+        """Rebuild/reconcile nodes using a generation-scoped recovery fence."""
         nodes: list[WorkNode] = []
         for item in self.mailbox.successor_records():
-            binding = item.binding.verify()
-            source = self.mailbox.get_record(binding.message_id)
-            if source is None or source.status.value != "PROCESSED":
-                raise SuccessorAdmissionError("SUCCESSOR_SOURCE_NOT_PROCESSED")
-            message = source.message
-            snapshot = self.governor.snapshot()
-            if snapshot.target_moved or (snapshot.current_main, snapshot.current_tree) != (
-                binding.trusted_main,
-                binding.trusted_tree,
-            ):
-                raise SuccessorAdmissionError("SUCCESSOR_SOURCE_PIN_STALE")
-            if (
-                message.project_id != self.mailbox.project_id
-                or message.requester_id != binding.requester_id
-                or message.authority_reference != binding.authority_reference
-                or message.attempt_id != binding.source_attempt_id
-                or message.payload_digest != binding.source_result_digest
-                or message.correlation_id != binding.correlation_id
-                or message.causation_id != binding.causation_id
-                or not self._verify_authority(message)
-            ):
-                raise SuccessorAdmissionError("SUCCESSOR_AUTHORITY_NOT_VERIFIED")
-            route_value = (source.routing or {}).get("route")
-            if not isinstance(route_value, dict):
-                raise SuccessorAdmissionError("SUCCESSOR_ROUTE_MISSING")
-            try:
-                route = OrchestrationRoute.model_validate(route_value)
-            except (ValidationError, TypeError, ValueError):
-                raise SuccessorAdmissionError("SUCCESSOR_ROUTE_INVALID") from None
-            if self._route_digest(route, binding.candidate_head, binding.candidate_tree) != (
-                binding.route_digest
-            ):
-                raise SuccessorAdmissionError("SUCCESSOR_ROUTE_DIGEST_MISMATCH")
-            candidate_bound = (
-                binding.candidate_head is not None or binding.candidate_tree is not None
-            )
-            if candidate_bound and (
-                binding.candidate_head is None
-                or binding.candidate_tree is None
-                or not self._verify_candidate(
-                    message, binding.candidate_head, binding.candidate_tree
-                )
-            ):
-                raise SuccessorAdmissionError("CANDIDATE_IDENTITY_UNVERIFIED")
-            expected_node = self._node_for_binding(binding)
-            try:
-                persisted_node = WorkNode.model_validate(item.work_node)
-            except (ValidationError, TypeError, ValueError):
-                raise SuccessorAdmissionError("PERSISTED_WORKNODE_INVALID") from None
-            if persisted_node != expected_node:
-                raise SuccessorAdmissionError("PERSISTED_WORKNODE_BINDING_MISMATCH")
+            if item.lifecycle in {
+                SuccessorLifecycle.TERMINAL,
+                SuccessorLifecycle.WAIT_RECONCILIATION,
+            }:
+                continue
             existing = next(
                 (
                     node
@@ -412,19 +412,112 @@ class MailboxGovernorBridge:
                 ),
                 None,
             )
-            if existing is None:
-                if item.lifecycle == SuccessorLifecycle.PREPARED:
-                    nodes.append(self._materialize(item))
-                elif item.lifecycle not in {
-                    SuccessorLifecycle.TERMINAL,
-                    SuccessorLifecycle.MATERIALIZING,
-                }:
-                    self.mailbox.set_successor_lifecycle(
-                        item.binding.package_id, SuccessorLifecycle.WAIT_RECONCILIATION
-                    )
+            recovery_request: MaterializationRecoveryRequest | None = None
+            if item.lifecycle == SuccessorLifecycle.MATERIALIZING or (
+                item.lifecycle == SuccessorLifecycle.READY
+                and (existing is None or existing.state == NodeState.DISCOVERED)
+            ):
+                recovery_request = MaterializationRecoveryRequest.from_record(item)
+            elif item.lifecycle == SuccessorLifecycle.PREPARED:
+                materialized = self._materialize(item)
+                if materialized is not None:
+                    nodes.append(materialized)
                 continue
-            nodes.append(self._materialize(item))
+            if recovery_request is not None:
+                materialized = self._materialize(item, recovery_request=recovery_request)
+                if materialized is not None:
+                    nodes.append(materialized)
+                continue
+            if existing is None:
+                self._validate_current_materialization(item)
+                self.mailbox.set_successor_lifecycle(
+                    item.binding.package_id, SuccessorLifecycle.WAIT_RECONCILIATION
+                )
+                continue
+            expected_node, _message = self._validate_current_materialization(item)
+            if existing.model_copy(update={"state": NodeState.DISCOVERED}) != expected_node:
+                raise SuccessorAdmissionError("WORKNODE_IDENTITY_COLLISION")
+            observed_lifecycle = self._lifecycle_for_state(existing.state)
+            if item.lifecycle != observed_lifecycle:
+                self.mailbox.set_successor_lifecycle(item.binding.package_id, observed_lifecycle)
+            nodes.append(existing)
         return tuple(nodes)
+
+    def _validate_current_materialization(
+        self, successor: MailboxSuccessorRecord
+    ) -> tuple[WorkNode, AgentInboxMessage]:
+        """Revalidate all executable successor context against current state."""
+        binding = successor.binding.verify()
+        source = self.mailbox.get_record(binding.message_id)
+        if source is None or source.status.value != "PROCESSED":
+            raise SuccessorAdmissionError("SUCCESSOR_SOURCE_NOT_PROCESSED")
+        message = source.message
+        snapshot = self.governor.snapshot()
+        if snapshot.target_moved or (snapshot.current_main, snapshot.current_tree) != (
+            binding.trusted_main,
+            binding.trusted_tree,
+        ):
+            raise SuccessorAdmissionError("SUCCESSOR_SOURCE_PIN_STALE")
+        if (
+            message.project_id != self.mailbox.project_id
+            or message.requester_id != binding.requester_id
+            or message.authority_reference != binding.authority_reference
+            or message.attempt_id != binding.source_attempt_id
+            or message.payload_digest != binding.source_result_digest
+            or message.correlation_id != binding.correlation_id
+            or message.causation_id != binding.causation_id
+            or not self._verify_authority(message)
+        ):
+            raise SuccessorAdmissionError("SUCCESSOR_AUTHORITY_NOT_VERIFIED")
+        route_value = (source.routing or {}).get("route")
+        if (source.routing or {}).get("classification") == "DUPLICATE_MESSAGE":
+            duplicate_of = source.duplicate_of
+            duplicate_source = self.mailbox.get_record(duplicate_of) if duplicate_of else None
+            if duplicate_source is None or duplicate_source.status.value != "PROCESSED":
+                raise SuccessorAdmissionError("DUPLICATE_RESULT_SOURCE_INVALID")
+            route_value = (duplicate_source.routing or {}).get("route")
+        if not isinstance(route_value, dict):
+            raise SuccessorAdmissionError("SUCCESSOR_ROUTE_MISSING")
+        try:
+            route = OrchestrationRoute.model_validate(route_value)
+        except (ValidationError, TypeError, ValueError):
+            raise SuccessorAdmissionError("SUCCESSOR_ROUTE_INVALID") from None
+        directive = route.task
+        if (
+            not route.dispatchable
+            or route.task_type not in _ALLOWED_TASKS
+            or directive is None
+            or directive.owner_gate is not False
+            or directive.execution_authorized is not False
+            or directive.permissions.authority_grant
+            or directive.permissions.merge
+            or directive.permissions.production_mutation
+            or directive.permissions.repository_write
+            or directive.permissions.branch_write
+            or directive.permissions.pull_request_write
+        ):
+            raise SuccessorAdmissionError("SUCCESSOR_DIRECTIVE_NOT_ADMISSIBLE")
+        if self._route_digest(route, binding.candidate_head, binding.candidate_tree) != (
+            binding.route_digest
+        ):
+            raise SuccessorAdmissionError("SUCCESSOR_ROUTE_DIGEST_MISMATCH")
+        candidate_bound = binding.candidate_head is not None or binding.candidate_tree is not None
+        if candidate_bound and (
+            binding.candidate_head is None
+            or binding.candidate_tree is None
+            or not self._verify_candidate(message, binding.candidate_head, binding.candidate_tree)
+        ):
+            raise SuccessorAdmissionError("CANDIDATE_IDENTITY_UNVERIFIED")
+        if route.task_type == TaskType.PROGRAM_RECONCILIATION:
+            self._validate_read_only_recovery(message, route)
+        try:
+            expected_node = self._node_for_binding(binding)
+            persisted_node = WorkNode.model_validate(successor.work_node)
+        except (ValidationError, TypeError, ValueError):
+            raise SuccessorAdmissionError("PERSISTED_WORKNODE_INVALID") from None
+        if persisted_node != expected_node:
+            raise SuccessorAdmissionError("PERSISTED_WORKNODE_BINDING_MISMATCH")
+        return expected_node, message
 
     def _verify_authority(self, message: AgentInboxMessage) -> bool:
         try:
@@ -575,72 +668,215 @@ class MailboxGovernorBridge:
             execution_authorized=False,
         )
 
-    def _materialize(self, successor: MailboxSuccessorRecord) -> WorkNode:
-        raw_node = successor.work_node
+    def _materialize(
+        self,
+        successor: MailboxSuccessorRecord,
+        *,
+        recovery_request: MaterializationRecoveryRequest | None = None,
+    ) -> WorkNode | None:
+        """Materialize only under a generation lock and current durable fence."""
+        package_id = successor.binding.package_id
         try:
-            node = WorkNode.model_validate(raw_node)
-        except (ValidationError, TypeError, ValueError):
-            raise SuccessorAdmissionError("PERSISTED_WORKNODE_INVALID") from None
-        existing = next(
-            (item for item in self.governor.snapshot().nodes if item.package_id == node.package_id),
-            None,
-        )
-        if existing is not None:
-            if existing.model_copy(update={"state": NodeState.DISCOVERED}) != node:
-                raise SuccessorAdmissionError("WORKNODE_IDENTITY_COLLISION")
-            if existing.state == NodeState.DISCOVERED:
-                # A DISCOVERED node can be visible while another caller owns
-                # the durable PREPARED -> MATERIALIZING claim. Its existence
-                # is not proof that this caller won that claim. The winning
-                # caller promotes its own newly-added node below, while every
-                # competing/replay path must reconcile rather than promote.
-                raise SuccessorAdmissionError("SUCCESSOR_MATERIALIZATION_CLAIM_REQUIRED")
-            observed = next(
-                item
-                for item in self.governor.snapshot().nodes
-                if item.package_id == node.package_id
-            )
-            observed_lifecycle = self._lifecycle_for_state(observed.state)
-            if (
-                successor.lifecycle == SuccessorLifecycle.TERMINAL
-                and observed_lifecycle != SuccessorLifecycle.TERMINAL
-            ):
-                raise SuccessorAdmissionError("SUCCESSOR_LIFECYCLE_REGRESSION")
-            if successor.lifecycle == SuccessorLifecycle.MATERIALIZING:
-                raise SuccessorAdmissionError("SUCCESSOR_MATERIALIZATION_IN_PROGRESS")
-            if successor.lifecycle == SuccessorLifecycle.PREPARED:
-                raise SuccessorAdmissionError("SUCCESSOR_REQUIRES_RECONCILIATION")
-            self.mailbox.set_successor_lifecycle(node.package_id, observed_lifecycle)
-            return observed
-        if successor.lifecycle != SuccessorLifecycle.PREPARED:
-            raise SuccessorAdmissionError("SUCCESSOR_REQUIRES_RECONCILIATION")
-        owner_token = f"mat-{uuid.uuid4().hex}"
-        claimed, won = self.mailbox.claim_materialization(
-            node.package_id,
-            generation=successor.generation,
-            expected_revision=successor.lifecycle_revision,
-            owner_token=owner_token,
-        )
-        if not won:
-            raise SuccessorAdmissionError("SUCCESSOR_MATERIALIZATION_CLAIM_LOST")
-        try:
-            self.governor.add_node(node)
-            self.governor.mark_ready(node.package_id)
-        except GovernorError as exc:
-            raise SuccessorAdmissionError(
-                getattr(exc, "code", "GOVERNOR_ADMISSION_FAILED")
-            ) from None
-        observed = next(
-            item for item in self.governor.snapshot().nodes if item.package_id == node.package_id
-        )
-        self.mailbox.finalize_materialization(
-            node.package_id,
-            generation=claimed.generation,
-            expected_revision=claimed.lifecycle_revision,
-            owner_token=owner_token,
-            lifecycle=self._lifecycle_for_state(observed.state),
-        )
-        return observed
+            with self.mailbox.materialization_guard(package_id, successor.generation) as guard:
+                current = self.mailbox.get_successor(package_id)
+                if current is None:
+                    raise SuccessorAdmissionError("SUCCESSOR_NOT_FOUND")
+                if current.generation != successor.generation:
+                    raise SuccessorAdmissionError("SUCCESSOR_GENERATION_MISMATCH")
+                if (
+                    current.binding != successor.binding
+                    or current.work_node_digest != successor.work_node_digest
+                ):
+                    raise SuccessorAdmissionError("SUCCESSOR_CURRENT_CONTEXT_MISMATCH")
+                existing = next(
+                    (
+                        item
+                        for item in self.governor.snapshot().nodes
+                        if item.package_id == package_id
+                    ),
+                    None,
+                )
+                try:
+                    node, _message = self._validate_current_materialization(current)
+                except SuccessorAdmissionError:
+                    if recovery_request is not None:
+                        if current.lifecycle == SuccessorLifecycle.MATERIALIZING:
+                            if current.materialization_owner_token is None:
+                                raise SuccessorAdmissionError(
+                                    "MATERIALIZATION_FENCE_INVALID"
+                                ) from None
+                            self.mailbox.defer_materialization_recovery(
+                                package_id,
+                                generation=current.generation,
+                                expected_revision=current.lifecycle_revision,
+                                owner_token=current.materialization_owner_token,
+                                guard=guard,
+                            )
+                        elif current.lifecycle == SuccessorLifecycle.READY:
+                            self.mailbox.set_successor_lifecycle(
+                                package_id, SuccessorLifecycle.WAIT_RECONCILIATION
+                            )
+                        return None
+                    raise
+
+                if (
+                    existing is not None
+                    and existing.model_copy(update={"state": NodeState.DISCOVERED}) != node
+                ):
+                    raise SuccessorAdmissionError("WORKNODE_IDENTITY_COLLISION")
+                if current.lifecycle in {
+                    SuccessorLifecycle.TERMINAL,
+                    SuccessorLifecycle.WAIT_RECONCILIATION,
+                }:
+                    raise SuccessorAdmissionError("SUCCESSOR_REQUIRES_RECONCILIATION")
+
+                if current.lifecycle == SuccessorLifecycle.READY:
+                    if existing is not None and existing.state != NodeState.DISCOVERED:
+                        observed_lifecycle = self._lifecycle_for_state(existing.state)
+                        if observed_lifecycle != current.lifecycle:
+                            self.mailbox.set_successor_lifecycle(package_id, observed_lifecycle)
+                        return existing
+                    if recovery_request is None:
+                        raise SuccessorAdmissionError("SUCCESSOR_REQUIRES_RECONCILIATION")
+                    if recovery_request.lifecycle == SuccessorLifecycle.MATERIALIZING:
+                        # Another recovery completed while this caller waited.
+                        # Do not resurrect READY in this caller's stale governor.
+                        return None
+                    startup_identity = self._startup_successors.get(package_id)
+                    if (
+                        recovery_request.lifecycle != SuccessorLifecycle.READY
+                        or startup_identity
+                        != (
+                            recovery_request.generation,
+                            recovery_request.lifecycle_revision,
+                            SuccessorLifecycle.READY,
+                        )
+                        or current.lifecycle_revision != recovery_request.lifecycle_revision
+                    ):
+                        return None
+                    expected_lifecycle = SuccessorLifecycle.READY
+                    expected_token = None
+                elif current.lifecycle == SuccessorLifecycle.MATERIALIZING:
+                    if recovery_request is None:
+                        raise SuccessorAdmissionError("SUCCESSOR_MATERIALIZATION_CLAIM_REQUIRED")
+                    expected_lifecycle = SuccessorLifecycle.MATERIALIZING
+                    expected_token = current.materialization_owner_token
+                elif current.lifecycle == SuccessorLifecycle.PREPARED:
+                    if existing is not None:
+                        raise SuccessorAdmissionError("SUCCESSOR_MATERIALIZATION_CLAIM_REQUIRED")
+                    owner_token = f"mat-{uuid.uuid4().hex}"
+                    claimed, won = self.mailbox.claim_materialization(
+                        package_id,
+                        generation=current.generation,
+                        expected_revision=current.lifecycle_revision,
+                        owner_token=owner_token,
+                        guard=guard,
+                    )
+                    if not won:
+                        raise SuccessorAdmissionError("SUCCESSOR_MATERIALIZATION_CLAIM_LOST")
+                    claim = MaterializationClaim(
+                        package_id,
+                        claimed.generation,
+                        claimed.lifecycle_revision,
+                        owner_token,
+                    )
+                else:
+                    if existing is None:
+                        raise SuccessorAdmissionError("SUCCESSOR_REQUIRES_RECONCILIATION")
+                    observed_lifecycle = self._lifecycle_for_state(existing.state)
+                    if observed_lifecycle != current.lifecycle:
+                        self.mailbox.set_successor_lifecycle(package_id, observed_lifecycle)
+                    return existing
+
+                if current.lifecycle in {
+                    SuccessorLifecycle.MATERIALIZING,
+                    SuccessorLifecycle.READY,
+                }:
+                    if (
+                        expected_lifecycle == SuccessorLifecycle.MATERIALIZING
+                        and expected_token is None
+                    ):
+                        raise SuccessorAdmissionError("MATERIALIZATION_FENCE_INVALID")
+                    owner_token = f"mat-{uuid.uuid4().hex}"
+                    claimed, won = self.mailbox.recover_materialization_claim(
+                        package_id,
+                        generation=current.generation,
+                        expected_revision=current.lifecycle_revision,
+                        expected_owner_token=expected_token,
+                        expected_lifecycle=expected_lifecycle,
+                        new_owner_token=owner_token,
+                        guard=guard,
+                    )
+                    if not won:
+                        return None
+                    claim = MaterializationClaim(
+                        package_id,
+                        claimed.generation,
+                        claimed.lifecycle_revision,
+                        owner_token,
+                    )
+
+                self.mailbox.assert_materialization_claim(
+                    package_id,
+                    generation=claim.generation,
+                    expected_revision=claim.lifecycle_revision,
+                    owner_token=claim.owner_token,
+                    guard=guard,
+                )
+                if existing is None:
+                    try:
+                        self.governor.add_node(node)
+                    except GovernorError as exc:
+                        raise SuccessorAdmissionError(
+                            getattr(exc, "code", "GOVERNOR_ADMISSION_FAILED")
+                        ) from None
+                observed = next(
+                    (
+                        item
+                        for item in self.governor.snapshot().nodes
+                        if item.package_id == package_id
+                    ),
+                    None,
+                )
+                if observed is None:
+                    raise SuccessorAdmissionError("GOVERNOR_NODE_MISSING_AFTER_ADD")
+                if observed.model_copy(update={"state": NodeState.DISCOVERED}) != node:
+                    raise SuccessorAdmissionError("WORKNODE_IDENTITY_COLLISION")
+                self.mailbox.assert_materialization_claim(
+                    package_id,
+                    generation=claim.generation,
+                    expected_revision=claim.lifecycle_revision,
+                    owner_token=claim.owner_token,
+                    guard=guard,
+                )
+                if observed.state == NodeState.DISCOVERED:
+                    try:
+                        self.governor.mark_ready(package_id)
+                    except GovernorError as exc:
+                        raise SuccessorAdmissionError(
+                            getattr(exc, "code", "GOVERNOR_ADMISSION_FAILED")
+                        ) from None
+                observed = next(
+                    item for item in self.governor.snapshot().nodes if item.package_id == package_id
+                )
+                self.mailbox.assert_materialization_claim(
+                    package_id,
+                    generation=claim.generation,
+                    expected_revision=claim.lifecycle_revision,
+                    owner_token=claim.owner_token,
+                    guard=guard,
+                )
+                self.mailbox.finalize_materialization(
+                    package_id,
+                    generation=claim.generation,
+                    expected_revision=claim.lifecycle_revision,
+                    owner_token=claim.owner_token,
+                    lifecycle=self._lifecycle_for_state(observed.state),
+                    guard=guard,
+                )
+                return observed
+        except TimeoutError:
+            raise SuccessorAdmissionError("MATERIALIZATION_OWNER_ACTIVE") from None
 
     @staticmethod
     def _lifecycle_for_state(state: NodeState) -> SuccessorLifecycle:

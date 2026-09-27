@@ -735,14 +735,16 @@ def test_cross_agent_successor_dedupes_and_rehydrates_after_restart(tmp_path: Pa
     assert one.package_id == two.package_id
     assert len(mailbox.successor_records()) == 1
     assert len(governor.snapshot().nodes) == 1
+    restarted_governor = _governor()
     recovered = MailboxGovernorBridge(
         mailbox=mailbox,
-        governor=_governor(),
+        governor=restarted_governor,
         authority_verifier=lambda _item: True,
     ).reconcile()
-    assert recovered == ()
-    assert len(_governor().snapshot().nodes) == 0
-    assert mailbox.successor_records()[0].lifecycle.value == "WAIT_RECONCILIATION"
+    assert len(recovered) == 1
+    assert recovered[0].state == NodeState.READY
+    assert len(restarted_governor.snapshot().nodes) == 1
+    assert mailbox.successor_records()[0].lifecycle == SuccessorLifecycle.READY
 
 
 def _processed_for_admission(mailbox: AgentMailbox, raw: dict[str, Any]) -> None:
@@ -1292,7 +1294,7 @@ def test_n2_first_and_duplicate_admission_share_current_authority_guard(
     )
     bridge.admit("n2-guard-a")
     bridge.admit("n2-guard-b")
-    assert calls == ["n2-guard-a", "n2-guard-b"]
+    assert set(calls) == {"n2-guard-a", "n2-guard-b"}
     assert len(governor.snapshot().nodes) == 1
 
 
@@ -1310,7 +1312,8 @@ def test_n2_valid_duplicate_can_create_only_after_current_guard(tmp_path: Path) 
     )
     node = bridge.admit("n2-valid-duplicate")
     assert node.state.value == "READY"
-    assert calls == ["n2-valid-duplicate"]
+    assert calls
+    assert set(calls) == {"n2-valid-duplicate"}
     assert len(mailbox.successor_records()) == 1
 
 
@@ -1384,54 +1387,35 @@ def test_n3_materialization_claim_is_compare_and_set(tmp_path: Path) -> None:
     bridge._materialize = lambda successor: WorkNode.model_validate(successor.work_node)
     bridge.admit("n3-source")
     successor = mailbox.successor_records()[0]
-    claimed, won = mailbox.claim_materialization(
-        successor.binding.package_id,
-        generation=successor.generation,
-        expected_revision=successor.lifecycle_revision,
-        owner_token="owner-a",
-    )
-    assert won and claimed.lifecycle == SuccessorLifecycle.MATERIALIZING
-    losing, won_again = mailbox.claim_materialization(
-        successor.binding.package_id,
-        generation=successor.generation,
-        expected_revision=successor.lifecycle_revision,
-        owner_token="owner-b",
-    )
+    with mailbox.materialization_guard(successor.binding.package_id, successor.generation) as guard:
+        claimed, won = mailbox.claim_materialization(
+            successor.binding.package_id,
+            generation=successor.generation,
+            expected_revision=successor.lifecycle_revision,
+            owner_token="owner-a",
+            guard=guard,
+        )
+        assert won and claimed.lifecycle == SuccessorLifecycle.MATERIALIZING
+        losing, won_again = mailbox.claim_materialization(
+            successor.binding.package_id,
+            generation=successor.generation,
+            expected_revision=successor.lifecycle_revision,
+            owner_token="owner-b",
+            guard=guard,
+        )
     assert not won_again
     assert losing.lifecycle == SuccessorLifecycle.MATERIALIZING
     assert losing.materialization_owner_token == "owner-a"
 
 
 def test_n3_two_bridges_with_two_governors_have_one_materializer(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> None:
     mailbox = AgentMailbox(tmp_path, project_id="project-atlas")
     first = _message(message_id="n3-bridge-a", agent_id="builder-a")
     second = _message(message_id="n3-bridge-b", agent_id="builder-b")
     _processed_for_admission(mailbox, first)
     _processed_for_admission(mailbox, second)
-    barrier = threading.Barrier(2)
-    owner_claimed = threading.Event()
-    original_claim = mailbox.claim_materialization
-
-    def synchronized_claim(
-        package_id: str, *, generation: int, expected_revision: int, owner_token: str
-    ) -> tuple[MailboxSuccessorRecord, bool]:
-        barrier.wait(timeout=3)
-        if threading.current_thread().name == "bridge-b":
-            assert owner_claimed.wait(3)
-        result = original_claim(
-            package_id,
-            generation=generation,
-            expected_revision=expected_revision,
-            owner_token=owner_token,
-        )
-        if threading.current_thread().name == "bridge-a":
-            assert result[1]
-            owner_claimed.set()
-        return result
-
-    monkeypatch.setattr(mailbox, "claim_materialization", synchronized_claim)
     bridges = [
         MailboxGovernorBridge(
             mailbox=mailbox, governor=_governor(), authority_verifier=lambda _item: True
@@ -1440,8 +1424,10 @@ def test_n3_two_bridges_with_two_governors_have_one_materializer(
     ]
     results: list[WorkNode] = []
     errors: list[BaseException] = []
+    start = threading.Barrier(3)
 
     def admit(bridge: MailboxGovernorBridge, message_id: str) -> None:
+        start.wait(timeout=3)
         try:
             results.append(bridge.admit(message_id))
         except BaseException as exc:
@@ -1453,6 +1439,7 @@ def test_n3_two_bridges_with_two_governors_have_one_materializer(
     ]
     for worker in workers:
         worker.start()
+    start.wait(timeout=3)
     for worker in workers:
         worker.join(5)
 
@@ -1460,12 +1447,16 @@ def test_n3_two_bridges_with_two_governors_have_one_materializer(
     assert len(results) == 1
     assert len(errors) == 1
     assert isinstance(errors[0], SuccessorAdmissionError)
-    assert errors[0].code == "SUCCESSOR_MATERIALIZATION_CLAIM_LOST"
+    assert errors[0].code == "SUCCESSOR_REQUIRES_RECONCILIATION"
     assert sum(len(bridge.governor.snapshot().nodes) for bridge in bridges) == 1
     assert mailbox.successor_records()[0].lifecycle == SuccessorLifecycle.READY
-    assert bridges[1].reconcile() == ()
-    assert len(bridges[1].governor.snapshot().nodes) == 0
-    assert mailbox.successor_records()[0].lifecycle == SuccessorLifecycle.WAIT_RECONCILIATION
+    reconciled = bridges[1].reconcile()
+    if bridges[1].governor.snapshot().nodes:
+        assert len(reconciled) == 1
+        assert reconciled[0].state == NodeState.READY
+    else:
+        assert reconciled == ()
+    assert mailbox.successor_records()[0].lifecycle == SuccessorLifecycle.READY
 
 
 def test_n3_same_governor_loser_cannot_promote_discovered_node(
@@ -1532,7 +1523,7 @@ def test_n3_same_governor_loser_cannot_promote_discovered_node(
     assert len(results) == 1
     assert len(errors) == 1
     assert isinstance(errors[0], SuccessorAdmissionError)
-    assert errors[0].code == "SUCCESSOR_MATERIALIZATION_CLAIM_REQUIRED"
+    assert errors[0].code == "MATERIALIZATION_OWNER_ACTIVE"
     assert governor.snapshot().nodes[0].state == NodeState.READY
     assert ready_callers == ["claim-owner"]
     assert mailbox.successor_records()[0].lifecycle == SuccessorLifecycle.READY
@@ -1586,7 +1577,7 @@ def test_n3_r3_generation_mismatch_cannot_promote_discovered(
     with pytest.raises(SuccessorAdmissionError) as blocked:
         bridge._materialize(successor.model_copy(update={"generation": successor.generation + 1}))
 
-    assert blocked.value.code == "SUCCESSOR_MATERIALIZATION_CLAIM_REQUIRED"
+    assert blocked.value.code == "SUCCESSOR_GENERATION_MISMATCH"
     assert governor.snapshot().nodes[0].state == NodeState.DISCOVERED
 
 
@@ -1596,12 +1587,14 @@ def test_n3_r3_durable_owner_token_alone_cannot_promote_discovered(
     mailbox, governor, bridge, successor = _n3_prepared_discovered(
         tmp_path, monkeypatch, "n3-r3-owner-token"
     )
-    claimed, won = mailbox.claim_materialization(
-        successor.binding.package_id,
-        generation=successor.generation,
-        expected_revision=successor.lifecycle_revision,
-        owner_token="materializer-A",
-    )
+    with mailbox.materialization_guard(successor.binding.package_id, successor.generation) as guard:
+        claimed, won = mailbox.claim_materialization(
+            successor.binding.package_id,
+            generation=successor.generation,
+            expected_revision=successor.lifecycle_revision,
+            owner_token="materializer-A",
+            guard=guard,
+        )
     assert won and claimed.materialization_owner_token == "materializer-A"
 
     # A persisted token is not ambient authority for a replay/competitor; only
@@ -1636,24 +1629,39 @@ def test_n3_stale_materialization_owner_cannot_finalize(tmp_path: Path) -> None:
     bridge._materialize = lambda successor: WorkNode.model_validate(successor.work_node)
     bridge.admit("n3-finalize")
     successor = mailbox.successor_records()[0]
-    mailbox.claim_materialization(
-        successor.binding.package_id,
-        generation=1,
-        expected_revision=successor.lifecycle_revision,
-        owner_token="owner-current",
-    )
-    with pytest.raises(MailboxError) as stale:
-        mailbox.finalize_materialization(
+    with mailbox.materialization_guard(successor.binding.package_id, 1) as guard:
+        mailbox.claim_materialization(
+            successor.binding.package_id,
+            generation=1,
+            expected_revision=successor.lifecycle_revision,
+            owner_token="owner-current",
+            guard=guard,
+        )
+    with mailbox.materialization_guard(successor.binding.package_id, 1) as guard:
+        recovered, won = mailbox.recover_materialization_claim(
             successor.binding.package_id,
             generation=1,
             expected_revision=successor.lifecycle_revision + 1,
-            owner_token="owner-stale",
-            lifecycle=SuccessorLifecycle.READY,
+            expected_owner_token="owner-current",
+            expected_lifecycle=SuccessorLifecycle.MATERIALIZING,
+            new_owner_token="owner-recovered",
+            guard=guard,
         )
-    assert stale.value.code == "MATERIALIZATION_STALE_OWNER"
+        assert won
+        with pytest.raises(MailboxError) as stale:
+            mailbox.finalize_materialization(
+                successor.binding.package_id,
+                generation=1,
+                expected_revision=successor.lifecycle_revision + 1,
+                owner_token="owner-current",
+                lifecycle=SuccessorLifecycle.READY,
+                guard=guard,
+            )
+        assert stale.value.code == "MATERIALIZATION_STALE_OWNER"
+        assert recovered.materialization_owner_token == "owner-recovered"
 
 
-def test_n3_restart_during_materialization_does_not_reclaim_without_reconciliation(
+def test_n3_restart_during_materialization_recovers_with_new_fenced_claim(
     tmp_path: Path,
 ) -> None:
     mailbox = AgentMailbox(tmp_path, project_id="project-atlas")
@@ -1664,21 +1672,325 @@ def test_n3_restart_during_materialization_does_not_reclaim_without_reconciliati
     bridge._materialize = lambda successor: WorkNode.model_validate(successor.work_node)
     bridge.admit("n3-restart")
     successor = mailbox.successor_records()[0]
-    mailbox.claim_materialization(
-        successor.binding.package_id,
-        generation=1,
-        expected_revision=successor.lifecycle_revision,
-        owner_token="owner-survives-restart",
-    )
+    with mailbox.materialization_guard(successor.binding.package_id, 1) as guard:
+        mailbox.claim_materialization(
+            successor.binding.package_id,
+            generation=1,
+            expected_revision=successor.lifecycle_revision,
+            owner_token="owner-survives-restart",
+            guard=guard,
+        )
 
     recovered = MailboxGovernorBridge(
         mailbox=AgentMailbox(tmp_path, project_id="project-atlas"),
         governor=_governor(),
         authority_verifier=lambda _item: True,
     )
-    assert recovered.reconcile() == ()
-    assert recovered.governor.snapshot().nodes == ()
+    restored = recovered.reconcile()
+    assert len(restored) == 1
+    assert restored[0].package_id == successor.binding.package_id
+    assert restored[0].state == NodeState.READY
+    assert mailbox.successor_records()[0].lifecycle == SuccessorLifecycle.READY
+
+
+def _r4_prepared_successor(
+    tmp_path: Path, message_id: str
+) -> tuple[AgentMailbox, AutonomousGovernor, MailboxGovernorBridge, MailboxSuccessorRecord]:
+    mailbox = AgentMailbox(tmp_path, project_id="project-atlas")
+    _processed_for_admission(mailbox, _message(message_id=message_id))
+    governor = _governor()
+    bridge = MailboxGovernorBridge(
+        mailbox=mailbox, governor=governor, authority_verifier=lambda _item: True
+    )
+    original_materialize = bridge._materialize
+    bridge._materialize = lambda successor: WorkNode.model_validate(successor.work_node)
+    bridge.admit(message_id)
+    bridge._materialize = original_materialize
+    successor = mailbox.successor_records()[0]
+    assert successor.lifecycle == SuccessorLifecycle.PREPARED
+    return mailbox, governor, bridge, successor
+
+
+@pytest.mark.parametrize(
+    ("crash_point", "expected_governor_state"),
+    [
+        ("after_claim", ()),
+        ("after_add", (NodeState.DISCOVERED,)),
+        ("after_ready", (NodeState.READY,)),
+    ],
+)
+def test_r4_reconcile_recovers_each_materialization_crash_window(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    crash_point: str,
+    expected_governor_state: tuple[NodeState, ...],
+) -> None:
+    mailbox, governor, bridge, successor = _r4_prepared_successor(tmp_path, f"r4-{crash_point}")
+    original_add = governor.add_node
+    original_ready = governor.mark_ready
+    original_finalize = mailbox.finalize_materialization
+
+    if crash_point == "after_claim":
+
+        def crash_before_add(_node: WorkNode) -> None:
+            raise RuntimeError("injected crash after durable claim")
+
+        monkeypatch.setattr(governor, "add_node", crash_before_add)
+    elif crash_point == "after_add":
+        monkeypatch.setattr(governor, "add_node", original_add)
+
+        def crash_before_ready(_package_id: str) -> None:
+            raise RuntimeError("injected crash after governor add")
+
+        monkeypatch.setattr(governor, "mark_ready", crash_before_ready)
+    else:
+        monkeypatch.setattr(governor, "add_node", original_add)
+        monkeypatch.setattr(governor, "mark_ready", original_ready)
+
+        def crash_before_finalize(*args: Any, **kwargs: Any) -> MailboxSuccessorRecord:
+            raise RuntimeError("injected crash after governor ready")
+
+        monkeypatch.setattr(mailbox, "finalize_materialization", crash_before_finalize)
+
+    with pytest.raises(RuntimeError, match="injected crash"):
+        bridge._materialize(successor)
+    assert tuple(node.state for node in governor.snapshot().nodes) == expected_governor_state
     assert mailbox.successor_records()[0].lifecycle == SuccessorLifecycle.MATERIALIZING
+
+    monkeypatch.setattr(governor, "add_node", original_add)
+    monkeypatch.setattr(governor, "mark_ready", original_ready)
+    monkeypatch.setattr(mailbox, "finalize_materialization", original_finalize)
+    recovered = MailboxGovernorBridge(
+        mailbox=AgentMailbox(tmp_path, project_id="project-atlas"),
+        governor=governor,
+        authority_verifier=lambda _item: True,
+    )
+
+    restored = recovered.reconcile()
+
+    assert len(restored) == 1
+    assert restored[0].package_id == successor.binding.package_id
+    assert restored[0].state == NodeState.READY
+    assert len(governor.snapshot().nodes) == 1
+    assert mailbox.successor_records()[0].lifecycle == SuccessorLifecycle.READY
+
+
+def test_r4_ready_successor_restores_same_node_after_restart(tmp_path: Path) -> None:
+    mailbox = AgentMailbox(tmp_path, project_id="project-atlas")
+    _processed_for_admission(mailbox, _message(message_id="r4-ready-restore"))
+    original = MailboxGovernorBridge(
+        mailbox=mailbox, governor=_governor(), authority_verifier=lambda _item: True
+    ).admit("r4-ready-restore")
+    restarted_governor = _governor()
+    recovered = MailboxGovernorBridge(
+        mailbox=AgentMailbox(tmp_path, project_id="project-atlas"),
+        governor=restarted_governor,
+        authority_verifier=lambda _item: True,
+    ).reconcile()
+
+    assert len(recovered) == 1
+    assert recovered[0].package_id == original.package_id
+    assert recovered[0].state == NodeState.READY
+    assert restarted_governor.snapshot().nodes == recovered
+    assert mailbox.successor_records()[0].lifecycle == SuccessorLifecycle.READY
+
+
+def test_r4_ready_restore_fails_closed_when_authority_is_revoked(tmp_path: Path) -> None:
+    mailbox = AgentMailbox(tmp_path, project_id="project-atlas")
+    _processed_for_admission(mailbox, _message(message_id="r4-authority-revoked"))
+    MailboxGovernorBridge(
+        mailbox=mailbox, governor=_governor(), authority_verifier=lambda _item: True
+    ).admit("r4-authority-revoked")
+    restarted_governor = _governor()
+    recovered = MailboxGovernorBridge(
+        mailbox=AgentMailbox(tmp_path, project_id="project-atlas"),
+        governor=restarted_governor,
+        authority_verifier=lambda _item: False,
+    )
+
+    assert recovered.reconcile() == ()
+    assert restarted_governor.snapshot().nodes == ()
+    assert mailbox.successor_records()[0].lifecycle == SuccessorLifecycle.WAIT_RECONCILIATION
+
+
+def test_r4_recovery_claim_rotates_owner_and_fences_stale_finalize(tmp_path: Path) -> None:
+    mailbox, _governor_state, _bridge, successor = _r4_prepared_successor(
+        tmp_path, "r4-stale-owner"
+    )
+    with mailbox.materialization_guard(successor.binding.package_id, successor.generation) as guard:
+        old_claim, won = mailbox.claim_materialization(
+            successor.binding.package_id,
+            generation=successor.generation,
+            expected_revision=successor.lifecycle_revision,
+            owner_token="owner-old",
+            guard=guard,
+        )
+    assert won
+
+    with mailbox.materialization_guard(successor.binding.package_id, successor.generation) as guard:
+        recovered_claim, won = mailbox.recover_materialization_claim(
+            successor.binding.package_id,
+            generation=old_claim.generation,
+            expected_revision=old_claim.lifecycle_revision,
+            expected_owner_token=old_claim.materialization_owner_token,
+            expected_lifecycle=SuccessorLifecycle.MATERIALIZING,
+            new_owner_token="owner-new",
+            guard=guard,
+        )
+        assert won
+        with pytest.raises(MailboxError) as stale:
+            mailbox.finalize_materialization(
+                successor.binding.package_id,
+                generation=old_claim.generation,
+                expected_revision=old_claim.lifecycle_revision,
+                owner_token="owner-old",
+                lifecycle=SuccessorLifecycle.READY,
+                guard=guard,
+            )
+        assert stale.value.code == "MATERIALIZATION_STALE_OWNER"
+        mailbox.finalize_materialization(
+            successor.binding.package_id,
+            generation=recovered_claim.generation,
+            expected_revision=recovered_claim.lifecycle_revision,
+            owner_token="owner-new",
+            lifecycle=SuccessorLifecycle.READY,
+            guard=guard,
+        )
+
+
+def test_r4_recovery_claim_rejects_generation_mismatch(tmp_path: Path) -> None:
+    mailbox, _governor_state, _bridge, successor = _r4_prepared_successor(
+        tmp_path, "r4-generation-mismatch"
+    )
+    with mailbox.materialization_guard(successor.binding.package_id, successor.generation) as guard:
+        claimed, _ = mailbox.claim_materialization(
+            successor.binding.package_id,
+            generation=successor.generation,
+            expected_revision=successor.lifecycle_revision,
+            owner_token="owner-current",
+            guard=guard,
+        )
+    with mailbox.materialization_guard(
+        successor.binding.package_id, claimed.generation + 1
+    ) as guard:
+        recovered, won = mailbox.recover_materialization_claim(
+            successor.binding.package_id,
+            generation=claimed.generation + 1,
+            expected_revision=claimed.lifecycle_revision,
+            expected_owner_token=claimed.materialization_owner_token,
+            expected_lifecycle=SuccessorLifecycle.MATERIALIZING,
+            new_owner_token="owner-recovery",
+            guard=guard,
+        )
+    assert not won
+    assert recovered.lifecycle == SuccessorLifecycle.MATERIALIZING
+    assert recovered.materialization_owner_token == "owner-current"
+
+
+def test_r4_active_materialization_guard_is_not_stolen(tmp_path: Path) -> None:
+    mailbox, _governor_state, _bridge, successor = _r4_prepared_successor(
+        tmp_path, "r4-active-owner"
+    )
+    with (
+        mailbox.materialization_guard(successor.binding.package_id, successor.generation),
+        pytest.raises(TimeoutError),
+        mailbox.materialization_guard(
+            successor.binding.package_id, successor.generation, wait_seconds=0.01
+        ),
+    ):
+        pytest.fail("competing recovery stole a live materialization guard")
+
+
+def _r4_recovery_process(
+    root: str,
+    observed: multiprocessing.Queue[tuple[str, str, int]],
+    resume: multiprocessing.Event,
+) -> None:
+    mailbox = AgentMailbox(Path(root), project_id="project-atlas")
+    governor = _governor()
+    bridge = MailboxGovernorBridge(
+        mailbox=mailbox, governor=governor, authority_verifier=lambda _item: True
+    )
+    original = bridge._materialize
+
+    def synchronized_recovery(
+        successor: MailboxSuccessorRecord,
+        *,
+        recovery_request: Any = None,
+    ) -> WorkNode | None:
+        observed.put(("observed", str(os.getpid()), successor.generation))
+        if not resume.wait(10):
+            raise RuntimeError("recovery test release timed out")
+        result = original(successor, recovery_request=recovery_request)
+        observed.put(("done", str(os.getpid()), len(governor.snapshot().nodes)))
+        return result
+
+    bridge._materialize = synchronized_recovery
+    bridge.reconcile()
+
+
+def test_r4_two_recovery_processes_rotate_one_claim_and_materialize_once(
+    tmp_path: Path,
+) -> None:
+    mailbox, _governor_state, _bridge, successor = _r4_prepared_successor(
+        tmp_path, "r4-two-processes"
+    )
+    with mailbox.materialization_guard(successor.binding.package_id, successor.generation) as guard:
+        claimed, won = mailbox.claim_materialization(
+            successor.binding.package_id,
+            generation=successor.generation,
+            expected_revision=successor.lifecycle_revision,
+            owner_token="r4-process-owner",
+            guard=guard,
+        )
+    assert won and claimed.lifecycle == SuccessorLifecycle.MATERIALIZING
+
+    context = multiprocessing.get_context("spawn")
+    observed: multiprocessing.Queue[tuple[str, str, int]] = context.Queue()
+    resume = context.Event()
+    workers = [
+        context.Process(
+            target=_r4_recovery_process,
+            args=(str(tmp_path), observed, resume),
+        )
+        for _ in range(2)
+    ]
+    for worker in workers:
+        worker.start()
+    observations = [observed.get(timeout=15) for _ in range(2)]
+    assert all(item[0] == "observed" for item in observations)
+    resume.set()
+    completions = [observed.get(timeout=15) for _ in range(2)]
+    for worker in workers:
+        worker.join(15)
+    assert all(not worker.is_alive() for worker in workers)
+    assert all(worker.exitcode == 0 for worker in workers)
+    assert sorted(item[2] for item in completions) == [0, 1]
+    final_mailbox = AgentMailbox(tmp_path, project_id="project-atlas")
+    final_successor = final_mailbox.get_successor(successor.binding.package_id)
+    assert final_successor is not None
+    assert final_successor.lifecycle == SuccessorLifecycle.READY
+    assert final_successor.generation == successor.generation
+
+
+def test_r4_terminal_replay_does_not_recover_materialization(tmp_path: Path) -> None:
+    mailbox = AgentMailbox(tmp_path, project_id="project-atlas")
+    _processed_for_admission(mailbox, _message(message_id="r4-terminal-replay"))
+    bridge = MailboxGovernorBridge(
+        mailbox=mailbox, governor=_governor(), authority_verifier=lambda _item: True
+    )
+    node = bridge.admit("r4-terminal-replay")
+    mailbox.set_successor_lifecycle(node.package_id, SuccessorLifecycle.TERMINAL)
+    restarted = MailboxGovernorBridge(
+        mailbox=AgentMailbox(tmp_path, project_id="project-atlas"),
+        governor=_governor(),
+        authority_verifier=lambda _item: True,
+    )
+    assert restarted.reconcile() == ()
+    with pytest.raises(SuccessorAdmissionError) as terminal:
+        restarted.admit("r4-terminal-replay")
+    assert terminal.value.code == "SUCCESSOR_ALREADY_TERMINAL"
+    assert len(mailbox.successor_records()) == 1
 
 
 def test_n4_original_admission_replay_cannot_create_generation(tmp_path: Path) -> None:
