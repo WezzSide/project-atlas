@@ -7,6 +7,7 @@ and never auto-dispatches a next 001D hop.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 from project_atlas.orchestration.autonomy.continuation import select_next
@@ -119,6 +120,7 @@ class AutonomousGovernor:
         self._last_verifier: str | None = None
         self._last_implementer: str | None = None
         self._remediation_needed = False
+        self._execution_guards: dict[str, Callable[[], bool]] = {}
 
     def _next_sequence(self) -> int:
         self._sequence += 1
@@ -138,14 +140,12 @@ class AutonomousGovernor:
             nodes=nodes,
             agents=tuple(self._agents),
             leases=tuple(self._leases),
-            dependencies=tuple(
-                f"{edge.source}->{edge.target}" for edge in self._edges(nodes)
-            ),
+            dependencies=tuple(f"{edge.source}->{edge.target}" for edge in self._edges(nodes)),
             dag_edges=self._edges(nodes),
-            mutation_surfaces=tuple(
-                sorted({node.mutation_surface.surface_id for node in nodes})
-            ),
-            overlap_state=overlap_gate(nodes) if nodes else OverlapState(
+            mutation_surfaces=tuple(sorted({node.mutation_surface.surface_id for node in nodes})),
+            overlap_state=overlap_gate(nodes)
+            if nodes
+            else OverlapState(
                 parallel_execution=False,
                 conflict_surfaces=(),
                 reason="NO_NODES",
@@ -153,9 +153,7 @@ class AutonomousGovernor:
             ci_state=self._ci_state,
             iv_state=self._iv_state,
             certification_state=self._certification_state,
-            owner_gates=tuple(
-                node.owner_gate for node in nodes if node.owner_gate is not None
-            ),
+            owner_gates=tuple(node.owner_gate for node in nodes if node.owner_gate is not None),
             hard_blockers=tuple(self._hard_blockers),
             sequence=self._sequence,
         )
@@ -290,6 +288,45 @@ class AutonomousGovernor:
         self._transitions.append(record)
         return record
 
+    def register_execution_guard(self, package_id: str, guard: Callable[[], bool]) -> None:
+        """Require current external authority before leasing or executing a node."""
+        self._execution_guards[package_id] = guard
+
+    def restore_blocked_materialization(
+        self, package_id: str, *, revalidate: Callable[[], bool]
+    ) -> TransitionRecord:
+        """Restore a mailbox node only through its current-context revalidation."""
+        node = self._require_node(package_id)
+        if node.state != NodeState.BLOCKED or not revalidate():
+            raise GovernorError(
+                "blocked node cannot be restored without current materialization validation",
+                code="MATERIALIZATION_REVALIDATION_REQUIRED",
+            )
+        updated, record = apply_transition(
+            node,
+            NodeState.READY,
+            reason="MAILBOX_MATERIALIZATION_REVALIDATED",
+            sequence=self._next_sequence(),
+            allow_materialization_recovery=True,
+        )
+        self._replace(updated)
+        self._transitions.append(record)
+        return record
+
+    def _require_execution_guard(self, package_id: str) -> None:
+        guard = self._execution_guards.get(package_id)
+        if guard is None:
+            return
+        try:
+            allowed = bool(guard())
+        except Exception:
+            allowed = False
+        if not allowed:
+            raise GovernorError(
+                "current mailbox authority is not validated",
+                code="MAILBOX_AUTHORITY_REVALIDATION_REQUIRED",
+            )
+
     def mark_ready(self, package_id: str) -> TransitionRecord:
         return self.transition(package_id, NodeState.READY, "GOVERNOR_MARK_READY")
 
@@ -306,6 +343,7 @@ class AutonomousGovernor:
         node = self._require_node(package_id)
         if node.state != NodeState.READY:
             raise GovernorError("node is not READY", code="NODE_NOT_READY")
+        self._require_execution_guard(package_id)
         if would_overlap(tuple(self._nodes), node):
             raise GovernorError("surface overlap forbids lease", code="SURFACE_OVERLAP")
         agent = self._require_agent(agent_id)
@@ -333,6 +371,7 @@ class AutonomousGovernor:
         if lease is None or not lease.active:
             raise GovernorError("lease not active", code="LEASE_INACTIVE")
         node = self._require_node(lease.package_id)
+        self._require_execution_guard(lease.package_id)
         if node.execution_host_class != ExecutionHostClass.IN_PROCESS:
             raise GovernorError("external host is not authorized", code="HOST_NOT_AUTHORIZED")
         self._last_implementer = lease.agent_id
@@ -449,8 +488,7 @@ class AutonomousGovernor:
                         live_main=self._current_main,
                     )
                 self._leases = [
-                    released if row.lease_id == lease.lease_id else row
-                    for row in self._leases
+                    released if row.lease_id == lease.lease_id else row for row in self._leases
                 ]
                 break
         evidence_path = None

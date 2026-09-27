@@ -37,7 +37,6 @@ ALLOWED_TRANSITIONS: dict[NodeState, frozenset[NodeState]] = {
     NodeState.MERGED: frozenset({NodeState.CLOSED}),
     NodeState.BLOCKED: frozenset(
         {
-            NodeState.READY,
             NodeState.REMEDIATING,
             NodeState.SUPERSEDED,
             NodeState.CLOSED,
@@ -57,9 +56,19 @@ class IllegalTransitionError(ValueError):
     code = "ILLEGAL_DAG_TRANSITION"
 
 
-def assert_transition(from_state: NodeState, to_state: NodeState) -> None:
+def assert_transition(
+    from_state: NodeState,
+    to_state: NodeState,
+    *,
+    allow_materialization_recovery: bool = False,
+) -> None:
     allowed = ALLOWED_TRANSITIONS.get(from_state)
-    if allowed is None or to_state not in allowed:
+    recovery_ready = (
+        allow_materialization_recovery
+        and from_state == NodeState.BLOCKED
+        and to_state == NodeState.READY
+    )
+    if allowed is None or (to_state not in allowed and not recovery_ready):
         raise IllegalTransitionError(f"illegal transition {from_state.value} -> {to_state.value}")
 
 
@@ -69,9 +78,14 @@ def apply_transition(
     *,
     reason: str,
     sequence: int,
+    allow_materialization_recovery: bool = False,
 ) -> tuple[WorkNode, TransitionRecord]:
     """Return a replaced node and an auditable record. Does not grant authority."""
-    assert_transition(node.state, to_state)
+    assert_transition(
+        node.state,
+        to_state,
+        allow_materialization_recovery=allow_materialization_recovery,
+    )
     if to_state == NodeState.MERGED:
         raise IllegalTransitionError("governor cannot autonomously transition to MERGED")
     updated = node.model_copy(update={"state": to_state})

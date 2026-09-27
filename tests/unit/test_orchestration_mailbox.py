@@ -13,6 +13,7 @@ from typing import Any
 
 import pytest
 
+from project_atlas.orchestration.autonomy.dag import IllegalTransitionError
 from project_atlas.orchestration.autonomy.governor import AutonomousGovernor, GovernorError
 from project_atlas.orchestration.autonomy.models import (
     CANONICAL_REPOSITORY_IDENTITY,
@@ -1902,6 +1903,46 @@ def test_r4_revoked_authority_blocks_live_ready_node_until_revalidated(
     assert mailbox.successor_records()[0].generation == successor.generation
     assert recovered[0].state == NodeState.READY
     assert governor.snapshot().nodes == recovered
+
+
+def test_r4_existing_lease_cannot_execute_after_mailbox_authority_revocation(
+    tmp_path: Path,
+) -> None:
+    authority = {"valid": True}
+    _mailbox, governor, bridge, successor = _r4_prepared_successor(
+        tmp_path, "r4-revoked-existing-lease"
+    )
+    bridge.authority_verifier = lambda _item: authority["valid"]
+
+    ready = bridge.reconcile()
+    assert len(ready) == 1
+    lease = governor.lease(
+        successor.binding.package_id,
+        "discover-worker",
+        branch="test",
+        worktree=str(tmp_path),
+    )
+    authority["valid"] = False
+
+    with pytest.raises(GovernorError) as exc_info:
+        governor.execute_leased(lease.lease_id)
+    assert exc_info.value.code == "MAILBOX_AUTHORITY_REVALIDATION_REQUIRED"
+    assert governor.snapshot().nodes[0].state == NodeState.LEASED
+
+
+def test_r4_blocked_to_ready_is_not_a_generic_dag_transition(tmp_path: Path) -> None:
+    mailbox, governor, bridge, successor = _r4_prepared_successor(
+        tmp_path, "r4-generic-blocked-ready"
+    )
+    recovered = bridge.reconcile()
+    assert len(recovered) == 1
+    governor.transition(successor.binding.package_id, NodeState.BLOCKED, "test block")
+
+    with pytest.raises(IllegalTransitionError):
+        governor.transition(successor.binding.package_id, NodeState.READY, "generic restore")
+
+    assert mailbox.successor_records()[0].lifecycle == SuccessorLifecycle.READY
+    assert governor.snapshot().nodes[0].state == NodeState.BLOCKED
 
 
 def test_r4_recovery_claim_rotates_owner_and_fences_stale_finalize(tmp_path: Path) -> None:
