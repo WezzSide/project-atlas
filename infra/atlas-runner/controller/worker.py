@@ -391,11 +391,15 @@ class WorkerManager:
         Task definition and evidence fragment are both provenance signals.
         Conflicts fail closed; unknown stays unknown.
         """
-        if definition_value and fragment_value and definition_value != fragment_value:
+        if (
+            definition_value is not None
+            and fragment_value is not None
+            and definition_value != fragment_value
+        ):
             raise WorkerFailure(f"evidence_{field}_conflict")
-        if definition_value:
+        if definition_value is not None:
             return definition_value
-        if fragment_value:
+        if fragment_value is not None:
             return fragment_value
         return None
 
