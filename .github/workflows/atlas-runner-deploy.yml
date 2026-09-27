@@ -140,13 +140,17 @@ jobs:
           printf '%s\n' "${SSH_KNOWN_HOSTS}" > "${known_hosts}"
           host="${SSH_HOST:?set VPS02_SSH_HOST repository variable}"
           user="${SSH_USER:-atlas-runner}"
+          # Source the service EnvironmentFile before the health probe, exactly
+          # like deploy-release.sh's internal gate: without the credential
+          # environment the GitHub connectivity check degrades and the probe
+          # false-negatives (observed on trusted deploy run 36313899913).
           ssh -i "${keyfile}" \
               -o IdentitiesOnly=yes \
               -o StrictHostKeyChecking=yes \
               -o UserKnownHostsFile="${known_hosts}" \
               -o ConnectTimeout=15 \
               "${user}@${host}" \
-              "sudo /opt/atlas-runner/current/bin/atlas-runner health" \
+              "sudo bash -c 'set -a; . /etc/atlas-runner/config/atlas-runner.env; set +a; exec /opt/atlas-runner/current/bin/atlas-runner health'" \
               2>&1 | tee "${RUNNER_TEMP}/atlas-health.log"
           rm -f "${keyfile}"
 
