@@ -473,11 +473,14 @@ class AgentMailbox:
         acquired the process-owned guard, which proves the prior critical
         section is no longer live. READY may be temporarily claimed for
         validated reconstruction of the same node after governor restart.
+        WAIT_RECONCILIATION may resume only after current materialization
+        validation succeeds and the caller wins this guarded CAS.
         """
         self._require_materialization_guard(package_id, generation, guard)
         if expected_lifecycle not in {
             SuccessorLifecycle.MATERIALIZING,
             SuccessorLifecycle.READY,
+            SuccessorLifecycle.WAIT_RECONCILIATION,
         }:
             raise MailboxError("recovery lifecycle is invalid", code="RECOVERY_STATE_INVALID")
         if not re.fullmatch(ID_PATTERN, new_owner_token):

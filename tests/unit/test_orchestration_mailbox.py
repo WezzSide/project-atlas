@@ -1813,6 +1813,50 @@ def test_r4_ready_restore_fails_closed_when_authority_is_revoked(tmp_path: Path)
     assert mailbox.successor_records()[0].lifecycle == SuccessorLifecycle.WAIT_RECONCILIATION
 
 
+def test_r4_wait_reconciliation_resumes_same_generation_after_authority_returns(
+    tmp_path: Path,
+) -> None:
+    mailbox, governor, _bridge, successor = _r4_prepared_successor(
+        tmp_path, "r4-authority-restored"
+    )
+    with mailbox.materialization_guard(successor.binding.package_id, successor.generation) as guard:
+        claimed, won = mailbox.claim_materialization(
+            successor.binding.package_id,
+            generation=successor.generation,
+            expected_revision=successor.lifecycle_revision,
+            owner_token="owner-interrupted",
+            guard=guard,
+        )
+    assert won and claimed.lifecycle == SuccessorLifecycle.MATERIALIZING
+
+    denied = MailboxGovernorBridge(
+        mailbox=AgentMailbox(tmp_path, project_id="project-atlas"),
+        governor=governor,
+        authority_verifier=lambda _item: False,
+    )
+    assert denied.reconcile() == ()
+    waiting = mailbox.get_successor(successor.binding.package_id)
+    assert waiting is not None
+    assert waiting.lifecycle == SuccessorLifecycle.WAIT_RECONCILIATION
+    assert waiting.generation == successor.generation
+    assert waiting.materialization_owner_token is None
+
+    restored = MailboxGovernorBridge(
+        mailbox=AgentMailbox(tmp_path, project_id="project-atlas"),
+        governor=governor,
+        authority_verifier=lambda _item: True,
+    )
+    nodes = restored.reconcile()
+    assert len(nodes) == 1
+    assert nodes[0].package_id == successor.binding.package_id
+    assert nodes[0].state == NodeState.READY
+    assert mailbox.get_successor(successor.binding.package_id).generation == successor.generation
+    assert mailbox.get_successor(successor.binding.package_id).lifecycle == SuccessorLifecycle.READY
+
+    admitted = restored.admit("r4-authority-restored")
+    assert admitted == nodes[0]
+
+
 def test_r4_recovery_claim_rotates_owner_and_fences_stale_finalize(tmp_path: Path) -> None:
     mailbox, _governor_state, _bridge, successor = _r4_prepared_successor(
         tmp_path, "r4-stale-owner"

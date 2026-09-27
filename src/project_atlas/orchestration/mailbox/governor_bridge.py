@@ -399,10 +399,7 @@ class MailboxGovernorBridge:
         """Rebuild/reconcile nodes using a generation-scoped recovery fence."""
         nodes: list[WorkNode] = []
         for item in self.mailbox.successor_records():
-            if item.lifecycle in {
-                SuccessorLifecycle.TERMINAL,
-                SuccessorLifecycle.WAIT_RECONCILIATION,
-            }:
+            if item.lifecycle == SuccessorLifecycle.TERMINAL:
                 continue
             existing = next(
                 (
@@ -413,7 +410,10 @@ class MailboxGovernorBridge:
                 None,
             )
             recovery_request: MaterializationRecoveryRequest | None = None
-            if item.lifecycle == SuccessorLifecycle.MATERIALIZING or (
+            if item.lifecycle in {
+                SuccessorLifecycle.MATERIALIZING,
+                SuccessorLifecycle.WAIT_RECONCILIATION,
+            } or (
                 item.lifecycle == SuccessorLifecycle.READY
                 and (existing is None or existing.state == NodeState.DISCOVERED)
             ):
@@ -724,10 +724,7 @@ class MailboxGovernorBridge:
                     and existing.model_copy(update={"state": NodeState.DISCOVERED}) != node
                 ):
                     raise SuccessorAdmissionError("WORKNODE_IDENTITY_COLLISION")
-                if current.lifecycle in {
-                    SuccessorLifecycle.TERMINAL,
-                    SuccessorLifecycle.WAIT_RECONCILIATION,
-                }:
+                if current.lifecycle == SuccessorLifecycle.TERMINAL:
                     raise SuccessorAdmissionError("SUCCESSOR_REQUIRES_RECONCILIATION")
 
                 if current.lifecycle == SuccessorLifecycle.READY:
@@ -761,6 +758,17 @@ class MailboxGovernorBridge:
                         raise SuccessorAdmissionError("SUCCESSOR_MATERIALIZATION_CLAIM_REQUIRED")
                     expected_lifecycle = SuccessorLifecycle.MATERIALIZING
                     expected_token = current.materialization_owner_token
+                elif current.lifecycle == SuccessorLifecycle.WAIT_RECONCILIATION:
+                    if (
+                        recovery_request is None
+                        or recovery_request.lifecycle != SuccessorLifecycle.WAIT_RECONCILIATION
+                        or recovery_request.generation != current.generation
+                        or recovery_request.lifecycle_revision != current.lifecycle_revision
+                        or recovery_request.owner_token is not None
+                    ):
+                        return None
+                    expected_lifecycle = SuccessorLifecycle.WAIT_RECONCILIATION
+                    expected_token = None
                 elif current.lifecycle == SuccessorLifecycle.PREPARED:
                     if existing is not None:
                         raise SuccessorAdmissionError("SUCCESSOR_MATERIALIZATION_CLAIM_REQUIRED")
@@ -791,6 +799,7 @@ class MailboxGovernorBridge:
                 if current.lifecycle in {
                     SuccessorLifecycle.MATERIALIZING,
                     SuccessorLifecycle.READY,
+                    SuccessorLifecycle.WAIT_RECONCILIATION,
                 }:
                     if (
                         expected_lifecycle == SuccessorLifecycle.MATERIALIZING
