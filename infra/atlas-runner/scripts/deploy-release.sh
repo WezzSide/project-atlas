@@ -13,20 +13,28 @@ for arg in "$@"; do
     esac
 done
 
-RELEASES_DIR="/opt/atlas-runner/releases"
-CURRENT_LINK="/opt/atlas-runner/current"
+RELEASES_DIR="${ATLAS_RELEASES_DIR:-/opt/atlas-runner/releases}"
+CURRENT_LINK="${ATLAS_CURRENT_LINK:-/opt/atlas-runner/current}"
 UNIT_NAME="atlas-runner-controller.service"
-SERVICE_USER="atlas-runner"
+SERVICE_USER="${ATLAS_SERVICE_USER:-atlas-runner}"
+SYSTEMD_SYSTEM_DIR="${ATLAS_SYSTEMD_SYSTEM_DIR:-/etc/systemd/system}"
+SYSTEMCTL="${ATLAS_SYSTEMCTL:-systemctl}"
+POST_RESTART_SLEEP="${ATLAS_POST_RESTART_SLEEP:-5}"
 
 log() { printf '[deploy] %s\n' "$*"; }
 die() { log "FATAL: $*"; exit 1; }
 
+if [ "${ATLAS_DEPLOY_SKIP_ROOT_CHECK:-0}" != "1" ]; then
+    [ "$(id -u)" -eq 0 ] || die "must run as root"
+fi
+command -v git >/dev/null 2>&1 || die "git not found"
+
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
-# Archive source checkout. The host-clone copy of this script resolves its own
-# repository via the relative default, but the release-staged copy under
-# /opt/atlas-runner/releases/<rev>/scripts does not (that tree is not a git
-# checkout), so fall back to known host-clone locations. Override with
-# ATLAS_RUNNER_REPO_ROOT.
+# --- archive source selection -------------------------------------------------
+# The host-clone copy of this script resolves its own repository via the
+# relative default; the release-staged copy (and the shim-invoked copy) fall
+# back to known host-clone locations. Override with ATLAS_RUNNER_REPO_ROOT
+# (test hook; production never sets it).
 REPO_ROOT="${ATLAS_RUNNER_REPO_ROOT:-}"
 if [ -z "${REPO_ROOT}" ]; then
     candidate="$(cd -- "${SCRIPT_DIR}/../../../" >/dev/null 2>&1 && pwd -P)"
@@ -44,8 +52,23 @@ fi
 [ -n "${REPO_ROOT}" ] || REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../../../" >/dev/null 2>&1 && pwd -P)"
 git -C "${REPO_ROOT}" rev-parse --git-dir >/dev/null 2>&1 || die "no git checkout found for archive source (set ATLAS_RUNNER_REPO_ROOT)"
 
-[ "$(id -u)" -eq 0 ] || die "must run as root"
-command -v git >/dev/null 2>&1 || die "git not found"
+# --- archive source freshness (INCIDENT-001 defect B) --------------------------
+# The trusted workflow validates REV against origin/main on GitHub; that does
+# not prove this host clone contains REV. Establish it deterministically:
+# pinned remote URL only, bounded fetch of the default branch, exact-commit
+# existence proof BEFORE anything is staged or activated. git archive reads
+# committed objects only, so a dirty host working tree can never enter the
+# archive and the checked-out branch position is irrelevant.
+TRUSTED_REMOTE_URLS="https://github.com/WezzSide/project-atlas.git https://github.com/B0LK13/project-atlas.git"
+remote_url="$(git -C "${REPO_ROOT}" remote get-url origin 2>/dev/null)" || die "archive source has no origin remote"
+case " ${TRUSTED_REMOTE_URLS} " in
+    *" ${remote_url} "*) ;;
+    *) die "origin remote '${remote_url}' is not a trusted repository URL" ;;
+esac
+log "fetching origin main (bounded) in ${REPO_ROOT}"
+git -C "${REPO_ROOT}" fetch --quiet origin '+refs/heads/main:refs/remotes/origin/main' || die "fetch of trusted remote failed; refusing to deploy"
+git -C "${REPO_ROOT}" cat-file -e "${REV}^{commit}" || die "revision ${REV} not present in archive source after fetch; refusing to deploy"
+log "archive source verified: ${REPO_ROOT} contains ${REV}"
 
 RELEASE_DIR="${RELEASES_DIR}/${REV}"
 PREVIOUS_TARGET=""
@@ -116,6 +139,11 @@ if command -v bash >/dev/null 2>&1; then
     bash -n "${RELEASE_DIR}/bin/atlas-runner"
 fi
 
+# --- validate: health entrypoint present (defect A parity) ---------------------
+# The internal health gate invokes this helper; a release without it would
+# fail the gate after activation, so refuse before activating.
+[ -x "${RELEASE_DIR}/scripts/atlas-runner-health.sh" ] || die "release ${REV} lacks the atlas-runner-health.sh entrypoint"
+
 # --- activate: symlink swap -------------------------------------------------------
 ln -sfn "${RELEASE_DIR}" "${CURRENT_LINK}.new"
 mv -T "${CURRENT_LINK}.new" "${CURRENT_LINK}"
@@ -125,8 +153,8 @@ chown -R "${SERVICE_USER}:${SERVICE_USER}" "${RELEASE_DIR}" || true
 # --- restart + health + rollback ----------------------------------------------------
 reload_needed=0
 if [ -f "${RELEASE_DIR}/systemd/${UNIT_NAME}" ]; then
-    install -m 0644 "${RELEASE_DIR}/systemd/${UNIT_NAME}" "/etc/systemd/system/${UNIT_NAME}"
-    systemctl daemon-reload
+    install -m 0644 "${RELEASE_DIR}/systemd/${UNIT_NAME}" "${SYSTEMD_SYSTEM_DIR}/${UNIT_NAME}"
+    "${SYSTEMCTL}" daemon-reload
     reload_needed=1
 fi
 
@@ -135,28 +163,23 @@ rollback() {
     if [ -n "${PREVIOUS_TARGET}" ] && [ -d "${PREVIOUS_TARGET}" ]; then
         ln -sfn "${PREVIOUS_TARGET}" "${CURRENT_LINK}.new"
         mv -T "${CURRENT_LINK}.new" "${CURRENT_LINK}"
-        systemctl restart "${UNIT_NAME}" || true
+        "${SYSTEMCTL}" restart "${UNIT_NAME}" || true
         log "rollback complete"
     else
-        systemctl stop "${UNIT_NAME}" || true
+        "${SYSTEMCTL}" stop "${UNIT_NAME}" || true
         log "no previous release; service stopped"
     fi
     exit 1
 }
 
-if systemctl is-active --quiet "${UNIT_NAME}" || systemctl is-enabled --quiet "${UNIT_NAME}"; then
-    systemctl restart "${UNIT_NAME}"
-    sleep 5
-    # The health gate must see the same credential environment as the service
-    # (systemd EnvironmentFile is not ambient for direct CLI calls); without
-    # it the GitHub connectivity check degrades and the gate false-negatives.
-    if [ -r /etc/atlas-runner/config/atlas-runner.env ]; then
-        set -a
-        # shellcheck disable=SC1091
-        . /etc/atlas-runner/config/atlas-runner.env
-        set +a
-    fi
-    if ! "${CURRENT_LINK}/bin/atlas-runner" health >/dev/null 2>&1; then
+if "${SYSTEMCTL}" is-active --quiet "${UNIT_NAME}" || "${SYSTEMCTL}" is-enabled --quiet "${UNIT_NAME}"; then
+    "${SYSTEMCTL}" restart "${UNIT_NAME}"
+    sleep "${POST_RESTART_SLEEP}"
+    # Health context parity (INCIDENT-001 defect A): the internal gate uses the
+    # SAME host-side entrypoint as the trusted workflow's post-deploy step, so
+    # the two cannot drift. The helper sources the service credential env file
+    # itself and fails closed when it is missing/unreadable.
+    if ! "${CURRENT_LINK}/scripts/atlas-runner-health.sh" >/dev/null 2>&1; then
         rollback
     fi
     log "service restarted and healthy"

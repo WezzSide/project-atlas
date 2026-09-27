@@ -96,10 +96,31 @@ jobs:
       # Host key verification is mandatory (StrictHostKeyChecking=yes with an
       # explicit UserKnownHostsFile from secret VPS02_KNOWN_HOSTS). Never use
       # accept-new / no here.
-      - name: Deploy release on VPS-02 (deploy-release.sh)
+      #
+      # Self-bootstrap closure (INCIDENT-001 defect C): the deploy tool is
+      # transferred from the EXACT validated target revision (this checkout,
+      # REVISION) and executed via the immutable host shim
+      # /usr/local/sbin/atlas-deploy-exec, which verifies its SHA-256 before
+      # running it. The previously deployed release's copy of deploy-release.sh
+      # is never invoked, so a broken deploy script cannot block deployment of
+      # its own fix.
+      - name: Compute target-revision deploy tool digest
+        id: tool
+        env:
+          REVISION: ${{ inputs.git_revision }}
+        run: |
+          set -euo pipefail
+          tool="infra/atlas-runner/scripts/deploy-release.sh"
+          actual="$(sha256sum "${tool}" | awk '{print $1}')"
+          echo "deploy-tool=${tool}" >> "${GITHUB_OUTPUT}"
+          echo "deploy-tool-sha256=${actual}" >> "${GITHUB_OUTPUT}"
+
+      - name: Deploy release on VPS-02 (target-revision tool via host shim)
         id: deploy
         env:
           REVISION: ${{ inputs.git_revision }}
+          TOOL: ${{ steps.tool.outputs.deploy-tool }}
+          TOOL_SHA256: ${{ steps.tool.outputs.deploy-tool-sha256 }}
           SSH_PRIVATE_KEY: ${{ secrets.VPS02_DEPLOY_SSH_KEY }}
           SSH_KNOWN_HOSTS: ${{ secrets.VPS02_KNOWN_HOSTS }}
           SSH_HOST: ${{ vars.VPS02_SSH_HOST }}
@@ -120,7 +141,8 @@ jobs:
               -o UserKnownHostsFile="${known_hosts}" \
               -o ConnectTimeout=15 \
               "${user}@${host}" \
-              "sudo /opt/atlas-runner/current/scripts/deploy-release.sh ${REVISION}" \
+              "sudo /usr/local/sbin/atlas-deploy-exec ${REVISION} ${TOOL_SHA256}" \
+              < "${TOOL}" \
               2>&1 | tee "${log_file}"
           rm -f "${keyfile}"
           echo "log-file=${log_file}" >> "${GITHUB_OUTPUT}"
@@ -140,17 +162,19 @@ jobs:
           printf '%s\n' "${SSH_KNOWN_HOSTS}" > "${known_hosts}"
           host="${SSH_HOST:?set VPS02_SSH_HOST repository variable}"
           user="${SSH_USER:-atlas-runner}"
-          # Source the service EnvironmentFile before the health probe, exactly
-          # like deploy-release.sh's internal gate: without the credential
-          # environment the GitHub connectivity check degrades and the probe
-          # false-negatives (observed on trusted deploy run 36313899913).
+          # Health context parity (INCIDENT-001 defect A): this step invokes
+          # the SAME host-side entrypoint as deploy-release.sh's internal
+          # health gate (which sources the service credential env file itself
+          # and fails closed when it is missing/unreadable). The probe without
+          # that context false-negatives on the github_api check (run
+          # 36313899913).
           ssh -i "${keyfile}" \
               -o IdentitiesOnly=yes \
               -o StrictHostKeyChecking=yes \
               -o UserKnownHostsFile="${known_hosts}" \
               -o ConnectTimeout=15 \
               "${user}@${host}" \
-              "sudo bash -c 'set -a; . /etc/atlas-runner/config/atlas-runner.env; set +a; exec /opt/atlas-runner/current/bin/atlas-runner health'" \
+              "sudo /opt/atlas-runner/current/scripts/atlas-runner-health.sh" \
               2>&1 | tee "${RUNNER_TEMP}/atlas-health.log"
           rm -f "${keyfile}"
 
