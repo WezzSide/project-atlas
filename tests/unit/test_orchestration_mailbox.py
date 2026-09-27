@@ -2149,6 +2149,32 @@ def test_r4_duck_typed_guard_cannot_rotate_live_materialization_claim(
         assert current.lifecycle_revision == claimed.lifecycle_revision
         assert current.materialization_owner_token == "owner-live"
 
+        forged_lock = _MailboxFileLock(guard.path)
+        forged_lock._handle = guard.path.open("a+b")
+        forged_lock._locked = True
+        try:
+            with pytest.raises(MailboxError) as forged_exc:
+                mailbox.recover_materialization_claim(
+                    successor.binding.package_id,
+                    generation=claimed.generation,
+                    expected_revision=claimed.lifecycle_revision,
+                    expected_owner_token=claimed.materialization_owner_token,
+                    expected_lifecycle=SuccessorLifecycle.MATERIALIZING,
+                    new_owner_token="owner-forged-exact-type",
+                    guard=forged_lock,
+                )
+
+            assert forged_exc.value.code == "MATERIALIZATION_GUARD_REQUIRED"
+            current = mailbox.get_successor(successor.binding.package_id)
+            assert current is not None
+            assert current.lifecycle_revision == claimed.lifecycle_revision
+            assert current.materialization_owner_token == "owner-live"
+        finally:
+            assert forged_lock._handle is not None
+            forged_lock._handle.close()
+            forged_lock._handle = None
+            forged_lock._locked = False
+
 
 def _r4_recovery_process(
     root: str,

@@ -9,6 +9,7 @@ import os
 import re
 import tempfile
 import time
+import weakref
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 from pathlib import Path
@@ -53,8 +54,8 @@ class _MailboxFileLock(AbstractContextManager["_MailboxFileLock"]):
 
     @property
     def held(self) -> bool:
-        """Whether this lock object currently owns its kernel lock."""
-        return self._locked and self._handle is not None
+        """Whether this exact lock object acquired and still owns its kernel lock."""
+        return self in _ACTIVE_MAILBOX_FILE_LOCKS
 
     def __enter__(self) -> _MailboxFileLock:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -78,6 +79,7 @@ class _MailboxFileLock(AbstractContextManager["_MailboxFileLock"]):
                     fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
                 self._handle = handle
                 self._locked = True
+                _ACTIVE_MAILBOX_FILE_LOCKS[self] = handle
                 return self
             except OSError as exc:
                 if isinstance(exc, OSError) and exc.errno not in {
@@ -100,8 +102,8 @@ class _MailboxFileLock(AbstractContextManager["_MailboxFileLock"]):
         exc: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
-        handle = self._handle
-        if handle is None or not self._locked:
+        handle = _ACTIVE_MAILBOX_FILE_LOCKS.pop(self, None)
+        if handle is None:
             return None
         self._locked = False
         try:
@@ -117,6 +119,11 @@ class _MailboxFileLock(AbstractContextManager["_MailboxFileLock"]):
             handle.close()
             self._handle = None
         return None
+
+
+_ACTIVE_MAILBOX_FILE_LOCKS: weakref.WeakKeyDictionary[_MailboxFileLock, BinaryIO] = (
+    weakref.WeakKeyDictionary()
+)
 
 
 class _InboxRouter(Protocol):
