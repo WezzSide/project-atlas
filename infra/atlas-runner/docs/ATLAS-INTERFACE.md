@@ -114,3 +114,28 @@ OWNER_REQUIRED | TERMINAL | REJECTED`):
   policy evaluation).
 - No verifier in the fabric (verification is host-independent, on
   GitHub-hosted runners; same-host separation is not independence).
+
+## Real Atlas workload admission contract (integration hardening)
+
+The first genuine Atlas workload must traverse, without routine human relay:
+
+```
+ATLAS GRANT (durable registry record, grants.db)
+  → TASK BINDING (schemas/atlas-task-binding.schema.json;
+      execution_id is a required explicit string — never invented downstream)
+  → AUTHORITY VALIDATION (GrantStore.validate: missing/unknown/expired/
+      scope-mismatch/consumed all fail closed; transport records are never authority)
+  → UNIQUE ADMISSION (idempotent submit_task; dedupe identity is
+      (run_id, run_attempt, job_id) for queued GitHub jobs)
+  → TRUSTED DISPATCH → VPS-02 EXECUTION → COMPLETE EVIDENCE
+  → INDEPENDENT VERIFICATION (VERIFIED requires every REQUIRED assertion
+      evidenced; missing mandatory evidence -> UNESTABLISHED, never silent PASS)
+  → ATLAS RECONCILIATION ('atlas-runner receipt <execution_id>' emits the
+      machine-consumable receipt; verdict + reconciliation recorded on the execution)
+  → CLEANUP → FABRIC IDLE_READY ('atlas-runner fabric-state')
+```
+
+Machine-consumable surfaces: task binding schema (in); execution evidence
+schema + GitHub artifacts + verification-report artifact + `atlas-runner
+receipt` JSON (out). Human authority decisions are never automated; only
+already-authorized result transport is.
