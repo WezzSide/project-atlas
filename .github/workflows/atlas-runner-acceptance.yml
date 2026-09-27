@@ -95,10 +95,11 @@ jobs:
           mkdir -p "${ATLAS_EVIDENCE_DIR}"
           jq -n \
             --arg task_id "ATLAS-RUNNER-E2E-001" \
+            --arg base_revision "${BASE_SHA}" \
             --arg result_revision "${result_revision}" \
             --arg patch_sha256 "${patch_sha256}" \
             --arg fixture_sha256 "${fixture_sha256}" \
-            '{task_id: $task_id, result_revision: $result_revision,
+            '{task_id: $task_id, base_revision: $base_revision, result_revision: $result_revision,
               artifacts: ["acceptance.patch", "infra/atlas-runner/tests/fixtures/acceptance/ATLAS-RUNNER-E2E-001.json"],
               tests: {acceptance_fixture_monotonic: true},
               artifact_sha256: {"acceptance.patch": $patch_sha256,

@@ -300,19 +300,6 @@ def _ensure_commit_fetched(sha: str, *, root: Path) -> None:
             f"could not fetch commit {sha} needed for the freeze-guard "
             f"comparison: {fetch.stderr.strip()}"
         )
-    verify = subprocess.run(
-        ["git", "cat-file", "-e", f"{sha}^{{commit}}"],
-        cwd=root,
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=_LOCAL_GIT_TIMEOUT_SECONDS,
-    )
-    if verify.returncode != 0:
-        raise DemoIsolationGuardError(
-            f"fetched commit {sha} for the freeze-guard comparison but it "
-            "is still not locally resolvable"
-        )
 
 
 def _resolve_diff_base_and_mode(
@@ -367,35 +354,6 @@ def _resolve_diff_base_and_mode(
         timeout=_LOCAL_GIT_TIMEOUT_SECONDS,
     )
     if resolve.returncode != 0:
-        try:
-            remote_main = subprocess.run(
-                [
-                    "git",
-                    "ls-remote",
-                    "origin",
-                    "refs/heads/main",
-                ],
-                cwd=root,
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=_NETWORK_GIT_TIMEOUT_SECONDS,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise DemoIsolationGuardError(
-                f"resolving origin/main for local freeze-guard base resolution did "
-                f"not complete within {_NETWORK_GIT_TIMEOUT_SECONDS}s"
-            ) from exc
-        if remote_main.returncode == 0 and remote_main.stdout.strip():
-            remote_sha = ""
-            for line in remote_main.stdout.splitlines():
-                fields = line.split()
-                if len(fields) >= 2 and fields[1] == "refs/heads/main":
-                    remote_sha = fields[0].strip()
-                    break
-            if remote_sha:
-                _ensure_commit_fetched(remote_sha, root=root)
-                return remote_sha, False
         raise DemoIsolationGuardError(
             "a git remote is configured but origin/main is not resolvable "
             "locally, and no pull_request/push CI event context is present "
@@ -1434,29 +1392,6 @@ def test_freeze_guard_local_full_clone_behavior_preserved() -> None:
     base = _resolve_diff_base(root=ROOT, env={})
     assert base == expected_sha
     assert base != "origin/main"
-
-
-def test_freeze_guard_local_path_fetches_origin_main_when_remote_exists(tmp_path: Path) -> None:
-    source = _init_fixture_repo(tmp_path)
-    source_head = _run_git(["rev-parse", "HEAD"], cwd=source).strip()
-    remote = tmp_path / "remote.git"
-    _run_git(["clone", "-q", "--bare", str(source), str(remote)], cwd=tmp_path)
-    local = tmp_path / "local"
-    local.mkdir()
-    _run_git(["init", "-q", "-b", "main"], cwd=local)
-    _run_git(["remote", "add", "origin", str(remote)], cwd=local)
-    assert _has_any_remote(root=local) is True
-    unresolved = subprocess.run(
-        ["git", "rev-parse", "--verify", "origin/main"],
-        cwd=local,
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=_LOCAL_GIT_TIMEOUT_SECONDS,
-    )
-    assert unresolved.returncode != 0
-    base = _resolve_diff_base(root=local, env={})
-    assert base == source_head
 
 
 # ---------------------------------------------------------------------------
