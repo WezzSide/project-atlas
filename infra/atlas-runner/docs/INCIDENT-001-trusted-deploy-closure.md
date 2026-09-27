@@ -1,6 +1,10 @@
 # INCIDENT-001 — Trusted Post-Merge Deploy Path: FAIL, Operational Mutations, and Closure
 
-Status: OPEN — repair candidate ATLAS-RUNNER-TRUSTED-DEPLOY-CLOSURE-002 in flight.
+Status: REPAIR CANDIDATE FROZEN — draft PR #1016, candidate HEAD
+`a1782d76cfe5a972ac0a8abf4960dac4dc837513`, tree
+`9c590d62592a95d59484dc0558f82c6538045dd4` (base `1ddd5012`). NO MERGE
+AUTHORITY claimed; awaiting candidate CI + independent verification, then
+explicit human authority per directive §14.
 Truth boundaries: `FAILED_WORKFLOW != NOT_DEPLOYED`; `PASS != MERGE AUTHORIZATION`;
 `MERGE_SUCCESS != PRODUCTION_VALIDATION`.
 
