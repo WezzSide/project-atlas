@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import pytest
 from conftest import drive_to_state
+
 from controller import lifecycle
 from controller.state import (
     StateStore,

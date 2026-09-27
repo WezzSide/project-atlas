@@ -4,3 +4,9 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.ruff.lint.isort]
+# Match the repository root ruff config's import classification so the same
+# bytes pass both `ruff check .` (root CI) and the runner-scoped check.
+known-first-party = ["controller"]
+known-third-party = ["atlas_contracts", "conftest"]

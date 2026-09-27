@@ -7,6 +7,7 @@ upgrades failures into successes.
 from __future__ import annotations
 
 from conftest import drive_to_state
+
 from controller import lifecycle
 from controller.dockerctl import worker_container_name
 from controller.reconcile import Reconciler

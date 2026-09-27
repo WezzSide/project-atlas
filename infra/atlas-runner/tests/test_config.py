@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+
 from controller.config import ConfigError, load_config, parse_config, validate_task_env
 
 BASE = {

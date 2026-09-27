@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 
 from conftest import drive_to_state
+
 from controller import lifecycle
 from controller.controller import Controller
 from controller.dockerctl import worker_container_name

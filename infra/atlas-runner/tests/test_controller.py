@@ -7,6 +7,7 @@ by label subset + capacity only.
 from __future__ import annotations
 
 from conftest import make_config
+
 from controller import lifecycle
 from controller.controller import Capacity, Controller
 
@@ -143,6 +144,7 @@ def test_submit_direct_task(config, store, fake_docker, fake_github, fake_worker
 def test_submit_rejects_bad_env(config, store, fake_docker, fake_github, fake_worker_manager):
     controller = _make_controller(config, store, fake_docker, fake_github, fake_worker_manager)
     import pytest
+
     from controller.config import ConfigError
 
     with pytest.raises(ConfigError):
@@ -161,6 +163,7 @@ def test_submit_idempotent_existing(config, store, fake_docker, fake_github, fak
 
 def test_submit_conflict_rejected(config, store, fake_docker, fake_github, fake_worker_manager):
     import pytest
+
     from controller.state import TaskConflictError
 
     controller = _make_controller(config, store, fake_docker, fake_github, fake_worker_manager)

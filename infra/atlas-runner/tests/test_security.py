@@ -5,11 +5,11 @@ evidence tamper-evidence (AS-RUNNER-FABRIC-001, CODEX-SEC-004/014/017/018).
 from __future__ import annotations
 
 import pytest
+from atlas_contracts.identity import safe_relative_component
+
 from controller.dockerctl import DockerCtl, DockerError, validate_mount, worker_container_name
 from controller.evidence import sha256_file, verify_artifact_hashes
 from controller.worker import WorkerManager
-
-from atlas_contracts.identity import safe_relative_component
 
 
 def test_safe_relative_component_rejects_traversal():
