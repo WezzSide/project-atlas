@@ -9,7 +9,8 @@ import os
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
@@ -2089,6 +2090,41 @@ def test_r4_active_materialization_guard_is_not_stolen(tmp_path: Path) -> None:
         ),
     ):
         pytest.fail("competing recovery stole a live materialization guard")
+
+
+def test_r4_duck_typed_guard_cannot_rotate_live_materialization_claim(
+    tmp_path: Path,
+) -> None:
+    mailbox, _governor, _bridge, successor = _r4_prepared_successor(
+        tmp_path, "r4-spoofed-materialization-guard"
+    )
+    with mailbox.materialization_guard(successor.binding.package_id, successor.generation) as guard:
+        claimed, won = mailbox.claim_materialization(
+            successor.binding.package_id,
+            generation=successor.generation,
+            expected_revision=successor.lifecycle_revision,
+            owner_token="owner-live",
+            guard=guard,
+        )
+        assert won
+        spoofed_guard = SimpleNamespace(held=True, path=guard.path)
+
+        with pytest.raises(MailboxError) as exc_info:
+            mailbox.recover_materialization_claim(
+                successor.binding.package_id,
+                generation=claimed.generation,
+                expected_revision=claimed.lifecycle_revision,
+                expected_owner_token=claimed.materialization_owner_token,
+                expected_lifecycle=SuccessorLifecycle.MATERIALIZING,
+                new_owner_token="owner-spoofed",
+                guard=cast(_MailboxFileLock, spoofed_guard),
+            )
+
+        assert exc_info.value.code == "MATERIALIZATION_GUARD_REQUIRED"
+        current = mailbox.get_successor(successor.binding.package_id)
+        assert current is not None
+        assert current.lifecycle_revision == claimed.lifecycle_revision
+        assert current.materialization_owner_token == "owner-live"
 
 
 def _r4_recovery_process(
