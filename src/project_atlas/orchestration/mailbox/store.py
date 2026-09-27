@@ -230,7 +230,7 @@ class AgentMailbox:
         self, package_id: str, generation: int, guard: _MailboxFileLock
     ) -> None:
         expected = self.materialization_guard(package_id, generation).path
-        if not isinstance(guard, _MailboxFileLock) or not guard.held or guard.path != expected:
+        if type(guard) is not _MailboxFileLock or not guard.held or guard.path != expected:
             raise MailboxError(
                 "materialization operation requires its generation guard",
                 code="MATERIALIZATION_GUARD_REQUIRED",

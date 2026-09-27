@@ -2126,6 +2126,29 @@ def test_r4_duck_typed_guard_cannot_rotate_live_materialization_claim(
         assert current.lifecycle_revision == claimed.lifecycle_revision
         assert current.materialization_owner_token == "owner-live"
 
+        class SpoofedLock(_MailboxFileLock):
+            @property
+            def held(self) -> bool:
+                return True
+
+        subclass_spoof = SpoofedLock(guard.path)
+        with pytest.raises(MailboxError) as subclass_exc:
+            mailbox.recover_materialization_claim(
+                successor.binding.package_id,
+                generation=claimed.generation,
+                expected_revision=claimed.lifecycle_revision,
+                expected_owner_token=claimed.materialization_owner_token,
+                expected_lifecycle=SuccessorLifecycle.MATERIALIZING,
+                new_owner_token="owner-subclass-spoofed",
+                guard=subclass_spoof,
+            )
+
+        assert subclass_exc.value.code == "MATERIALIZATION_GUARD_REQUIRED"
+        current = mailbox.get_successor(successor.binding.package_id)
+        assert current is not None
+        assert current.lifecycle_revision == claimed.lifecycle_revision
+        assert current.materialization_owner_token == "owner-live"
+
 
 def _r4_recovery_process(
     root: str,
