@@ -7,8 +7,14 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 INFRA = Path(__file__).resolve().parents[1]
 POLICY = INFRA / "scripts" / "atlas-runner-host-policy.sh"
+
+_IN_CHECKOUT = (
+    Path(__file__).resolve().parents[3] / ".github" / "workflows"
+).is_dir()
 WORKFLOW = Path(__file__).resolve().parents[3] / ".github" / "workflows" / "atlas-runner-deploy.yml"
 
 ACCEPT = {
@@ -76,6 +82,8 @@ def test_policy_no_wildcards_or_general_shell() -> None:
 
 def test_workflow_deterministic_credential_cleanup() -> None:
     """Band B: both SSH steps must use real mktemp + EXIT trap (no mktemp -u)."""
+    if not _IN_CHECKOUT:
+        pytest.skip("workflow file unavailable outside a git checkout")
     text = WORKFLOW.read_text(encoding="utf-8")
     assert "mktemp -u" not in text, "predictable mktemp -u remains in deploy workflow"
     assert text.count("trap 'rm -f") >= 2, "EXIT-trap cleanup missing from an SSH step"
@@ -105,6 +113,8 @@ echo "KEYFILE=${keyfile}"
 
 def test_workflow_emits_deployment_receipt() -> None:
     """Band C: receipt step exists and preserves both workflow and reconciliation."""
+    if not _IN_CHECKOUT:
+        pytest.skip("workflow file unavailable outside a git checkout")
     text = WORKFLOW.read_text(encoding="utf-8")
     for state in (
         "DEPLOY_NOT_ACTIVATED",
