@@ -18,6 +18,9 @@ CURRENT_LINK="/opt/atlas-runner/current"
 UNIT_NAME="atlas-runner-controller.service"
 SERVICE_USER="atlas-runner"
 
+log() { printf '[deploy] %s\n' "$*"; }
+die() { log "FATAL: $*"; exit 1; }
+
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
 # Archive source checkout. The host-clone copy of this script resolves its own
 # repository via the relative default, but the release-staged copy under
@@ -40,9 +43,6 @@ if [ -z "${REPO_ROOT}" ]; then
 fi
 [ -n "${REPO_ROOT}" ] || REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../../../" >/dev/null 2>&1 && pwd -P)"
 git -C "${REPO_ROOT}" rev-parse --git-dir >/dev/null 2>&1 || die "no git checkout found for archive source (set ATLAS_RUNNER_REPO_ROOT)"
-
-log() { printf '[deploy] %s\n' "$*"; }
-die() { log "FATAL: $*"; exit 1; }
 
 [ "$(id -u)" -eq 0 ] || die "must run as root"
 command -v git >/dev/null 2>&1 || die "git not found"
