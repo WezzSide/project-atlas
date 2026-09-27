@@ -1,0 +1,44 @@
+# Atlas Runner controller configuration (AS-RUNNER-FABRIC-001).
+# Copy to /etc/atlas-runner/config/atlas-runner.toml (mode 0600, owner atlas-runner).
+# Contract: schemas/controller-config.schema.json. Unknown keys are rejected.
+# CONFIG_ACCEPTED != AUTHORITY.
+
+poll_interval_seconds = 10
+max_concurrent_jobs = 1
+labels = ["self-hosted", "linux", "x64", "atlas", "executor"]
+
+min_free_memory_mb = 1024
+min_free_disk_mb = 5120
+
+[github]
+owner = "YOUR_GITHUB_OWNER"
+repo = "YOUR_GITHUB_REPO"
+api_url = "https://api.github.com"
+
+[worker]
+cpus = 2.0
+memory_mb = 4096
+pids = 512
+timeout_seconds = 1800
+storage_mb = 10240
+image = "atlas-runner-worker:latest"
+# Docker network for workers. On hosts with a default-DROP DOCKER-USER guard
+# (e.g. VPS-02's atlas-docker-guard) use the dedicated bootstrap-created
+# "atlas-runner-net" bridge, which carries an explicit egress permit.
+network = "atlas-runner-net"
+# Extra controller-managed env passed to workers (allow-listed keys only;
+# deny-list substrings TOKEN/SECRET/KEY/PASSWORD are rejected unless the key
+# is listed in allow_secret_env).
+# env = { CI = "true" }
+
+[paths]
+state_dir = "/var/lib/atlas-runner/state"
+jobs_dir = "/var/lib/atlas-runner/jobs"
+log_dir = "/var/log/atlas-runner"
+
+[retention]
+evidence_days = 30
+workspace_hours = 24
+
+# Operator opt-in: permit specific secret-shaped env keys for tasks.
+# allow_secret_env = ["MY_CI_TOKEN"]

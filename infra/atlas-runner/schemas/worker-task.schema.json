@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://project-atlas.local/schemas/worker-task.schema.json",
+  "title": "WorkerTask",
+  "description": "AS-RUNNER-FABRIC-001 direct-submission task definition. TASK_ACCEPTED != EXECUTED, SUBMIT_ACCEPTED != AUTHORITY. additionalProperties: false.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "task_id"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "task_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "github_run_id": { "type": "integer", "minimum": 1 },
+    "github_run_attempt": { "type": "integer", "minimum": 1 },
+    "job_name": { "type": "string", "maxLength": 256 },
+    "labels": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" }
+    },
+    "env": {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "propertyNames": { "pattern": "^[A-Z_][A-Z0-9_]*$" }
+    },
+    "base_revision": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      ]
+    },
+    "result_revision": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      ]
+    },
+    "runner_name": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+        }
+      ]
+    }
+  }
+}

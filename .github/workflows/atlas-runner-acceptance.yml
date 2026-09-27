@@ -1,0 +1,119 @@
+name: atlas-runner-acceptance
+
+# ATLAS-RUNNER-E2E-001 acceptance task. Provider-independent. Executor-only;
+# verification via atlas-runner-verify.yml. Never merges to main.
+#
+# This job sits queued until the VPS-02 controller admits it from the
+# queued-runs poll (it requests the executor labels). It produces a dedicated
+# result branch carrying one fixture increment; nothing is merged anywhere.
+
+on:
+  workflow_dispatch:
+  # Test/acceptance trigger: workflow_dispatch cannot target workflows that do
+  # not yet exist on the default branch, so the live E2E uses an explicit
+  # trigger branch on this same ref. Runs ONLY when that branch is pushed.
+  push:
+    branches: [atlas/acceptance-trigger]
+
+permissions:
+  contents: write # push the dedicated atlas/acceptance-<run_id> branch only
+
+concurrency:
+  group: atlas-runner-acceptance-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  acceptance:
+    if: github.event.repository.fork == false
+    runs-on: [self-hosted, linux, x64, atlas, executor]
+    timeout-minutes: 20
+    steps:
+      # Exact SHA: the dispatch resolves a ref to a commit; branch from that.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      # The worker image ships Debian python3 + baked-in pytest (PEP 668 blocks
+      # pip installs at job time; observed live on VPS-02).
+      - name: Verify python test tooling on worker image
+        run: |
+          set -euo pipefail
+          python3 --version
+          python3 -m pytest --version
+
+      - name: Validate run identity and create dedicated branch
+        env:
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          case "${RUN_ID}" in (*[!0-9]*|'') echo "bad run id" >&2; exit 2 ;; esac
+          case "${RUN_ATTEMPT}" in (*[!0-9]*|'') echo "bad run attempt" >&2; exit 2 ;; esac
+          branch="atlas/acceptance-${RUN_ID}-${RUN_ATTEMPT}"
+          case "${branch}" in atlas/acceptance-[0-9]*-[0-9]*) ;; *) echo "bad branch name" >&2; exit 2 ;; esac
+          git checkout -b "${branch}"
+          echo "ACCEPTANCE_BRANCH=${branch}" >> "${GITHUB_ENV}"
+
+      - name: Run acceptance workload (deterministic fixture increment)
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: bash infra/atlas-runner/scripts/acceptance-workload.sh
+
+      - name: Deterministic fixture test
+        env:
+          PYTHONPATH: src
+        run: python3 -m pytest infra/atlas-runner/tests/test_acceptance_fixture.py -q --no-cov -p no:cacheprovider
+
+      - name: Commit and push dedicated result branch
+        env:
+          GH_TOKEN_PUSH: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          git config user.name "atlas-acceptance-executor"
+          git config user.email "atlas-acceptance-executor@users.noreply.github.com"
+          git add infra/atlas-runner/tests/fixtures/acceptance/ATLAS-RUNNER-E2E-001.json
+          git commit -m "atlas-acceptance: ATLAS-RUNNER-E2E-001 run ${RUN_ID} attempt ${RUN_ATTEMPT}"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN_PUSH}@github.com/${GH_REPOSITORY}.git"
+          git push -u origin "HEAD:${ACCEPTANCE_BRANCH}"
+
+      - name: Produce patch and evidence fragment
+        env:
+          BASE_SHA: ${{ github.sha }}
+          ATLAS_EVIDENCE_DIR: ${{ github.workspace }}/evidence
+          FIXTURE: infra/atlas-runner/tests/fixtures/acceptance/ATLAS-RUNNER-E2E-001.json
+        run: |
+          set -euo pipefail
+          git diff "${BASE_SHA}"...HEAD > acceptance.patch
+          patch_sha256="$(sha256sum acceptance.patch | awk '{print $1}')"
+          fixture_sha256="$(sha256sum "${FIXTURE}" | awk '{print $1}')"
+          result_revision="$(git rev-parse HEAD)"
+          mkdir -p "${ATLAS_EVIDENCE_DIR}"
+          jq -n \
+            --arg task_id "ATLAS-RUNNER-E2E-001" \
+            --arg result_revision "${result_revision}" \
+            --arg patch_sha256 "${patch_sha256}" \
+            --arg fixture_sha256 "${fixture_sha256}" \
+            '{task_id: $task_id, result_revision: $result_revision,
+              artifacts: ["acceptance.patch", "infra/atlas-runner/tests/fixtures/acceptance/ATLAS-RUNNER-E2E-001.json"],
+              tests: {acceptance_fixture_monotonic: true},
+              artifact_sha256: {"acceptance.patch": $patch_sha256,
+                "infra/atlas-runner/tests/fixtures/acceptance/ATLAS-RUNNER-E2E-001.json": $fixture_sha256}}' \
+            > "${ATLAS_EVIDENCE_DIR}/fragment.json"
+          echo "::group::acceptance artifact hashes"
+          sha256sum acceptance.patch "${FIXTURE}"
+          echo "::endgroup::"
+
+      - name: Upload acceptance evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: atlas-acceptance-evidence
+          path: |
+            acceptance.patch
+            infra/atlas-runner/tests/fixtures/acceptance/ATLAS-RUNNER-E2E-001.json
+            evidence/
+          if-no-files-found: error

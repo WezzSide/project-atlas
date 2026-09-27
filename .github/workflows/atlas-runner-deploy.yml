@@ -1,0 +1,161 @@
+name: atlas-runner-deploy
+
+# ATLAS-RUNNER-FABRIC-001 — controlled deploy of the atlas-runner fabric to VPS-02.
+#
+# §25-style protection: workflow_dispatch ONLY (never pull_request /
+# pull_request_target), a job-level default-branch gate, and a step-level
+# re-assertion. Feature branches and PRs can NEVER reach the SSH key.
+#
+# First-ever bootstrap is MANUAL (bootstrap-vps.sh + Docker install + token
+# secrets); see infra/atlas-runner/docs/DEPLOYMENT.md. This workflow is for
+# UPGRADES of an already-bootstrapped host only.
+#
+# DEPLOYED != VERIFIED: a successful deploy is an executor-side claim. The
+# `atlas-vps02` environment should carry required reviewers (human gate).
+
+on:
+  workflow_dispatch:
+    inputs:
+      git_revision:
+        description: "Full 40-hex commit SHA on the default branch to deploy."
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: atlas-runner-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    environment: atlas-vps02 # human gate: configure required reviewers on this environment
+    timeout-minutes: 20
+    steps:
+      # Re-assert the gate: unvalidated context must never reach the SSH key.
+      - name: Assert default branch
+        env:
+          CURRENT_REF: ${{ github.ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          expected="refs/heads/${DEFAULT_BRANCH}"
+          if [ "${CURRENT_REF}" != "${expected}" ]; then
+            echo "refusing to deploy from ${CURRENT_REF} (expected ${expected})" >&2
+            exit 1
+          fi
+
+      - name: Validate git_revision (40-hex; env indirection, never interpolate raw input)
+        env:
+          REVISION: ${{ inputs.git_revision }}
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "${REVISION}" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "git_revision must be a full lowercase 40-hex SHA" >&2
+            exit 2
+          fi
+          echo "revision valid: ${REVISION}"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # full history for the ancestry check below
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install package with dev dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Refuse revisions not on the default branch
+        env:
+          REVISION: ${{ inputs.git_revision }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          git fetch origin "${DEFAULT_BRANCH}"
+          if ! git merge-base --is-ancestor "${REVISION}" "origin/${DEFAULT_BRANCH}"; then
+            echo "refusing: ${REVISION} is not an ancestor of origin/${DEFAULT_BRANCH}" >&2
+            exit 1
+          fi
+          git checkout --detach "${REVISION}"
+
+      - name: Controller test suite (pre-deploy gate)
+        env:
+          PYTHONPATH: src
+        run: python -m pytest infra/atlas-runner/tests -q --no-cov -p no:cacheprovider
+
+      - name: Install openssh-client
+        run: sudo apt-get update && sudo apt-get install -y openssh-client
+
+      # Host key verification is mandatory (StrictHostKeyChecking=yes with an
+      # explicit UserKnownHostsFile from secret VPS02_KNOWN_HOSTS). Never use
+      # accept-new / no here.
+      - name: Deploy release on VPS-02 (deploy-release.sh)
+        id: deploy
+        env:
+          REVISION: ${{ inputs.git_revision }}
+          SSH_PRIVATE_KEY: ${{ secrets.VPS02_DEPLOY_SSH_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.VPS02_KNOWN_HOSTS }}
+          SSH_HOST: ${{ vars.VPS02_SSH_HOST }}
+          SSH_USER: ${{ vars.VPS02_SSH_USER }}
+        run: |
+          set -euo pipefail
+          keyfile="$(mktemp -u /tmp/atlas-deploy-key.XXXXXX)"
+          known_hosts="$(mktemp -u /tmp/atlas-known-hosts.XXXXXX)"
+          umask 077
+          printf '%s\n' "${SSH_PRIVATE_KEY}" > "${keyfile}"
+          printf '%s\n' "${SSH_KNOWN_HOSTS}" > "${known_hosts}"
+          host="${SSH_HOST:?set VPS02_SSH_HOST repository variable}"
+          user="${SSH_USER:-atlas-runner}"
+          log_file="${RUNNER_TEMP}/atlas-deploy.log"
+          ssh -i "${keyfile}" \
+              -o IdentitiesOnly=yes \
+              -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile="${known_hosts}" \
+              -o ConnectTimeout=15 \
+              "${user}@${host}" \
+              "sudo /opt/atlas-runner/current/scripts/deploy-release.sh ${REVISION}" \
+              2>&1 | tee "${log_file}"
+          rm -f "${keyfile}"
+          echo "log-file=${log_file}" >> "${GITHUB_OUTPUT}"
+
+      - name: Post-deploy health check (fail on blocked)
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.VPS02_DEPLOY_SSH_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.VPS02_KNOWN_HOSTS }}
+          SSH_HOST: ${{ vars.VPS02_SSH_HOST }}
+          SSH_USER: ${{ vars.VPS02_SSH_USER }}
+        run: |
+          set -euo pipefail
+          keyfile="$(mktemp -u /tmp/atlas-health-key.XXXXXX)"
+          known_hosts="$(mktemp -u /tmp/atlas-health-known-hosts.XXXXXX)"
+          umask 077
+          printf '%s\n' "${SSH_PRIVATE_KEY}" > "${keyfile}"
+          printf '%s\n' "${SSH_KNOWN_HOSTS}" > "${known_hosts}"
+          host="${SSH_HOST:?set VPS02_SSH_HOST repository variable}"
+          user="${SSH_USER:-atlas-runner}"
+          ssh -i "${keyfile}" \
+              -o IdentitiesOnly=yes \
+              -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile="${known_hosts}" \
+              -o ConnectTimeout=15 \
+              "${user}@${host}" \
+              "sudo /opt/atlas-runner/current/bin/atlas-runner health" \
+              2>&1 | tee "${RUNNER_TEMP}/atlas-health.log"
+          rm -f "${keyfile}"
+
+      - name: Upload deploy log
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: atlas-deploy-log
+          path: |
+            ${{ steps.deploy.outputs.log-file }}
+            ${{ runner.temp }}/atlas-health.log
+          if-no-files-found: ignore

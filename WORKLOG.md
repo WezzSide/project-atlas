@@ -15221,3 +15221,83 @@ Reconciliation note: `autonomy/packets/OWNER-UNBLOCK-KIT-2026-09-16.md`. Checkpo
 
 **CERTIFICATION ISSUED: NO**
 **MERGE AUTHORIZED: NO**
+
+---
+
+## 2026-09-26 — AS-RUNNER-FABRIC-001 workflows, operator documentation, ADR-033
+
+**Branch:** `feat/atlas-runner-fabric-001` (no commit made here; parent handles git)
+**Baseline:** MAIN `57a0a61d7c1b2410c96b5c26c507279d5f82c48d` / TREE `44e654882fc58c3ce59f11f9368a3a848170ba7a`
+
+### Implemented (workflows, all new, SHA-pinned third-party actions)
+
+- `.github/workflows/atlas-runner-ci.yml` — controller tests, ruff, `bash -n`, shellcheck, 3-schema check, worker-image build (no push) with label verification. `contents: read`, 20-min timeouts, concurrency cancel.
+- `.github/workflows/atlas-runner-smoke.yml` — `workflow_dispatch` ONLY, no secrets; the job sits queued until the VPS-02 controller admits it from the queued-runs poll (documented in header). Exact-SHA checkout, evidence-fragment check, artifact sha256 in `::group::`, artifact upload.
+- `.github/workflows/atlas-agent-execute.yml` — `workflow_dispatch` ONLY, executor-only; dedicated `atlas/agent-<run_id>-<attempt>` branch; bounded prompt; `anthropics/claude-code-action` pinned to v1 release commit; deterministic infra tests; commit+push restricted to the dedicated branch; smoke evidence. Never merges. `EXECUTOR_SUCCESS != VERIFIED` documented.
+- `.github/workflows/atlas-runner-verify.yml` — INDEPENDENT verification on GitHub-hosted `ubuntu-latest` (host-level trust boundary; same-host separation != independence). `workflow_run` (both executor workflows, default branch filter) + manual `source_run_id`; `contents: read` + `actions: read`; schema field validation, artifact SHA-256 recomputation, runner-identity checks, `complete`-claim semantics; VERIFIED/REJECTED verdict as artifact + step summary.
+- `.github/workflows/atlas-runner-deploy.yml` — `workflow_dispatch` ONLY; job-level default-branch gate + step re-assertion (§25-style: no PR path can reach the SSH key); 40-hex ancestor-only revision validation with env indirection; infra tests pre-deploy; pinned-host-key SSH (`StrictHostKeyChecking=yes`, 0600 key); `deploy-release.sh` on host; health gate; deploy log artifact. `environment: atlas-vps02` (required reviewers = human gate, to be configured).
+
+### Implemented (documentation)
+
+- `infra/atlas-runner/docs/ARCHITECTURE.md`, `SECURITY.md`, `OPERATIONS.md`, `DEPLOYMENT.md`, `RECOVERY.md`, `EVIDENCE.md`; README docs index added.
+- `docs/adr/ADR-033-atlas-runner-fabric-001.md` — seven decisions (stdlib sibling deliverable; poll/no-inbound; ephemeral JIT one-job-one-worker; SQLite WAL source of truth; GitHub-hosted independent verification; dispatch-only + default-branch gate; evidence schema) and three non-decisions (K8s/ARC fleet, Windows, GitHub App token provider).
+
+### State
+
+- Controller implementation pre-exists (85 tests passing, stdlib-only); this slice adds the GitHub surface, operator docs, and ADR.
+- `DEPLOYED = NO`. VPS-02 unreachable from the build network at the TCP level — all three documented public IPs and the Tailscale 100.x address time out; preflight NOT_RUN.
+- `LIVE E2E NOT_RUN_REQUIRES_EXTERNAL_AUTHORITY`: network reachability, GitHub secret provisioning (`VPS02_DEPLOY_SSH_KEY`, `VPS02_KNOWN_HOSTS`, `ANTHROPIC_API_KEY`, `atlas-vps02` environment reviewers, host-side `ATLAS_GITHUB_TOKEN`), and Anthropic auth are all external authorities.
+- `MERGE_AUTHORIZATION = NOT_GRANTED`, `MERGE_PERFORMED = NO`. PASS != MERGE AUTHORIZATION; EXECUTOR_SUCCESS != VERIFIED.
+
+### Local verification (this build host)
+
+- YAML parse of all 5 workflows: PASS (pyyaml).
+- Pinned action SHAs re-resolved via `gh api` against claimed versions: PASS (see report).
+- `actionlint`: NOT_AVAILABLE on this host — manual review pass performed (env indirection audit of every `${{` in `run:` blocks: none left; validated-input interpolation only).
+
+---
+
+## 2026-09-26 — AS-RUNNER-FABRIC-001 follow-up: adapter contract + ATLAS-RUNNER-E2E-001
+
+**Branch:** `feat/atlas-runner-fabric-001` atop `6e10a43e` (no commit made here)
+
+### Added
+
+- `infra/atlas-runner/schemas/atlas-task-binding.schema.json` — machine-consumable Atlas adapter contract (task binding: executor_type enum with claude as one backend, command|prompt execution, authority_reference, resource/timeout/platform defaults, evidence_requirements).
+- `infra/atlas-runner/docs/ATLAS-INTERFACE.md` — positioning (fabric = execution backend of Atlas; Atlas owns authority), binding example, evidence field mapping, explicit fabric terminal_status → dispatch-record status table (incl. cleanup_required→OWNER_REQUIRED, blocked→BLOCKED, verifier REJECTED→REJECTED), machine-consumability, non-goals.
+- `infra/atlas-runner/scripts/acceptance-workload.sh` + genesis fixture `infra/atlas-runner/tests/fixtures/acceptance/ATLAS-RUNNER-E2E-001.json` (counter 0) + `infra/atlas-runner/tests/test_acceptance_fixture.py` (genesis golden hash, structural determinism, chain continuity) — deterministic, offline.
+- `.github/workflows/atlas-runner-acceptance.yml` — ATLAS-RUNNER-E2E-001 acceptance task: dispatch-only, executor labels, dedicated `atlas/acceptance-<run_id>-<attempt>` result branch, fixture increment + fixture test, patch + sha256, evidence fragment, artifact upload. Never merges. Executor-only (`EXECUTOR_SUCCESS != VERIFIED`).
+- `atlas-runner-verify.yml` now also verifies `atlas-runner-acceptance.yml` runs; `atlas-runner-ci.yml` schema check updated 3→4 schemas. ADR-033 decision 8 added (adapter = schema + doc, not code). README docs index extended.
+
+### State
+
+- `DEPLOYED = NO`; `LIVE E2E NOT_RUN_REQUIRES_EXTERNAL_AUTHORITY` (unchanged: VPS-02 unreachable, GitHub secrets/Anthropic auth external).
+- Committed fixture remains genesis (counter 0); the workload was exercised only in a temp copy.
+
+### Local verification (this build host)
+
+- All 4 schemas parse as Draft 2020-12: PASS.
+- Infra suite: 92 passed (85 prior + 7 new fixture tests), 0 failed.
+- ruff clean on new test; bash -n + shellcheck -S warning clean on new script.
+- acceptance-workload.sh exercised in a temp copy: bump + chain + nonce deterministic in structure; committed fixture untouched.
+
+## 2026-09-26/27 — ATLAS-RUNNER-FABRIC-001: VPS-02 DEPLOYED + LIVE E2E PASS
+
+DEPLOYED=YES (atlas-eu-verify-01, release ad5f7545, controller 0.1.0, runner 2.337.0).
+LIVE E2E=PASS: acceptance run 36271297201 executed on ephemeral worker
+atlas-worker-ex-8e89ee978a604e65; fixture mutation + deterministic test +
+evidence fragment + result branch atlas/acceptance-36271297201-1 @ c28c5bc3;
+runner deregistered, worker destroyed, cleanup_status=ok, 0 residual
+containers/runners/credential files; controller health=healthy.
+INDEPENDENT VERIFICATION=VERIFIED (9/9 checks, workstation-side re-hash of
+artifacts vs fragment claims; host-independent of VPS-02).
+Ten real defects found and fixed during live bring-up (systemd arg order,
+deploy health env, DOCKER-USER guard permit, mount-policy exemption,
+read-only rootfs, secret-file readability, custom labels, JIT
+runner_group_id, secret-deletion race, worker-image test deps).
+Known limitations: controller-side evidence.json carries base/result
+revision as null (rich data lives in the worker evidence fragment +
+GitHub artifacts; fragment merge is future work); setup-python unsupported
+on the worker image (use the image's python3); CLAUDE_E2E=
+NOT_RUN_REQUIRES_EXTERNAL_AUTHORITY (no ANTHROPIC_API_KEY).
+EXECUTOR_SUCCESS != VERIFIED; PASS != MERGE AUTHORIZATION.

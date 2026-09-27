@@ -206,6 +206,21 @@ def test_every_third_party_action_is_pinned_to_a_full_commit_sha() -> None:
 
 _APPROVED_PERMISSIONS_MAP = {"contents": "read"}
 
+# Explicitly-approved per-workflow permission maps (necessity finding required;
+# see the docstring above). Keyed by path relative to the repository root.
+# ATLAS-RUNNER-FABRIC-001 (ADR-033): trusted-context, dispatch/push-trigger-only
+# workflows. `contents: write` is confined to pushing one dedicated, validated
+# result branch (atlas/agent-<run_id>-<attempt> resp. atlas/acceptance-<run_id>-<attempt>);
+# neither workflow ever merges or targets a protected branch. `actions: read`
+# is required to download artifacts from the source executor run for independent
+# verification (read-only). Executor success is never self-certification: the
+# verify workflow runs separately on a GitHub-hosted runner.
+_APPROVED_PERMISSIONS_OVERRIDES = {
+    ".github/workflows/atlas-agent-execute.yml": {"contents": "write"},
+    ".github/workflows/atlas-runner-acceptance.yml": {"contents": "write"},
+    ".github/workflows/atlas-runner-verify.yml": {"contents": "read", "actions": "read"},
+}
+
 
 def _assert_exact_approved_permissions(path: Path, scope: str, permissions: Any) -> None:
     """Every governed workflow/job in this repository is approved for
@@ -221,8 +236,10 @@ def _assert_exact_approved_permissions(path: Path, scope: str, permissions: Any)
         f"{path} ({scope}): permissions must be an explicit mapping, not {permissions!r} "
         "(the string forms 'read-all'/'write-all' grant every scope and are never approved)"
     )
-    assert permissions == _APPROVED_PERMISSIONS_MAP, (
-        f"{path} ({scope}): permissions must be exactly {_APPROVED_PERMISSIONS_MAP!r}, "
+    relative = path.relative_to(REPO_ROOT).as_posix()
+    approved = _APPROVED_PERMISSIONS_OVERRIDES.get(relative, _APPROVED_PERMISSIONS_MAP)
+    assert permissions == approved, (
+        f"{path} ({scope}): permissions must be exactly {approved!r}, "
         f"found {permissions!r} -- no additional keys, no write permission, and no "
         "id-token permission are approved for this repository's governed workflows"
     )
