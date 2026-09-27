@@ -142,6 +142,32 @@ class Controller:
             # run/attempt are distinct admissions; reruns are separate identities.
             task_id = f"gh-{job.run_id}-{job.run_attempt}-{job.job_id}"
             reason = self.admission_reason(self.capacity())
+            # Transport authority: GitHub-queued jobs are admitted under the
+            # fabric's transport grant (config.transport_grant_id). Without a
+            # resolvable transport grant the job is rejected — the queued path
+            # cannot bypass authority (hardening admission review).
+            transport = self.config.transport_grant_id
+            if not transport:
+                self.store.audit(
+                    "admission_rejected",
+                    task_id=task_id,
+                    detail={"reason": "no transport_grant_id configured"},
+                )
+                continue
+            if self.grants is None:
+                self.store.audit(
+                    "admission_rejected", task_id=task_id,
+                    detail={"reason": "grant registry required"},
+                )
+                continue
+            try:
+                self.grants.validate(transport)
+            except Exception as exc:
+                self.store.audit(
+                    "admission_rejected", task_id=task_id,
+                    detail={"reason": f"transport grant invalid: {exc}"},
+                )
+                continue
             definition = {
                 "task_id": task_id,
                 "github_run_id": job.run_id,
@@ -149,6 +175,7 @@ class Controller:
                 "github_job_id": job.job_id,
                 "job_name": job.job_name,
                 "labels": list(job.labels),
+                "authority_reference": transport,
             }
             outcome, _status = self.store.submit_task(task_id, definition)
             if outcome != "admitted":
@@ -176,39 +203,94 @@ class Controller:
         return admitted
 
     def submit_task(self, definition: dict, *, validate: bool = True) -> tuple[str, str]:
-        """Direct admission path used by `submit`. Returns (outcome, status_or_id)."""
+        """Direct admission path used by `submit`. Returns (outcome, status_or_id).
+
+        Fail-closed admission contract (hardening admission review):
+        - authority_reference is MANDATORY and must resolve to a durable grant
+          record (empty/omitted/unknown/expired/mismatched/consumed all reject);
+          workflow_dispatch and other transport records are never authority.
+        - execution_id is the canonical identity from the binding and is used
+          verbatim; duplicate canonical ids reject (no downstream re-invention).
+        - validate -> admit -> consume is atomic in effect: a consume failure
+          after admission rejects the task and records it; an execution-start
+          failure after consume refunds the grant.
+        - Idempotency: re-submitting an existing task_id with the SAME
+          definition returns the existing state without re-consuming budget;
+          a conflicting definition raises TaskConflictError (both checked
+          before any grant consumption).
+        """
+        from controller.state import definition_hash
+
         task_id = definition.get("task_id")
         if not isinstance(task_id, str) or not task_id:
             raise ValueError("task definition requires a non-empty 'task_id'")
+        digest = definition_hash(definition)
+        existing = self.store.get_task(task_id)
+        if existing is not None:
+            if existing["definition_hash"] != digest:
+                from controller.state import TaskConflictError
+
+                raise TaskConflictError(
+                    f"task_id {task_id!r} already exists with a conflicting definition"
+                )
+            status = existing["status"]
+            outcome = (
+                "existing_terminal"
+                if self.store.is_terminal_task_status(status)
+                else "existing_active"
+            )
+            return outcome, status
+        authority = definition.get("authority_reference")
+        if not isinstance(authority, str) or not authority:
+            raise ValueError(
+                "authority_reference is mandatory for admission "
+                "(transport records are never authority)"
+            )
+        execution_id = definition.get("execution_id")
+        if not isinstance(execution_id, str) or not execution_id:
+            raise ValueError("execution_id is mandatory for Atlas-issued tasks")
         if validate:
             validate_task_env(definition.get("env") or {}, allow=self.config.allow_secret_env)
-        authority = definition.get("authority_reference")
-        if authority:
-            # Atlas-issued production tasks must resolve to a durable grant record.
-            # workflow_dispatch / transport records are never authority (EVIDENCE != AUTHORITY).
-            if self.grants is None:
-                raise ValueError("authority_reference present but no grant registry configured")
-            self.grants.validate(
-                str(authority),
-                task_id=task_id,
-                repository=definition.get("repository"),
-                base_revision=definition.get("base_revision"),
-                executor_type=definition.get("executor_type"),
-            )
+        if self.grants is None:
+            raise ValueError("grant registry required for authority validation")
+        self.grants.validate(
+            authority,
+            task_id=task_id,
+            repository=definition.get("repository"),
+            base_revision=definition.get("base_revision"),
+            executor_type=definition.get("executor_type"),
+        )
         outcome, status = self.store.submit_task(task_id, definition)
-        if outcome == "admitted" and authority:
-            self.grants.consume(str(authority))
-        if outcome == "admitted":
+        if outcome != "admitted":
+            return outcome, status
+        try:
+            self.grants.consume(authority)
+        except Exception as exc:
+            self._reject_admitted(task_id, f"grant consumption failed: {exc}")
+            raise
+        try:
             self._start_execution(
                 task_id,
                 definition,
                 run_id=definition.get("github_run_id"),
                 run_attempt=definition.get("github_run_attempt", 1),
+                canonical_execution_id=execution_id,
             )
-            return outcome, self.store.get_execution(
-                self._latest_execution_id(task_id)
-            )["execution_id"]
-        return outcome, status
+        except Exception:
+            self.grants.refund(authority)
+            self._reject_admitted(task_id, "execution start failed; grant refunded")
+            raise
+        return outcome, execution_id
+
+    def _reject_admitted(self, task_id: str, reason: str) -> None:
+        """Mark an admitted-but-unrunnable task rejected (atomic recovery)."""
+        self.store.audit("admission_rejected", task_id=task_id, detail={"reason": reason})
+        with self.store._lock, self.store._conn:
+            self.store._conn.execute(
+                "UPDATE tasks SET status = 'REJECTED', reason = ?, updated_at = ?"
+                " WHERE task_id = ?",
+                (reason, __import__("time").time(), task_id),
+            )
 
     def _latest_execution_id(self, task_id: str) -> str:
         row = self.store._conn.execute(
@@ -228,6 +310,7 @@ class Controller:
         run_id: int | None,
         run_attempt: int | None,
         github_job_id: int | None = None,
+        canonical_execution_id: str | None = None,
     ) -> str:
         digest = definition_hash(definition)
         execution_id = self.store.create_execution(
@@ -236,6 +319,7 @@ class Controller:
             github_run_id=run_id,
             github_run_attempt=run_attempt,
             github_job_id=github_job_id,
+            execution_id=canonical_execution_id,
         )
         execution = self.store.get_execution(execution_id)
         self.store.transition(execution_id, lifecycle.ADMITTED)

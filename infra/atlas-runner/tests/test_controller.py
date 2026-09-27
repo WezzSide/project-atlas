@@ -28,7 +28,7 @@ def _queued_run(run_id, attempt=1, labels=("self-hosted", "linux", "x64", "atlas
 
 
 def _make_controller(config, store, fake_docker, fake_github, fake_worker_manager):
-    return Controller(
+    controller = Controller(
         config=config,
         store=store,
         docker=fake_docker,
@@ -36,6 +36,12 @@ def _make_controller(config, store, fake_docker, fake_github, fake_worker_manage
         worker_manager=fake_worker_manager,
         sleeper=lambda *_: None,
     )
+    from controller.grants import GrantStore
+
+    grants = GrantStore(store.db_path.parent / "grants.db")
+    grants.issue(config.transport_grant_id, budget=1000)
+    controller.attach_grants(grants)
+    return controller
 
 
 def test_admission_by_label_subset(config, store, fake_docker, fake_github, fake_worker_manager):
@@ -135,9 +141,16 @@ def test_github_failure_fails_closed(config, store, fake_docker, fake_github, fa
 def test_submit_direct_task(config, store, fake_docker, fake_github, fake_worker_manager):
     controller = _make_controller(config, store, fake_docker, fake_github, fake_worker_manager)
     outcome, detail = controller.submit_task(
-        {"schema_version": 1, "task_id": "manual-1", "env": {"CI": "true"}}
+        {
+            "schema_version": 1,
+            "task_id": "manual-1",
+            "authority_reference": "grant-transport",
+            "execution_id": "ex-manual-1",
+            "env": {"CI": "true"},
+        }
     )
     assert outcome == "admitted"
+    assert detail == "ex-manual-1"  # canonical execution_id used verbatim
     assert store.get_execution(detail)["status"] == lifecycle.COMPLETE
 
 
@@ -148,12 +161,25 @@ def test_submit_rejects_bad_env(config, store, fake_docker, fake_github, fake_wo
     from controller.config import ConfigError
 
     with pytest.raises(ConfigError):
-        controller.submit_task({"schema_version": 1, "task_id": "bad", "env": {"EVIL_TOKEN": "x"}})
+        controller.submit_task(
+            {
+                "schema_version": 1,
+                "task_id": "bad",
+                "authority_reference": "grant-transport",
+                "execution_id": "ex-bad",
+                "env": {"EVIL_TOKEN": "x"},
+            }
+        )
 
 
 def test_submit_idempotent_existing(config, store, fake_docker, fake_github, fake_worker_manager):
     controller = _make_controller(config, store, fake_docker, fake_github, fake_worker_manager)
-    definition = {"schema_version": 1, "task_id": "dup-1"}
+    definition = {
+        "schema_version": 1,
+        "task_id": "dup-1",
+        "authority_reference": "grant-transport",
+        "execution_id": "ex-dup-1",
+    }
     outcome1, _ = controller.submit_task(definition)
     outcome2, _detail2 = controller.submit_task(definition)
     assert outcome1 == "admitted"
@@ -167,9 +193,11 @@ def test_submit_conflict_rejected(config, store, fake_docker, fake_github, fake_
     from controller.state import TaskConflictError
 
     controller = _make_controller(config, store, fake_docker, fake_github, fake_worker_manager)
-    controller.submit_task({"schema_version": 1, "task_id": "c-1", "job_name": "a"})
+    base = {"schema_version": 1, "task_id": "c-1", "authority_reference": "grant-transport",
+        "execution_id": "ex-c-1"}
+    controller.submit_task({**base, "job_name": "a"})
     with pytest.raises(TaskConflictError):
-        controller.submit_task({"schema_version": 1, "task_id": "c-1", "job_name": "b"})
+        controller.submit_task({**base, "job_name": "b", "execution_id": "ex-c-2"})
 
 
 def test_health_report(tmp_path, store, fake_docker, fake_github, config):

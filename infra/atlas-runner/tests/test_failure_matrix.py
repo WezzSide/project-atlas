@@ -199,6 +199,7 @@ def test_h_controller_restart_recovers(
         "github_job_id": 9,
         "job_name": "",
         "labels": ["self-hosted"],
+        "authority_reference": config.transport_grant_id,
     }
     store.submit_task(task_id, definition)
     execution_id = store.create_execution(
@@ -237,6 +238,11 @@ def test_h_controller_restart_recovers(
         config=config, store=reopened, docker=fake_docker, github=github2,
         sleeper=lambda *_: None,
     )
+    from controller.grants import GrantStore
+
+    grants = GrantStore(reopened.db_path.parent / "grants.db")
+    grants.issue(config.transport_grant_id, budget=1000)
+    controller.attach_grants(grants)
     controller.admit_queued_jobs()
     # same (run, attempt, job) after restart -> duplicate suppressed, no respawn
     assert reopened.find_execution_by_job(555, 1, 9)["execution_id"] == execution_id

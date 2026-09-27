@@ -51,12 +51,17 @@ def _load_task_file(path: str) -> dict:
 
 
 def _validate_task_schema(task: dict) -> None:
-    """Validate a submitted task against the worker-task contract (stdlib)."""
-    from controller.schemas import validate_worker_task
+    """Validate a submitted task against the Atlas task-binding contract.
 
-    errors = validate_worker_task(task)
+    The binding schema is the admission contract (authority_reference and
+    execution_id required); the worker-task schema applies to the per-worker
+    payload, not to admission.
+    """
+    from controller.schemas import validate_task_binding
+
+    errors = validate_task_binding(task)
     if errors:
-        raise ConfigError("task rejected by worker-task schema: " + "; ".join(errors))
+        raise ConfigError("task rejected by task-binding schema: " + "; ".join(errors))
 
 
 def cmd_run(args: argparse.Namespace) -> int:

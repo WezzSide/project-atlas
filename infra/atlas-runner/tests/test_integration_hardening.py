@@ -79,7 +79,9 @@ def _controller_with_grants(tmp_path, config, store, fake_docker, fake_github, f
         worker_manager=fake_worker_manager,
         sleeper=lambda *_: None,
     )
-    controller.attach_grants(_grant_store(tmp_path))
+    grants = _grant_store(tmp_path)
+    grants.issue(config.transport_grant_id, budget=1000)
+    controller.attach_grants(grants)
     return controller
 
 
@@ -91,7 +93,12 @@ def test_controller_rejects_task_without_resolvable_grant(
     )
     with pytest.raises(GrantUnknownError):
         controller.submit_task(
-            {"task_id": "t-x", "authority_reference": "grant-nope", "executor_type": "claude"}
+            {
+                "task_id": "t-x",
+                "authority_reference": "grant-nope",
+                "executor_type": "claude",
+                "execution_id": "ex-nope",
+            }
         )
 
 
@@ -116,12 +123,19 @@ def test_controller_consumes_grant_on_admission(
         "authority_reference": "g-real",
         "repository": "atlas-owner/atlas-repo",
         "executor_type": "claude",
+        "execution_id": "ex-real",
     }
     outcome, _ = controller.submit_task(definition, validate=False)
     assert outcome == "admitted"
     # one-shot: a second admission against the same grant fails closed
+    # one-shot: a NEW task against the consumed grant fails closed ...
     with pytest.raises(GrantConsumedError):
-        controller.submit_task({**definition, "task_id": "t-real-2"}, validate=False)
+        controller.submit_task(
+            {**definition, "task_id": "t-real-2", "execution_id": "ex-real-2"}, validate=False
+        )
+    # ... while re-submitting the SAME task idempotently does not re-consume
+    outcome, _ = controller.submit_task(definition, validate=False)
+    assert outcome == "existing_terminal"
 
 
 def _binding(**overrides) -> dict:
@@ -166,6 +180,9 @@ def test_same_run_attempt_distinct_jobs_both_admitted(
         worker_manager=fake_worker_manager,
         sleeper=lambda *_: None,
     )
+    grants = _grant_store(workspace)
+    grants.issue(config.transport_grant_id, budget=1000)
+    controller.attach_grants(grants)
     fake_github.queued = [_queued(700, 1, 1), _queued(700, 1, 2)]
     admitted = controller.admit_queued_jobs()
     assert sorted(admitted) == ["gh-700-1-1", "gh-700-1-2"]
@@ -184,6 +201,9 @@ def test_rerun_attempt_is_separate_identity(
         worker_manager=fake_worker_manager,
         sleeper=lambda *_: None,
     )
+    grants = _grant_store(workspace)
+    grants.issue(config.transport_grant_id, budget=1000)
+    controller.attach_grants(grants)
     fake_github.queued = [_queued(701, 1, 5)]
     assert controller.admit_queued_jobs() == ["gh-701-1-5"]
     fake_github.queued = [_queued(701, 2, 5)]

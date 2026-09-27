@@ -29,6 +29,66 @@ TASK_ALLOWED = (
 )
 
 
+_REV_RE = re.compile(r"^[0-9a-f]{40}$")
+_BINDING_REQUIRED = (
+    "schema_version",
+    "task_id",
+    "repository",
+    "base_revision",
+    "executor_type",
+    "authority_reference",
+    "execution_id",
+    "execution",
+)
+# Keep in lockstep with the published schema's property set (additionalProperties: false).
+_BINDING_ALLOWED = (
+    *_BINDING_REQUIRED,
+    "evidence_requirements",
+    "platform",
+    "resource_class",
+    "timeout_seconds",
+)
+_EXECUTORS = (
+    "claude", "codex", "copilot", "gemini", "aider", "opencode", "qwen",
+    "atlas-native", "deterministic",
+)
+
+
+def validate_task_binding(task: object) -> list[str]:
+    """Stdlib mirror of schemas/atlas-task-binding.schema.json (admission
+    contract). Fail closed; kept in lockstep with the published schema."""
+    errors: list[str] = []
+    if not isinstance(task, dict):
+        return ["task is not an object"]
+    for key in task:
+        if key not in _BINDING_ALLOWED:
+            errors.append(f"unexpected field: {key}")
+    for key in _BINDING_REQUIRED:
+        if key not in task:
+            errors.append(f"missing field: {key}")
+    if errors:
+        return errors
+    if task["schema_version"] != 1:
+        errors.append("schema_version must be 1")
+    if not isinstance(task["task_id"], str) or not _ID_RE.match(task["task_id"]):
+        errors.append("task_id must match the id pattern")
+    for key in ("authority_reference", "execution_id"):
+        if not isinstance(task[key], str) or not _ID_RE.match(task[key]):
+            errors.append(f"{key} must be a non-empty id string")
+    if not isinstance(task["repository"], str) or "/" not in task["repository"]:
+        errors.append("repository must be owner/name")
+    if not _REV_RE.match(str(task["base_revision"])):
+        errors.append("base_revision must be a 40-hex revision")
+    if task["executor_type"] not in _EXECUTORS:
+        errors.append(f"unsupported executor_type: {task['executor_type']!r}")
+    execution = task["execution"]
+    if not isinstance(execution, dict) or (not (
+        isinstance(execution.get("command"), str) and execution["command"]
+    ) and not (isinstance(execution.get("prompt"), str) and execution["prompt"])):
+        errors.append("execution must carry a non-empty command or prompt")
+    return errors
+
+
 def validate_worker_task(task: object) -> list[str]:
     """Return validation errors (empty == valid). Fail closed."""
     errors: list[str] = []

@@ -94,8 +94,12 @@ class GrantStore:
     ) -> None:
         now = time.time() if now is None else now
         with self._lock, self._conn:
+            # Grants are immutable: reissuing an existing id is rejected
+            # (authority drift). Change scope by revoking and minting a new id.
+            if self.get(grant_id) is not None:
+                raise GrantError(f"grant {grant_id!r} already exists; grants are immutable")
             self._conn.execute(
-                "INSERT OR REPLACE INTO grants(grant_id, scope_json, repository,"
+                "INSERT INTO grants(grant_id, scope_json, repository,"
                 " base_revision, executor_type, status, expires_at, budget, consumed,"
                 " created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 (
@@ -171,6 +175,16 @@ class GrantStore:
             )
             if cur.rowcount == 0:
                 raise GrantConsumedError(f"grant {grant_id!r} budget exhausted")
+
+    def refund(self, grant_id: str, *, now: float | None = None) -> None:
+        """Return one unit of budget (atomic-admission recovery only)."""
+        now = time.time() if now is None else now
+        with self._lock, self._conn:
+            self._conn.execute(
+                "UPDATE grants SET consumed = MAX(0, consumed - 1), updated_at = ?"
+                " WHERE grant_id = ?",
+                (now, grant_id),
+            )
 
     def revoke(self, grant_id: str, *, now: float | None = None) -> None:
         now = time.time() if now is None else now

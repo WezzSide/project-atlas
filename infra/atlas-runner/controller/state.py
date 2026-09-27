@@ -240,8 +240,15 @@ class StateStore:
         github_run_attempt: int | None = None,
         github_job_id: int | None = None,
         worker_name: str | None = None,
+        execution_id: str | None = None,
     ) -> str:
-        execution_id = f"ex-{uuid.uuid4().hex[:16]}"
+        # Canonical execution identity: Atlas-issued tasks carry an explicit
+        # execution_id which must be unique; internal/transport tasks get a
+        # generated id from the single authoritative allocator (this store).
+        if execution_id is None:
+            execution_id = f"ex-{uuid.uuid4().hex[:16]}"
+        elif self.get_execution(execution_id) is not None:
+            raise StateError(f"execution_id {execution_id!r} already exists")
         now = time.time()
         with self._conn:
             self._conn.execute(
@@ -305,6 +312,9 @@ class StateStore:
                 "UPDATE executions SET reconciled = 1, updated_at = ? WHERE execution_id = ?",
                 (time.time(), execution_id),
             )
+
+    def is_terminal_task_status(self, status: str) -> bool:
+        return status == "REJECTED" or lifecycle.is_terminal(status)
 
     def active_executions(self) -> list[dict]:
         rows = self._conn.execute(
