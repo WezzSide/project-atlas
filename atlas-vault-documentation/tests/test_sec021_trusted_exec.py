@@ -169,6 +169,8 @@ class TestNormalizeEventTrustedBoundary:
             encoding="utf-8",
         )
         monkeypatch.chdir(tmp_path)
+        # This case asserts missing-default behavior; ignore the operator's PATH.
+        monkeypatch.setenv("PATH", str(tmp_path))
         monkeypatch.delenv("ATLAS_MDA_COMMAND", raising=False)
         monkeypatch.delenv("ATLAS_AGENT_CONFIG", raising=False)
         # Scrub PATH to a synthetic, empty-of-`mda` directory so this test's

@@ -15301,3 +15301,9 @@ GitHub artifacts; fragment merge is future work); setup-python unsupported
 on the worker image (use the image's python3); CLAUDE_E2E=
 NOT_RUN_REQUIRES_EXTERNAL_AUTHORITY (no ANTHROPIC_API_KEY).
 EXECUTOR_SUCCESS != VERIFIED; PASS != MERGE AUTHORIZATION.
+# 2026-09-27 — AS-CTRL-EVENT-REPROCESS-001 recovery
+
+- Resumed the existing governed repair session after workspace-scoped provider authorization passed. Public `reprocess-events` recovered its registered events; final persisted counters are 4/4/4/4 with no pending spool work. The historical R4 session remained unchanged during tool-repair closeout.
+- Added a public, session-bound recovery command that discovers only registered raw events, validates Vault/session/skill bindings, reuses accepted normalized artifacts, preserves a known rejected artifact before retry, routes idempotently, and reconciles counters only after the full batch succeeds. Atomic session writes and a shared cross-platform Vault normalization lock preserve recovery state across interruptions.
+- The repair session passed validate and postflight and returned real evidence-only receipt `ASR-f879df59d6c1c38e`. The public receipt command confirmed the persisted receipt. A full Control Plane suite passed (**221 passed**); focused reprocess tests passed (**27 passed**); instruction verification and Atlas doctor passed; `git diff --check` passed. Local Ruff was unavailable in the execution interpreter. Security diff review covered all four changed source files and found zero reportable findings.
+- Remote CI, exact-head independent verification, immutable candidate, and historical R4 recovery remain pending.
