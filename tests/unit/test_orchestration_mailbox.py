@@ -1702,10 +1702,10 @@ def test_n3_restart_during_materialization_recovers_with_new_fenced_claim(
 
 
 def _r4_prepared_successor(
-    tmp_path: Path, message_id: str
+    tmp_path: Path, message_id: str, *, task_id: str = "SOURCE-DELEGATION-001"
 ) -> tuple[AgentMailbox, AutonomousGovernor, MailboxGovernorBridge, MailboxSuccessorRecord]:
     mailbox = AgentMailbox(tmp_path, project_id="project-atlas")
-    _processed_for_admission(mailbox, _message(message_id=message_id))
+    _processed_for_admission(mailbox, _message(message_id=message_id, task_id=task_id))
     governor = _governor()
     bridge = MailboxGovernorBridge(
         mailbox=mailbox, governor=governor, authority_verifier=lambda _item: True
@@ -2076,6 +2076,54 @@ def test_r4_recovery_claim_rejects_generation_mismatch(tmp_path: Path) -> None:
     assert not won
     assert recovered.lifecycle == SuccessorLifecycle.MATERIALIZING
     assert recovered.materialization_owner_token == "owner-current"
+
+
+def test_r4_guard_path_mutation_cannot_recover_another_successor(
+    tmp_path: Path,
+) -> None:
+    mailbox, _governor, _bridge, first = _r4_prepared_successor(tmp_path, "r4-guard-path-first")
+    second_mailbox, _governor, _bridge, _ = _r4_prepared_successor(
+        tmp_path, "r4-guard-path-second", task_id="SOURCE-DELEGATION-002"
+    )
+    second = next(
+        record
+        for record in second_mailbox.successor_records()
+        if record.binding.package_id != first.binding.package_id
+    )
+
+    with mailbox.materialization_guard(second.binding.package_id, second.generation) as guard:
+        claimed, won = mailbox.claim_materialization(
+            second.binding.package_id,
+            generation=second.generation,
+            expected_revision=second.lifecycle_revision,
+            owner_token="owner-second",
+            guard=guard,
+        )
+    assert won and claimed.lifecycle == SuccessorLifecycle.MATERIALIZING
+
+    second_path = mailbox.materialization_guard(second.binding.package_id, second.generation).path
+    with mailbox.materialization_guard(first.binding.package_id, first.generation) as guard:
+        acquired_path = guard.path
+        guard.path = second_path
+        try:
+            with pytest.raises(MailboxError) as exc_info:
+                mailbox.recover_materialization_claim(
+                    second.binding.package_id,
+                    generation=claimed.generation,
+                    expected_revision=claimed.lifecycle_revision,
+                    expected_owner_token=claimed.materialization_owner_token,
+                    expected_lifecycle=SuccessorLifecycle.MATERIALIZING,
+                    new_owner_token="owner-cross-generation-forged",
+                    guard=guard,
+                )
+        finally:
+            guard.path = acquired_path
+
+    assert exc_info.value.code == "MATERIALIZATION_GUARD_REQUIRED"
+    current = mailbox.get_successor(second.binding.package_id)
+    assert current is not None
+    assert current.lifecycle_revision == claimed.lifecycle_revision
+    assert current.materialization_owner_token == "owner-second"
 
 
 def test_r4_active_materialization_guard_is_not_stolen(tmp_path: Path) -> None:

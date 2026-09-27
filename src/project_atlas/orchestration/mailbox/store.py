@@ -79,7 +79,7 @@ class _MailboxFileLock(AbstractContextManager["_MailboxFileLock"]):
                     fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
                 self._handle = handle
                 self._locked = True
-                _ACTIVE_MAILBOX_FILE_LOCKS[self] = handle
+                _ACTIVE_MAILBOX_FILE_LOCKS[self] = (handle, self.path)
                 return self
             except OSError as exc:
                 if isinstance(exc, OSError) and exc.errno not in {
@@ -102,9 +102,10 @@ class _MailboxFileLock(AbstractContextManager["_MailboxFileLock"]):
         exc: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
-        handle = _ACTIVE_MAILBOX_FILE_LOCKS.pop(self, None)
-        if handle is None:
+        ownership = _ACTIVE_MAILBOX_FILE_LOCKS.pop(self, None)
+        if ownership is None:
             return None
+        handle, _acquired_path = ownership
         self._locked = False
         try:
             if os.name == "nt":
@@ -120,8 +121,18 @@ class _MailboxFileLock(AbstractContextManager["_MailboxFileLock"]):
             self._handle = None
         return None
 
+    def owns_path(self, expected_path: Path) -> bool:
+        """Whether this acquired lock owns the immutable path it was opened for."""
+        ownership = _ACTIVE_MAILBOX_FILE_LOCKS.get(self)
+        return (
+            ownership is not None
+            and ownership[0] is self._handle
+            and ownership[1] == expected_path
+            and self.path == expected_path
+        )
 
-_ACTIVE_MAILBOX_FILE_LOCKS: weakref.WeakKeyDictionary[_MailboxFileLock, BinaryIO] = (
+
+_ACTIVE_MAILBOX_FILE_LOCKS: weakref.WeakKeyDictionary[_MailboxFileLock, tuple[BinaryIO, Path]] = (
     weakref.WeakKeyDictionary()
 )
 
@@ -237,7 +248,7 @@ class AgentMailbox:
         self, package_id: str, generation: int, guard: _MailboxFileLock
     ) -> None:
         expected = self.materialization_guard(package_id, generation).path
-        if type(guard) is not _MailboxFileLock or not guard.held or guard.path != expected:
+        if type(guard) is not _MailboxFileLock or not guard.held or not guard.owns_path(expected):
             raise MailboxError(
                 "materialization operation requires its generation guard",
                 code="MATERIALIZATION_GUARD_REQUIRED",
