@@ -8,8 +8,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 INFRA = Path(__file__).resolve().parents[1]
 VERIFY = Path(__file__).resolve().parents[3] / ".github" / "workflows" / "atlas-runner-verify.yml"
+_IN_CHECKOUT = VERIFY.parent.is_dir()
 
 sys.path.insert(0, str(INFRA))
 from conftest import drive_to_state  # noqa: E402
@@ -21,6 +24,8 @@ from controller.cli import _fabric_state  # noqa: E402
 
 
 def test_verifier_classifies_fields_and_fails_closed() -> None:
+    if not _IN_CHECKOUT:
+        pytest.skip("workflow file unavailable outside a git checkout")
     text = VERIFY.read_text(encoding="utf-8")
     # mandatory runner identity sourced from the canonical jobs API
     assert "actions/runs/" in text and "/jobs?per_page=100" in text
@@ -36,6 +41,8 @@ def test_verifier_classifies_fields_and_fails_closed() -> None:
 
 
 def test_verifier_rejects_on_unestablished_exit() -> None:
+    if not _IN_CHECKOUT:
+        pytest.skip("workflow file unavailable outside a git checkout")
     text = VERIFY.read_text(encoding="utf-8")
     assert 'if report["verdict"] in {"REJECTED", "UNESTABLISHED"}:' in text
 
