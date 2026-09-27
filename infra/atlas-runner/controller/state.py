@@ -306,6 +306,10 @@ class StateStore:
                 (time.time(), execution_id),
             )
 
+    def all_executions(self) -> list[dict]:
+        rows = self._conn.execute("SELECT * FROM executions ORDER BY created_at").fetchall()
+        return [dict(r) for r in rows]
+
     def active_executions(self) -> list[dict]:
         rows = self._conn.execute(
             "SELECT * FROM executions WHERE status NOT IN"
@@ -390,6 +394,7 @@ class StateStore:
             "lease_owner",
             "lease_expires",
             "evidence_path",
+            "cleanup_status",
         }
         unknown = set(fields) - allowed
         if unknown:

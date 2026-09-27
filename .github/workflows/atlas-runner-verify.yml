@@ -104,6 +104,8 @@ jobs:
       - name: Verify evidence (schema, hashes, semantics) and emit report
         env:
           SOURCE_RUN_ID: ${{ steps.source.outputs.run-id }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
           python - <<'PY'
@@ -179,25 +181,66 @@ jobs:
                   hash_details.append(f"{name}: {actual}")
           record("artifact_sha256_recomputed", hash_ok, "; ".join(hash_details) or "no artifacts claimed")
 
-          # 3. Runner identity: labels must be a subset of the atlas executor
-          #    label set; runner_name must not look GitHub-hosted. The in-job
-          #    fragment legitimately omits identity fields (they live in the
-          #    host-side full evidence record), so absence is a documented
-          #    pass-with-note, consistent with labels/cleanup handling below.
-          labels = set(fragment.get("runner_labels") or [])
-          label_ok = labels <= ALLOWED_LABELS
-          record("runner_labels_subset", label_ok, f"labels={sorted(labels) or 'NOT_PRESENT (fragment omits; full evidence is host-side)'}")
-          name = fragment.get("runner_name")
-          if name is None:
-              record("runner_name_not_github_hosted", True, "NOT_PRESENT (full evidence is host-side)")
+          # 3. Runner identity (MANDATORY, Band D): sourced from the GitHub
+          #    jobs API — the canonical full evidence for runner identity —
+          #    instead of pass-with-note on a fragment omission. Unavailable
+          #    mandatory evidence yields UNESTABLISHED, never a silent PASS.
+          import urllib.request
+          import os as _os
+
+          runner_name_api = None
+          runner_labels_api = None
+          api_error = None
+          try:
+              req = urllib.request.Request(
+                  f"https://api.github.com/repos/{_os.environ['GITHUB_REPOSITORY']}"
+                  f"/actions/runs/{report['source_run_id']}/jobs?per_page=100",
+                  headers={
+                      "Authorization": f"Bearer {_os.environ['GH_TOKEN']}",
+                      "Accept": "application/vnd.github+json",
+                  },
+              )
+              with urllib.request.urlopen(req, timeout=30) as resp:
+                  jobs_payload = json.loads(resp.read().decode("utf-8"))
+              for job in jobs_payload.get("jobs", []):
+                  labels = [l.get("name", "") for l in (job.get("labels") or [])]
+                  if "atlas" in labels or "self-hosted" in labels:
+                      runner_name_api = job.get("runner_name")
+                      runner_labels_api = labels
+                      break
+          except Exception as exc:  # noqa: BLE001 - any API failure is UNESTABLISHED
+              api_error = str(exc)[:200]
+
+          if api_error is not None:
+              record("runner_identity_from_api", False, f"jobs API unavailable: {api_error}")
+              report["verdict"] = "UNESTABLISHED"
+          elif not runner_name_api:
+              record("runner_identity_from_api", False, "no atlas/self-hosted job found in source run")
+              report["verdict"] = "UNESTABLISHED"
           else:
-              name_ok = bool(name) and not GITHUB_HOSTED_NAME.match(str(name))
-              record("runner_name_not_github_hosted", name_ok, f"runner_name={name}")
+              name_ok = not GITHUB_HOSTED_NAME.match(str(runner_name_api))
+              labels = set(runner_labels_api or [])
+              label_ok = labels <= ALLOWED_LABELS
+              record(
+                  "runner_identity_from_api",
+                  name_ok and label_ok,
+                  f"runner_name={runner_name_api} labels={sorted(labels)}",
+              )
+
+          # Fragment-carried identity (CONTEXT_DEPENDENT): when the fragment
+          # includes runner fields they must agree with the API-sourced truth.
+          frag_name = fragment.get("runner_name")
+          if frag_name is not None and runner_name_api is not None:
+              record("fragment_runner_name_matches_api", frag_name == runner_name_api,
+                     f"fragment={frag_name} api={runner_name_api}")
 
           # 4. cleanup_status semantics (when present).
+          # CONTEXT_DEPENDENT: the fragment may legitimately omit cleanup;
+          # when present it must be a known value. (Full canonical cleanup
+          # evidence ships in the host-side evidence record.)
           cleanup = fragment.get("cleanup_status")
           if cleanup is None:
-              record("cleanup_status", True, "NOT_PRESENT (full evidence is host-side)")
+              record("cleanup_status", True, "NOT_PRESENT (context-dependent; full evidence is host-side)")
           else:
               record("cleanup_status_ok", cleanup in {"ok", "failed", "unknown"}, f"cleanup_status={cleanup}")
 
@@ -219,8 +262,14 @@ jobs:
               sem_ok = True
               record("complete_claim_semantics", True, f"terminal_status={terminal} (not a complete claim)")
 
+          # Band D verdict semantics: VERIFIED means every REQUIRED assertion
+          # was actually evidenced. Violations -> REJECTED. Mandatory evidence
+          # unavailable (e.g. runner identity API unreachable) -> UNESTABLISHED.
           all_ok = all(c["result"] == "PASS" for c in report["checks"])
-          report["verdict"] = "VERIFIED" if all_ok else "REJECTED"
+          if report["verdict"] == "UNESTABLISHED":
+              pass  # already set by the mandatory-evidence path
+          else:
+              report["verdict"] = "VERIFIED" if all_ok else "REJECTED"
           Path("verification-report.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
           print(f"VERDICT: {report['verdict']}")
           summary = Path(__import__("os").environ["GITHUB_STEP_SUMMARY"])
@@ -230,8 +279,8 @@ jobs:
               for check in report["checks"]:
                   handle.write(f"- **{check['result']}** — {check['check']}: {check['detail']}\n")
               handle.write(f"\n**Verdict: {report['verdict']}**\n")
-          if not all_ok:
-              print(f"::error::verification REJECTED for run {report['source_run_id']}")
+          if report["verdict"] in {"REJECTED", "UNESTABLISHED"}:
+              print(f"::error::verification {report['verdict']} for run {report['source_run_id']}")
               sys.exit(1)
           PY
 
