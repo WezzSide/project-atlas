@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS executions (
     task_id TEXT NOT NULL,
     github_run_id INTEGER,
     github_run_attempt INTEGER,
+    github_job_id INTEGER,
     worker_name TEXT,
     runner_name TEXT,
     status TEXT NOT NULL,
@@ -53,9 +54,12 @@ CREATE TABLE IF NOT EXISTS executions (
     finished_at REAL,
     lease_owner TEXT,
     lease_expires REAL,
-    evidence_path TEXT
+    evidence_path TEXT,
+    verifier_verdict TEXT,
+    reconciled INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_executions_status ON executions(status);
+
 CREATE INDEX IF NOT EXISTS idx_executions_task ON executions(task_id);
 
 CREATE TABLE IF NOT EXISTS audit_log (
@@ -73,6 +77,19 @@ CREATE TABLE IF NOT EXISTS heartbeats (
     pid INTEGER NOT NULL
 );
 """
+
+
+def _migrate_columns(conn) -> None:
+    """Idempotent column additions for databases created before a column existed."""
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(executions)")}
+    additions = {
+        "github_job_id": "INTEGER",
+        "verifier_verdict": "TEXT",
+        "reconciled": "INTEGER NOT NULL DEFAULT 0",
+    }
+    for name, ddl in additions.items():
+        if name not in cols:
+            conn.execute(f"ALTER TABLE executions ADD COLUMN {name} {ddl}")
 
 
 class StateError(RuntimeError):
@@ -119,6 +136,7 @@ class StateStore:
     def _migrate(self) -> None:
         with self._conn:
             self._conn.executescript(_SCHEMA)
+            _migrate_columns(self._conn)
             self._conn.execute(
                 "INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', ?)",
                 (str(SCHEMA_VERSION),),
@@ -220,6 +238,7 @@ class StateStore:
         definition_hash: str,
         github_run_id: int | None = None,
         github_run_attempt: int | None = None,
+        github_job_id: int | None = None,
         worker_name: str | None = None,
     ) -> str:
         execution_id = f"ex-{uuid.uuid4().hex[:16]}"
@@ -227,13 +246,15 @@ class StateStore:
         with self._conn:
             self._conn.execute(
                 "INSERT INTO executions(execution_id, task_id, github_run_id,"
-                " github_run_attempt, worker_name, status, definition_hash, created_at, updated_at)"
-                " VALUES (?,?,?,?,?,?,?,?,?)",
+                " github_run_attempt, github_job_id, worker_name, status, definition_hash,"
+                " created_at, updated_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?)",
                 (
                     execution_id,
                     task_id,
                     github_run_id,
                     github_run_attempt,
+                    github_job_id,
                     worker_name,
                     lifecycle.REQUESTED,
                     definition_hash,
@@ -253,13 +274,37 @@ class StateStore:
         ).fetchone()
         return dict(row) if row else None
 
-    def find_execution_by_run(self, run_id: int, run_attempt: int) -> dict | None:
+    def find_execution_by_job(
+        self, run_id: int, run_attempt: int, job_id: int
+    ) -> dict | None:
+        """Dedupe identity for queued GitHub jobs: (run, attempt, job).
+
+        Distinct jobs within one run/attempt have distinct identities; a rerun
+        attempt is a separate identity by design.
+        """
         row = self._conn.execute(
             "SELECT * FROM executions WHERE github_run_id = ? AND github_run_attempt = ?"
-            " ORDER BY created_at DESC LIMIT 1",
-            (run_id, run_attempt),
+            " AND github_job_id = ? ORDER BY created_at DESC LIMIT 1",
+            (run_id, run_attempt, job_id),
         ).fetchone()
         return dict(row) if row else None
+
+    def record_verifier_verdict(self, execution_id: str, verdict: str) -> None:
+        if verdict not in {"PENDING", "VERIFIED", "REJECTED", "UNESTABLISHED"}:
+            raise ValueError(f"unknown verifier verdict {verdict!r}")
+        with self._lock, self._conn:
+            self._conn.execute(
+                "UPDATE executions SET verifier_verdict = ?, updated_at = ?"
+                " WHERE execution_id = ?",
+                (verdict, time.time(), execution_id),
+            )
+
+    def record_reconciled(self, execution_id: str) -> None:
+        with self._lock, self._conn:
+            self._conn.execute(
+                "UPDATE executions SET reconciled = 1, updated_at = ? WHERE execution_id = ?",
+                (time.time(), execution_id),
+            )
 
     def active_executions(self) -> list[dict]:
         rows = self._conn.execute(

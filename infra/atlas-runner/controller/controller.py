@@ -25,6 +25,11 @@ from controller.worker import WorkerManager
 class Capacity:
     """Host capacity snapshot used for admission control."""
 
+    grants = None  # optional GrantStore; set via attach_grants()
+
+    def attach_grants(self, grants) -> None:
+        self.grants = grants
+
     def __init__(self, *, free_memory_mb: int, free_disk_mb: int, active_workers: int):
         self.free_memory_mb = free_memory_mb
         self.free_disk_mb = free_disk_mb
@@ -66,6 +71,11 @@ def source_revision() -> str:
 
 
 class Controller:
+    grants = None  # optional GrantStore; set via attach_grants()
+
+    def attach_grants(self, grants) -> None:
+        self.grants = grants
+
     def __init__(
         self,
         *,
@@ -128,11 +138,10 @@ class Controller:
         for job in jobs:
             if self._stop:
                 break
-            existing = self.store.find_execution_by_run(job.run_id, job.run_attempt)
-            if existing is not None:
-                continue  # duplicate suppression: one execution per (run, attempt)
-            reason = self.admission_reason(self.capacity())
+            # Dedupe identity: (run_id, run_attempt, job_id) — distinct jobs in one
+            # run/attempt are distinct admissions; reruns are separate identities.
             task_id = f"gh-{job.run_id}-{job.run_attempt}-{job.job_id}"
+            reason = self.admission_reason(self.capacity())
             definition = {
                 "task_id": task_id,
                 "github_run_id": job.run_id,
@@ -143,13 +152,25 @@ class Controller:
             }
             outcome, _status = self.store.submit_task(task_id, definition)
             if outcome != "admitted":
+                # existing_terminal / existing_active: duplicate suppression keyed on
+                # (run_id, run_attempt, job_id) via the task identity above.
+                self.store.audit(
+                    "duplicate_suppressed",
+                    task_id=task_id,
+                    detail={"run_id": job.run_id, "run_attempt": job.run_attempt,
+                            "job_id": job.job_id, "outcome": outcome},
+                )
                 continue
             if reason is not None:
                 # Stay REQUESTED with reason; re-evaluated next poll. No crash loop.
                 self.store.audit("admission_deferred", task_id=task_id, detail={"reason": reason})
                 continue
             self._start_execution(
-                task_id, definition, run_id=job.run_id, run_attempt=job.run_attempt
+                task_id,
+                definition,
+                run_id=job.run_id,
+                run_attempt=job.run_attempt,
+                github_job_id=job.job_id,
             )
             admitted.append(task_id)
         return admitted
@@ -161,7 +182,22 @@ class Controller:
             raise ValueError("task definition requires a non-empty 'task_id'")
         if validate:
             validate_task_env(definition.get("env") or {}, allow=self.config.allow_secret_env)
+        authority = definition.get("authority_reference")
+        if authority:
+            # Atlas-issued production tasks must resolve to a durable grant record.
+            # workflow_dispatch / transport records are never authority (EVIDENCE != AUTHORITY).
+            if self.grants is None:
+                raise ValueError("authority_reference present but no grant registry configured")
+            self.grants.validate(
+                str(authority),
+                task_id=task_id,
+                repository=definition.get("repository"),
+                base_revision=definition.get("base_revision"),
+                executor_type=definition.get("executor_type"),
+            )
         outcome, status = self.store.submit_task(task_id, definition)
+        if outcome == "admitted" and authority:
+            self.grants.consume(str(authority))
         if outcome == "admitted":
             self._start_execution(
                 task_id,
@@ -191,6 +227,7 @@ class Controller:
         *,
         run_id: int | None,
         run_attempt: int | None,
+        github_job_id: int | None = None,
     ) -> str:
         digest = definition_hash(definition)
         execution_id = self.store.create_execution(
@@ -198,6 +235,7 @@ class Controller:
             definition_hash=digest,
             github_run_id=run_id,
             github_run_attempt=run_attempt,
+            github_job_id=github_job_id,
         )
         execution = self.store.get_execution(execution_id)
         self.store.transition(execution_id, lifecycle.ADMITTED)

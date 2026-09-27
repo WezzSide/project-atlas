@@ -191,10 +191,22 @@ def test_h_controller_restart_recovers(
     config, store, fake_docker, fake_github, fake_clock, workspace
 ):
     """Mid-lifecycle restart: state reopens, reconcile resolves, no duplicate."""
-    definition = _definition(task_id="task-h")
-    store.submit_task(definition["task_id"], definition)
+    task_id = "gh-555-1-9"
+    definition = {
+        "task_id": task_id,
+        "github_run_id": 555,
+        "github_run_attempt": 1,
+        "github_job_id": 9,
+        "job_name": "",
+        "labels": ["self-hosted"],
+    }
+    store.submit_task(task_id, definition)
     execution_id = store.create_execution(
-        task_id=definition["task_id"], definition_hash="h", github_run_id=555, github_run_attempt=1
+        task_id=task_id,
+        definition_hash="h",
+        github_run_id=555,
+        github_run_attempt=1,
+        github_job_id=9,
     )
     store.transition(execution_id, lifecycle.ADMITTED)
     store.transition(execution_id, lifecycle.PROVISIONING)
@@ -218,7 +230,7 @@ def test_h_controller_restart_recovers(
         {
             "id": 555,
             "run_attempt": 1,
-            "jobs": [{"id": 1, "status": "queued", "labels": ["self-hosted"]}],
+            "jobs": [{"id": 9, "status": "queued", "labels": ["self-hosted"]}],
         }
     ]
     controller = Controller(
@@ -226,7 +238,8 @@ def test_h_controller_restart_recovers(
         sleeper=lambda *_: None,
     )
     controller.admit_queued_jobs()
-    assert reopened.find_execution_by_run(555, 1)["execution_id"] == execution_id
+    # same (run, attempt, job) after restart -> duplicate suppressed, no respawn
+    assert reopened.find_execution_by_job(555, 1, 9)["execution_id"] == execution_id
     assert "run_worker" not in fake_docker.call_names()
     reopened.close()
 

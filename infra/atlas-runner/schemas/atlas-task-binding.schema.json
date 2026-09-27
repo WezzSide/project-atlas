@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://project-atlas.local/schemas/atlas-task-binding.schema.json",
   "title": "AtlasTaskBinding",
-  "description": "ATLAS-RUNNER-FABRIC-001 adapter contract — what Atlas supplies to the runner fabric. The fabric is an execution backend of Atlas, not a parallel control plane. Atlas owns authority; EXECUTOR_SUCCESS != VERIFIED. additionalProperties: false.",
+  "description": "ATLAS-RUNNER-FABRIC-001 adapter contract \u2014 what Atlas supplies to the runner fabric. The fabric is an execution backend of Atlas, not a parallel control plane. Atlas owns authority; EXECUTOR_SUCCESS != VERIFIED. additionalProperties: false.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -12,10 +12,13 @@
     "base_revision",
     "executor_type",
     "execution",
-    "authority_reference"
+    "authority_reference",
+    "execution_id"
   ],
   "properties": {
-    "schema_version": { "const": 1 },
+    "schema_version": {
+      "const": 1
+    },
     "task_id": {
       "type": "string",
       "minLength": 1,
@@ -23,15 +26,10 @@
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
     },
     "execution_id": {
-      "oneOf": [
-        { "type": "null" },
-        {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128,
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
-        }
-      ]
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
     },
     "repository": {
       "type": "string",
@@ -39,7 +37,10 @@
       "maxLength": 256,
       "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
     },
-    "base_revision": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "base_revision": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
     "executor_type": {
       "enum": [
         "claude",
@@ -57,20 +58,36 @@
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["command"],
+          "required": [
+            "command"
+          ],
           "properties": {
-            "command": { "type": "string", "minLength": 1, "maxLength": 4096 }
+            "command": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            }
           }
         },
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["prompt"],
+          "required": [
+            "prompt"
+          ],
           "properties": {
-            "prompt": { "type": "string", "minLength": 1, "maxLength": 8000 },
+            "prompt": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 8000
+            },
             "allowed_tools": {
               "type": "array",
-              "items": { "type": "string", "minLength": 1, "maxLength": 256 }
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
             }
           }
         }
@@ -83,7 +100,11 @@
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
     },
     "resource_class": {
-      "enum": ["small", "standard", "large"],
+      "enum": [
+        "small",
+        "standard",
+        "large"
+      ],
       "default": "standard"
     },
     "timeout_seconds": {
@@ -93,18 +114,31 @@
       "default": 1800
     },
     "platform": {
-      "enum": ["linux", "windows"],
+      "enum": [
+        "linux",
+        "windows"
+      ],
       "default": "linux"
     },
     "evidence_requirements": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "require_tests": { "type": "boolean", "default": true },
-        "require_artifacts": { "type": "boolean", "default": true },
+        "require_tests": {
+          "type": "boolean",
+          "default": true
+        },
+        "require_artifacts": {
+          "type": "boolean",
+          "default": true
+        },
         "fields": {
           "type": "array",
-          "items": { "type": "string", "minLength": 1, "maxLength": 128 }
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
         }
       }
     }

@@ -129,12 +129,13 @@ def test_lease_reacquirable_after_expiry(store, fake_clock):
     store.acquire_lease(execution_id, ttl_seconds=10, owner="b")  # must not raise
 
 
-def test_find_execution_by_run_and_duplicates(store):
+def test_find_execution_by_job_and_duplicates(store):
     e1 = store.create_execution(
-        task_id="t", definition_hash="h", github_run_id=42, github_run_attempt=1
+        task_id="t", definition_hash="h", github_run_id=42, github_run_attempt=1, github_job_id=7
     )
-    assert store.find_execution_by_run(42, 1)["execution_id"] == e1
-    assert store.find_execution_by_run(42, 2) is None
+    assert store.find_execution_by_job(42, 1, 7)["execution_id"] == e1
+    assert store.find_execution_by_job(42, 1, 8) is None
+    assert store.find_execution_by_job(42, 2, 7) is None
 
 
 def test_count_active_workers(store):

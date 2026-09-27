@@ -84,6 +84,9 @@ def cmd_submit(args: argparse.Namespace) -> int:
         print(str(exc), file=sys.stderr)
         return 2
     controller = Controller(config=config, store=store, docker=docker, github=github)
+    from controller.grants import GrantStore
+
+    controller.attach_grants(GrantStore(Path(config.paths.state_dir) / "grants.db"))
     try:
         outcome, detail = controller.submit_task(task)
     except ConfigError as exc:
