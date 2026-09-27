@@ -127,9 +127,13 @@ jobs:
           SSH_USER: ${{ vars.VPS02_SSH_USER }}
         run: |
           set -euo pipefail
-          keyfile="$(mktemp -u /tmp/atlas-deploy-key.XXXXXX)"
-          known_hosts="$(mktemp -u /tmp/atlas-known-hosts.XXXXXX)"
           umask 077
+          keyfile="$(mktemp /tmp/atlas-deploy-key.XXXXXX)"
+          known_hosts="$(mktemp /tmp/atlas-known-hosts.XXXXXX)"
+          # Deterministic cleanup (Band B): temporary credential material is
+          # removed on EVERY exit path — SSH success, SSH refusal, health
+          # failure, or shell error. Runner disposal is not the cleanup contract.
+          trap 'rm -f "${keyfile}" "${known_hosts}"' EXIT
           printf '%s\n' "${SSH_PRIVATE_KEY}" > "${keyfile}"
           printf '%s\n' "${SSH_KNOWN_HOSTS}" > "${known_hosts}"
           host="${SSH_HOST:?set VPS02_SSH_HOST repository variable}"
@@ -144,10 +148,10 @@ jobs:
               "sudo /usr/local/sbin/atlas-deploy-exec ${REVISION} ${TOOL_SHA256}" \
               < "${TOOL}" \
               2>&1 | tee "${log_file}"
-          rm -f "${keyfile}"
           echo "log-file=${log_file}" >> "${GITHUB_OUTPUT}"
 
       - name: Post-deploy health check (fail on blocked)
+        id: health
         env:
           SSH_PRIVATE_KEY: ${{ secrets.VPS02_DEPLOY_SSH_KEY }}
           SSH_KNOWN_HOSTS: ${{ secrets.VPS02_KNOWN_HOSTS }}
@@ -155,9 +159,10 @@ jobs:
           SSH_USER: ${{ vars.VPS02_SSH_USER }}
         run: |
           set -euo pipefail
-          keyfile="$(mktemp -u /tmp/atlas-health-key.XXXXXX)"
-          known_hosts="$(mktemp -u /tmp/atlas-health-known-hosts.XXXXXX)"
           umask 077
+          keyfile="$(mktemp /tmp/atlas-health-key.XXXXXX)"
+          known_hosts="$(mktemp /tmp/atlas-health-known-hosts.XXXXXX)"
+          trap 'rm -f "${keyfile}" "${known_hosts}"' EXIT
           printf '%s\n' "${SSH_PRIVATE_KEY}" > "${keyfile}"
           printf '%s\n' "${SSH_KNOWN_HOSTS}" > "${known_hosts}"
           host="${SSH_HOST:?set VPS02_SSH_HOST repository variable}"
@@ -176,7 +181,54 @@ jobs:
               "${user}@${host}" \
               "sudo /opt/atlas-runner/current/scripts/atlas-runner-health.sh" \
               2>&1 | tee "${RUNNER_TEMP}/atlas-health.log"
-          rm -f "${keyfile}"
+
+      - name: Emit deployment receipt
+        if: always()
+        env:
+          REVISION: ${{ inputs.git_revision }}
+          DEPLOY_OUTCOME: ${{ steps.deploy.outcome }}
+          DEPLOY_CONCLUSION: ${{ steps.deploy.conclusion }}
+          HEALTH_OUTCOME: ${{ steps.health.outcome }}
+          HEALTH_CONCLUSION: ${{ steps.health.conclusion }}
+        run: |
+          set -euo pipefail
+          # Band C result semantics: preserve BOTH the workflow outcome and the
+          # activation/health reconciliation. An SSH command refusal is a
+          # transport failure, not proof the service is unhealthy; a failed
+          # workflow is not rewritten as success by later manual inspection.
+          if [ "${DEPLOY_CONCLUSION}" != "success" ]; then
+            FINAL_STATE="DEPLOY_NOT_ACTIVATED"
+          elif [ "${HEALTH_CONCLUSION}" = "success" ]; then
+            FINAL_STATE="DEPLOY_ACTIVATED_HEALTH_PASS"
+          elif [ "${HEALTH_OUTCOME}" = "failure" ]; then
+            if grep -q "refusing command" "${RUNNER_TEMP}/atlas-health.log" 2>/dev/null; then
+              FINAL_STATE="DEPLOY_ACTIVATED_POSTCHECK_TRANSPORT_FAILED"
+            else
+              FINAL_STATE="DEPLOY_ACTIVATED_HEALTH_FAILED"
+            fi
+          else
+            FINAL_STATE="DEPLOY_ROLLED_BACK"
+          fi
+          python - "$REVISION" "$DEPLOY_CONCLUSION" "$HEALTH_CONCLUSION" "$FINAL_STATE" <<'PY'
+          import json, sys
+          receipt = {
+              "schema_version": 1,
+              "receipt": "atlas-runner-deployment",
+              "revision": sys.argv[1],
+              "workflow_results": {
+                  "deploy_step": sys.argv[2],
+                  "postcheck_step": sys.argv[3],
+              },
+              "final_state": sys.argv[4],
+              "note": "workflow result and activation/health reconciliation are both preserved; "
+                      "a transport refusal is not a health verdict and a later manual inspection "
+                      "does not rewrite this receipt",
+          }
+          with open("deployment-receipt.json", "w", encoding="utf-8") as fh:
+              json.dump(receipt, fh, indent=2, sort_keys=True)
+              fh.write("\n")
+          PY
+          cat deployment-receipt.json
 
       - name: Upload deploy log
         if: always()
@@ -186,4 +238,5 @@ jobs:
           path: |
             ${{ steps.deploy.outputs.log-file }}
             ${{ runner.temp }}/atlas-health.log
+            deployment-receipt.json
           if-no-files-found: ignore
