@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://project-atlas.local/schemas/atlas-task-binding.schema.json",
+  "title": "AtlasTaskBinding",
+  "description": "ATLAS-RUNNER-FABRIC-001 adapter contract — what Atlas supplies to the runner fabric. The fabric is an execution backend of Atlas, not a parallel control plane. Atlas owns authority; EXECUTOR_SUCCESS != VERIFIED. additionalProperties: false.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "task_id",
+    "repository",
+    "base_revision",
+    "executor_type",
+    "execution",
+    "authority_reference"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "task_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "execution_id": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+        }
+      ]
+    },
+    "repository": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+    },
+    "base_revision": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "executor_type": {
+      "enum": [
+        "claude",
+        "codex",
+        "gemini",
+        "aider",
+        "opencode",
+        "qwen",
+        "atlas-native",
+        "deterministic"
+      ]
+    },
+    "execution": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["command"],
+          "properties": {
+            "command": { "type": "string", "minLength": 1, "maxLength": 4096 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["prompt"],
+          "properties": {
+            "prompt": { "type": "string", "minLength": 1, "maxLength": 8000 },
+            "allowed_tools": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1, "maxLength": 256 }
+            }
+          }
+        }
+      ]
+    },
+    "authority_reference": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "resource_class": {
+      "enum": ["small", "standard", "large"],
+      "default": "standard"
+    },
+    "timeout_seconds": {
+      "type": "integer",
+      "minimum": 60,
+      "maximum": 7200,
+      "default": 1800
+    },
+    "platform": {
+      "enum": ["linux", "windows"],
+      "default": "linux"
+    },
+    "evidence_requirements": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "require_tests": { "type": "boolean", "default": true },
+        "require_artifacts": { "type": "boolean", "default": true },
+        "fields": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1, "maxLength": 128 }
+        }
+      }
+    }
+  }
+}
