@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://project-atlas.local/schemas/controller-config.schema.json",
+  "title": "AtlasRunnerControllerConfig",
+  "description": "AS-RUNNER-FABRIC-001 controller runtime configuration contract. CONFIG_ACCEPTED != AUTHORITY. additionalProperties: false.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["github"],
+  "properties": {
+    "github": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["owner", "repo"],
+      "properties": {
+        "owner": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
+        "repo": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
+        "api_url": { "type": "string", "pattern": "^https://" }
+      }
+    },
+    "worker": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cpus": { "type": "number", "minimum": 0.1 },
+        "memory_mb": { "type": "integer", "minimum": 128 },
+        "pids": { "type": "integer", "minimum": 16 },
+        "timeout_seconds": { "type": "integer", "minimum": 60 },
+        "storage_mb": { "type": "integer", "minimum": 1024 },
+        "image": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "network": { "type": "string", "enum": ["bridge", "none"] },
+        "env": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "propertyNames": { "pattern": "^[A-Z_][A-Z0-9_]*$" }
+        }
+      }
+    },
+    "paths": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "state_dir": { "type": "string", "pattern": "^/" },
+        "jobs_dir": { "type": "string", "pattern": "^/" },
+        "log_dir": { "type": "string", "pattern": "^/" }
+      }
+    },
+    "retention": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "evidence_days": { "type": "integer", "minimum": 1 },
+        "workspace_hours": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "poll_interval_seconds": { "type": "number", "minimum": 1 },
+    "max_concurrent_jobs": { "type": "integer", "minimum": 1 },
+    "labels": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" }
+    },
+    "min_free_memory_mb": { "type": "integer", "minimum": 0 },
+    "min_free_disk_mb": { "type": "integer", "minimum": 0 },
+    "allow_secret_env": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^[A-Z_][A-Z0-9_]*$" }
+    }
+  }
+}

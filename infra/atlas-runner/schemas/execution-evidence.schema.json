@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://project-atlas.local/schemas/execution-evidence.schema.json",
+  "title": "ExecutionEvidence",
+  "description": "AS-RUNNER-FABRIC-001 per-execution evidence record (spec section 31). EVIDENCE != AUTHORITY, EVIDENCE != MERGE AUTHORIZATION, EXECUTOR_SUCCESS != VERIFIED. additionalProperties: false.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "task_id",
+    "execution_id",
+    "github_run_id",
+    "github_run_attempt",
+    "worker_id",
+    "runner_name",
+    "runner_labels",
+    "runner_image_digest",
+    "repository",
+    "base_revision",
+    "result_revision",
+    "started_at",
+    "finished_at",
+    "duration_seconds",
+    "terminal_status",
+    "exit_code",
+    "tests",
+    "artifacts",
+    "artifact_sha256",
+    "cleanup_status",
+    "controller_version",
+    "source_revision"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "task_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "execution_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "github_run_id": { "type": "integer", "minimum": 1 },
+    "github_run_attempt": { "type": "integer", "minimum": 1 },
+    "worker_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "runner_name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "runner_labels": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+      }
+    },
+    "runner_image_digest": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "string", "minLength": 1, "maxLength": 256 }
+      ]
+    },
+    "repository": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+    },
+    "base_revision": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      ]
+    },
+    "result_revision": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      ]
+    },
+    "started_at": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+    },
+    "finished_at": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+    },
+    "duration_seconds": { "type": "number", "minimum": 0 },
+    "terminal_status": {
+      "enum": ["complete", "failed", "timed_out", "cleanup_required", "unknown"]
+    },
+    "exit_code": { "type": ["integer", "null"] },
+    "tests": { "type": "object", "additionalProperties": true },
+    "artifacts": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1, "maxLength": 1024 }
+    },
+    "artifact_sha256": {
+      "type": "object",
+      "additionalProperties": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+    },
+    "cleanup_status": { "enum": ["ok", "failed", "unknown"] },
+    "controller_version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "source_revision": { "type": "string", "minLength": 1, "maxLength": 128 }
+  }
+}

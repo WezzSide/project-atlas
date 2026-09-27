@@ -1,0 +1,74 @@
+name: atlas-runner-smoke
+
+# ATLAS-RUNNER-FABRIC-001 — executor smoke workload.
+#
+# This workflow is the TRIGGER, not the executor. When this job runs while no
+# runner with labels [self-hosted, linux, x64, atlas, executor] is online, it
+# sits in GitHub's queued state; the VPS-02 atlas-runner controller admits it
+# from its queued-runs poll and provisions exactly one ephemeral JIT worker
+# (one job, one worker, then deregistration + destruction). SMOKE_PASS !=
+# VERIFIED: independent verification is atlas-runner-verify.yml.
+#
+# This workflow carries NO secrets and must stay that way.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Optional ref override; empty uses the resolved dispatch SHA."
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: atlas-runner-smoke-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    # Admitted by the VPS-02 controller. Requires the executor fleet online.
+    if: github.event.repository.fork == false
+    runs-on: [self-hosted, linux, x64, atlas, executor]
+    timeout-minutes: 20
+    steps:
+      # Exact SHA: workflow_dispatch resolves a ref to a commit; check out
+      # that commit, never a mutable branch tip. github.sha is the resolved
+      # dispatch SHA and is safe outside shell (inputs.ref is a with: value).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+
+      - name: Run smoke workload (deterministic, no network needed)
+        run: bash infra/atlas-runner/scripts/smoke-workload.sh
+
+      - name: Verify evidence fragment (terminal markers present)
+        run: |
+          set -euo pipefail
+          fragment="evidence/fragment.json"
+          test -f "${fragment}"
+          jq -e '.task_id and .artifacts and .tests and .artifact_sha256' "${fragment}" >/dev/null
+          jq -e '.tests.smoke_manifest_parses == true' "${fragment}" >/dev/null
+          echo "evidence fragment OK: ${fragment}"
+
+      - name: Artifact SHA-256 (recompute + print)
+        run: |
+          set -euo pipefail
+          echo "::group::smoke artifact hashes"
+          sha256sum smoke-manifest.json | tee evidence/smoke-manifest.sha256
+          echo "::endgroup::"
+          expected="$(jq -r '.artifact_sha256["smoke-manifest.json"]' evidence/fragment.json)"
+          actual="$(awk '{print $1}' evidence/smoke-manifest.sha256)"
+          test "${actual}" = "${expected}"
+          echo "artifact sha256 matches evidence fragment"
+
+      - name: Upload smoke evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: atlas-smoke-evidence
+          path: |
+            smoke-manifest.json
+            evidence/
+          if-no-files-found: error
