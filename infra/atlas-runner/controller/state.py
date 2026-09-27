@@ -13,6 +13,7 @@ import sqlite3
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 
 from controller import lifecycle
@@ -102,6 +103,10 @@ class TransitionError(StateError):
 
 class TaskConflictError(StateError):
     """Same task_id with a conflicting immutable definition."""
+
+
+class ExecutionConflictError(StateError):
+    """Supplied execution id is already bound to another execution."""
 
 
 def canonical_json(value: object) -> str:
@@ -217,6 +222,123 @@ class StateStore:
             )
         return "admitted", lifecycle.REQUESTED
 
+    def admit_atlas_task(
+        self,
+        *,
+        grants,
+        task_id: str,
+        definition: dict,
+        fault_hook: Callable[[str], None] | None = None,
+    ) -> tuple[str, str]:
+        """Atomically consume authority and persist the task plus execution.
+
+        The grant registry must share this SQLite database. Fault hooks exist
+        solely for deterministic transaction rollback tests.
+        """
+        from controller.grants import GrantConsumedError, GrantStore
+        from controller.schemas import validate_atlas_task_binding
+
+        if not isinstance(grants, GrantStore) or grants.db_path.resolve() != self.db_path.resolve():
+            raise StateError("Atlas admission requires a shared grant/state database")
+        schema_errors = validate_atlas_task_binding(definition)
+        if schema_errors:
+            raise StateError("invalid Atlas task binding: " + "; ".join(schema_errors))
+        grant_id = definition.get("authority_reference")
+        execution_id = definition.get("execution_id")
+        if not isinstance(execution_id, str) or not execution_id:
+            raise StateError("Atlas admission requires the supplied execution_id")
+        digest = definition_hash(definition)
+        now = time.time()
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                existing = self._conn.execute(
+                    "SELECT definition_hash, status FROM tasks WHERE task_id = ?", (task_id,)
+                ).fetchone()
+                if existing is not None:
+                    if existing["definition_hash"] != digest:
+                        raise TaskConflictError(
+                            f"task_id {task_id!r} already exists with a conflicting definition"
+                        )
+                    execution = self._conn.execute(
+                        "SELECT execution_id FROM executions WHERE task_id = ?", (task_id,)
+                    ).fetchone()
+                    if execution is None or execution["execution_id"] != execution_id:
+                        raise StateError("existing Atlas task has no matching execution")
+                    self._conn.commit()
+                    outcome = (
+                        "existing_terminal"
+                        if lifecycle.is_terminal(existing["status"])
+                        or existing["status"] == "REJECTED"
+                        else "existing_active"
+                    )
+                    return outcome, execution_id
+
+                row = self._conn.execute(
+                    "SELECT * FROM grants WHERE grant_id = ?", (grant_id,)
+                ).fetchone()
+                GrantStore.validate_row(
+                    row,
+                    grant_id=grant_id,
+                    task_id=task_id,
+                    repository=definition.get("repository"),
+                    base_revision=definition.get("base_revision"),
+                    executor_type=definition.get("executor_type"),
+                    action_type="command" if "command" in definition["execution"] else "prompt",
+                    execution_hash=definition_hash(definition["execution"]),
+                    now=now,
+                    require_complete_bindings=True,
+                )
+                if fault_hook:
+                    fault_hook("after_grant_validation")
+                updated = self._conn.execute(
+                    "UPDATE grants SET consumed = consumed + 1, updated_at = ?"
+                    " WHERE grant_id = ? AND status = 'active' AND consumed < budget"
+                    " AND (expires_at IS NULL OR expires_at > ?)",
+                    (now, grant_id, now),
+                )
+                if updated.rowcount != 1:
+                    raise GrantConsumedError("grant changed or expired during admission")
+                if fault_hook:
+                    fault_hook("after_grant_reservation")
+
+                self._conn.execute(
+                    "INSERT INTO tasks(task_id, definition_hash, definition_json, status,"
+                    " created_at, updated_at) VALUES (?,?,?,?,?,?)",
+                    (task_id, digest, canonical_json(definition), lifecycle.REQUESTED, now, now),
+                )
+                self._conn.execute(
+                    "INSERT INTO audit_log(ts, task_id, event, detail_json) VALUES (?,?,?,?)",
+                    (now, task_id, "task_submitted", canonical_json({"definition_hash": digest})),
+                )
+                if fault_hook:
+                    fault_hook("after_task_persistence")
+
+                if self._conn.execute(
+                    "SELECT 1 FROM executions WHERE execution_id = ?", (execution_id,)
+                ).fetchone():
+                    raise ExecutionConflictError(
+                        f"execution_id {execution_id!r} is already in use"
+                    )
+                if fault_hook:
+                    fault_hook("before_execution_creation")
+                self._conn.execute(
+                    "INSERT INTO executions(execution_id, task_id, status, definition_hash,"
+                    " created_at, updated_at) VALUES (?,?,?,?,?,?)",
+                    (execution_id, task_id, lifecycle.REQUESTED, digest, now, now),
+                )
+                self._conn.execute(
+                    "INSERT INTO audit_log(ts, task_id, execution_id, event) VALUES (?,?,?,?)",
+                    (now, task_id, execution_id, "execution_created"),
+                )
+                if fault_hook:
+                    fault_hook("after_execution_creation")
+                self._conn.commit()
+                return "admitted", execution_id
+            except Exception:
+                self._conn.rollback()
+                raise
+
     def get_task(self, task_id: str) -> dict | None:
         row = self._conn.execute(
             "SELECT * FROM tasks WHERE task_id = ?", (task_id,)
@@ -236,21 +358,23 @@ class StateStore:
         *,
         task_id: str,
         definition_hash: str,
+        execution_id: str | None = None,
         github_run_id: int | None = None,
         github_run_attempt: int | None = None,
         github_job_id: int | None = None,
         worker_name: str | None = None,
-        execution_id: str | None = None,
     ) -> str:
-        # Canonical execution identity: Atlas-issued tasks carry an explicit
-        # execution_id which must be unique; internal/transport tasks get a
-        # generated id from the single authoritative allocator (this store).
-        if execution_id is None:
-            execution_id = f"ex-{uuid.uuid4().hex[:16]}"
-        elif self.get_execution(execution_id) is not None:
-            raise StateError(f"execution_id {execution_id!r} already exists")
+        execution_id = execution_id or f"ex-{uuid.uuid4().hex[:16]}"
         now = time.time()
         with self._conn:
+            existing = self._conn.execute(
+                "SELECT task_id, definition_hash FROM executions WHERE execution_id = ?",
+                (execution_id,),
+            ).fetchone()
+            if existing is not None:
+                raise ExecutionConflictError(
+                    f"execution_id {execution_id!r} is already in use"
+                )
             self._conn.execute(
                 "INSERT INTO executions(execution_id, task_id, github_run_id,"
                 " github_run_attempt, github_job_id, worker_name, status, definition_hash,"
@@ -312,9 +436,6 @@ class StateStore:
                 "UPDATE executions SET reconciled = 1, updated_at = ? WHERE execution_id = ?",
                 (time.time(), execution_id),
             )
-
-    def is_terminal_task_status(self, status: str) -> bool:
-        return status == "REJECTED" or lifecycle.is_terminal(status)
 
     def active_executions(self) -> list[dict]:
         rows = self._conn.execute(

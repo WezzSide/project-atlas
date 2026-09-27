@@ -240,7 +240,7 @@ def test_h_controller_restart_recovers(
     )
     from controller.grants import GrantStore
 
-    grants = GrantStore(reopened.db_path.parent / "grants.db")
+    grants = GrantStore(reopened.db_path)
     grants.issue(config.transport_grant_id, budget=1000)
     controller.attach_grants(grants)
     controller.admit_queued_jobs()

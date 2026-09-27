@@ -271,7 +271,7 @@ def transport_grants(workspace, config):
     """Grant registry with the config's transport grant issued."""
     from controller.grants import GrantStore
 
-    grants = GrantStore(workspace / "state" / "grants.db")
+    grants = GrantStore(workspace / "state" / "test.db")
     grants.issue(config.transport_grant_id, budget=1000)
     yield grants
     grants.close()
