@@ -1940,7 +1940,10 @@ def test_r4_blocked_to_ready_is_not_a_generic_dag_transition(tmp_path: Path) -> 
 
     with pytest.raises(IllegalTransitionError):
         governor.transition(successor.binding.package_id, NodeState.READY, "generic restore")
+    with pytest.raises(GovernorError) as exc_info:
+        governor._restore_blocked_materialization(successor.binding.package_id)
 
+    assert exc_info.value.code == "MATERIALIZATION_REVALIDATION_REQUIRED"
     assert mailbox.successor_records()[0].lifecycle == SuccessorLifecycle.READY
     assert governor.snapshot().nodes[0].state == NodeState.BLOCKED
 

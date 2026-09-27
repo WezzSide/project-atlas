@@ -120,7 +120,9 @@ class AutonomousGovernor:
         self._last_verifier: str | None = None
         self._last_implementer: str | None = None
         self._remediation_needed = False
-        self._execution_guards: dict[str, Callable[[], bool]] = {}
+        self._mailbox_materialization_guards: dict[
+            str, tuple[Callable[[], bool], Callable[[], bool]]
+        ] = {}
 
     def _next_sequence(self) -> int:
         self._sequence += 1
@@ -288,16 +290,30 @@ class AutonomousGovernor:
         self._transitions.append(record)
         return record
 
-    def register_execution_guard(self, package_id: str, guard: Callable[[], bool]) -> None:
-        """Require current external authority before leasing or executing a node."""
-        self._execution_guards[package_id] = guard
+    def _register_mailbox_materialization_guards(
+        self,
+        package_id: str,
+        *,
+        execution_guard: Callable[[], bool],
+        recovery_guard: Callable[[], bool],
+    ) -> None:
+        """Register the mailbox bridge's current-context validation callbacks."""
+        if not package_id.startswith("MBX-SUCC-"):
+            raise GovernorError(
+                "mailbox guard requires a successor package", code="NOT_MAILBOX_NODE"
+            )
+        self._mailbox_materialization_guards[package_id] = (execution_guard, recovery_guard)
 
-    def restore_blocked_materialization(
-        self, package_id: str, *, revalidate: Callable[[], bool]
-    ) -> TransitionRecord:
+    def _restore_blocked_materialization(self, package_id: str) -> TransitionRecord:
         """Restore a mailbox node only through its current-context revalidation."""
         node = self._require_node(package_id)
-        if node.state != NodeState.BLOCKED or not revalidate():
+        guards = self._mailbox_materialization_guards.get(package_id)
+        recovery_guard = guards[1] if guards is not None else None
+        try:
+            revalidated = recovery_guard is not None and bool(recovery_guard())
+        except Exception:
+            revalidated = False
+        if node.state != NodeState.BLOCKED or not revalidated:
             raise GovernorError(
                 "blocked node cannot be restored without current materialization validation",
                 code="MATERIALIZATION_REVALIDATION_REQUIRED",
@@ -314,11 +330,16 @@ class AutonomousGovernor:
         return record
 
     def _require_execution_guard(self, package_id: str) -> None:
-        guard = self._execution_guards.get(package_id)
-        if guard is None:
+        guards = self._mailbox_materialization_guards.get(package_id)
+        if guards is None:
+            if package_id.startswith("MBX-SUCC-"):
+                raise GovernorError(
+                    "mailbox execution guard is not registered",
+                    code="MAILBOX_AUTHORITY_REVALIDATION_REQUIRED",
+                )
             return
         try:
-            allowed = bool(guard())
+            allowed = bool(guards[0]())
         except Exception:
             allowed = False
         if not allowed:

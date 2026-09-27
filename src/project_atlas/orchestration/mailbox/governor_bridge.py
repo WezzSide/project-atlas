@@ -110,7 +110,7 @@ class MailboxGovernorBridge:
             for item in mailbox.successor_records()
         }
         for item in mailbox.successor_records():
-            self._register_execution_guard(item.binding.package_id)
+            self._register_materialization_guards(item.binding.package_id)
 
     def admit(
         self,
@@ -678,7 +678,7 @@ class MailboxGovernorBridge:
     ) -> WorkNode | None:
         """Materialize only under a generation lock and current durable fence."""
         package_id = successor.binding.package_id
-        self._register_execution_guard(package_id)
+        self._register_materialization_guards(package_id)
         try:
             with self.mailbox.materialization_guard(package_id, successor.generation) as guard:
                 current = self.mailbox.get_successor(package_id)
@@ -870,12 +870,7 @@ class MailboxGovernorBridge:
                 if observed.state in {NodeState.DISCOVERED, NodeState.BLOCKED}:
                     try:
                         if observed.state == NodeState.BLOCKED:
-                            self.governor.restore_blocked_materialization(
-                                package_id,
-                                revalidate=lambda: self._current_materialization_is_valid(
-                                    package_id
-                                ),
-                            )
+                            self.governor._restore_blocked_materialization(package_id)
                         else:
                             self.governor.mark_ready(package_id)
                     except GovernorError as exc:
@@ -904,9 +899,11 @@ class MailboxGovernorBridge:
         except TimeoutError:
             raise SuccessorAdmissionError("MATERIALIZATION_OWNER_ACTIVE") from None
 
-    def _register_execution_guard(self, package_id: str) -> None:
-        self.governor.register_execution_guard(
-            package_id, lambda: self._execution_authorized(package_id)
+    def _register_materialization_guards(self, package_id: str) -> None:
+        self.governor._register_mailbox_materialization_guards(
+            package_id,
+            execution_guard=lambda: self._execution_authorized(package_id),
+            recovery_guard=lambda: self._recovery_materialization_is_valid(package_id),
         )
 
     def _current_materialization_is_valid(self, package_id: str) -> bool:
@@ -918,6 +915,15 @@ class MailboxGovernorBridge:
             return True
         except SuccessorAdmissionError:
             return False
+
+    def _recovery_materialization_is_valid(self, package_id: str) -> bool:
+        current = self.mailbox.get_successor(package_id)
+        return (
+            current is not None
+            and current.lifecycle == SuccessorLifecycle.MATERIALIZING
+            and current.materialization_owner_token is not None
+            and self._current_materialization_is_valid(package_id)
+        )
 
     def _execution_authorized(self, package_id: str) -> bool:
         current = self.mailbox.get_successor(package_id)
