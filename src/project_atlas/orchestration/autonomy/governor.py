@@ -121,7 +121,7 @@ class AutonomousGovernor:
         self._last_implementer: str | None = None
         self._remediation_needed = False
         self._mailbox_materialization_guards: dict[
-            str, tuple[Callable[[], bool], Callable[[], bool]]
+            str, tuple[Callable[[], bool], Callable[[int, int, str, object], bool]]
         ] = {}
 
     def _next_sequence(self) -> int:
@@ -295,7 +295,7 @@ class AutonomousGovernor:
         package_id: str,
         *,
         execution_guard: Callable[[], bool],
-        recovery_guard: Callable[[], bool],
+        recovery_guard: Callable[[int, int, str, object], bool],
     ) -> None:
         """Register the mailbox bridge's current-context validation callbacks."""
         if not package_id.startswith("MBX-SUCC-"):
@@ -304,13 +304,23 @@ class AutonomousGovernor:
             )
         self._mailbox_materialization_guards[package_id] = (execution_guard, recovery_guard)
 
-    def _restore_blocked_materialization(self, package_id: str) -> TransitionRecord:
+    def _restore_blocked_materialization(
+        self,
+        package_id: str,
+        *,
+        generation: int,
+        lifecycle_revision: int,
+        owner_token: str,
+        guard: object,
+    ) -> TransitionRecord:
         """Restore a mailbox node only through its current-context revalidation."""
         node = self._require_node(package_id)
         guards = self._mailbox_materialization_guards.get(package_id)
         recovery_guard = guards[1] if guards is not None else None
         try:
-            revalidated = recovery_guard is not None and bool(recovery_guard())
+            revalidated = recovery_guard is not None and bool(
+                recovery_guard(generation, lifecycle_revision, owner_token, guard)
+            )
         except Exception:
             revalidated = False
         if node.state != NodeState.BLOCKED or not revalidated:
@@ -328,6 +338,21 @@ class AutonomousGovernor:
         self._replace(updated)
         self._transitions.append(record)
         return record
+
+    def dispatch_external_leased(
+        self, lease_id: str, dispatch: Callable[[], dict[str, object]]
+    ) -> dict[str, object]:
+        """Run one external dispatch only after revalidating its active lease."""
+        lease = next((item for item in self._leases if item.lease_id == lease_id), None)
+        if lease is None or not lease.active:
+            raise GovernorError("lease not active", code="LEASE_INACTIVE")
+        node = self._require_node(lease.package_id)
+        if node.execution_host_class != ExecutionHostClass.EXTERNAL_AGENT:
+            raise GovernorError(
+                "in-process host cannot use external dispatch", code="HOST_NOT_AUTHORIZED"
+            )
+        self._require_execution_guard(lease.package_id)
+        return dispatch()
 
     def _require_execution_guard(self, package_id: str) -> None:
         guards = self._mailbox_materialization_guards.get(package_id)

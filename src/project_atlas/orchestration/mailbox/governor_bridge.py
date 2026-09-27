@@ -22,12 +22,16 @@ from project_atlas.orchestration.autonomy.models import (
 from project_atlas.orchestration.mailbox.models import (
     ACTIVE_SUCCESSOR_LIFECYCLES,
     AgentInboxMessage,
+    MailboxError,
     MailboxSuccessorBindingV1,
     MailboxSuccessorRecord,
     SuccessorLifecycle,
     canonical_json,
 )
-from project_atlas.orchestration.mailbox.store import AgentMailbox
+from project_atlas.orchestration.mailbox.store import (
+    AgentMailbox,
+    _MailboxFileLock,
+)
 from project_atlas.orchestration.models import OrchestrationRoute, TaskType
 
 _RECOVERY_REASON = "LOCAL_EXECUTOR_SETUP_REFRESH_FAILED"
@@ -870,7 +874,13 @@ class MailboxGovernorBridge:
                 if observed.state in {NodeState.DISCOVERED, NodeState.BLOCKED}:
                     try:
                         if observed.state == NodeState.BLOCKED:
-                            self.governor._restore_blocked_materialization(package_id)
+                            self.governor._restore_blocked_materialization(
+                                package_id,
+                                generation=claim.generation,
+                                lifecycle_revision=claim.lifecycle_revision,
+                                owner_token=claim.owner_token,
+                                guard=guard,
+                            )
                         else:
                             self.governor.mark_ready(package_id)
                     except GovernorError as exc:
@@ -903,7 +913,15 @@ class MailboxGovernorBridge:
         self.governor._register_mailbox_materialization_guards(
             package_id,
             execution_guard=lambda: self._execution_authorized(package_id),
-            recovery_guard=lambda: self._recovery_materialization_is_valid(package_id),
+            recovery_guard=lambda generation, revision, token, guard: (
+                self._recovery_materialization_is_valid(
+                    package_id,
+                    generation=generation,
+                    lifecycle_revision=revision,
+                    owner_token=token,
+                    guard=guard,
+                )
+            ),
         )
 
     def _current_materialization_is_valid(self, package_id: str) -> bool:
@@ -916,14 +934,27 @@ class MailboxGovernorBridge:
         except SuccessorAdmissionError:
             return False
 
-    def _recovery_materialization_is_valid(self, package_id: str) -> bool:
-        current = self.mailbox.get_successor(package_id)
-        return (
-            current is not None
-            and current.lifecycle == SuccessorLifecycle.MATERIALIZING
-            and current.materialization_owner_token is not None
-            and self._current_materialization_is_valid(package_id)
-        )
+    def _recovery_materialization_is_valid(
+        self,
+        package_id: str,
+        *,
+        generation: int,
+        lifecycle_revision: int,
+        owner_token: str,
+        guard: object,
+    ) -> bool:
+        try:
+            current = self.mailbox.assert_materialization_claim(
+                package_id,
+                generation=generation,
+                expected_revision=lifecycle_revision,
+                owner_token=owner_token,
+                guard=cast(_MailboxFileLock, guard),
+            )
+            self._validate_current_materialization(current)
+            return True
+        except (MailboxError, SuccessorAdmissionError):
+            return False
 
     def _execution_authorized(self, package_id: str) -> bool:
         current = self.mailbox.get_successor(package_id)

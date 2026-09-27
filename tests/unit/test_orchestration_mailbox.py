@@ -15,6 +15,12 @@ import pytest
 
 from project_atlas.orchestration.autonomy.dag import IllegalTransitionError
 from project_atlas.orchestration.autonomy.governor import AutonomousGovernor, GovernorError
+from project_atlas.orchestration.autonomy.loop import (
+    AutonomousLoop,
+    CallableDispatchPort,
+    LoopError,
+    LoopPhase,
+)
 from project_atlas.orchestration.autonomy.models import (
     CANONICAL_REPOSITORY_IDENTITY,
     AgentCapability,
@@ -1941,11 +1947,60 @@ def test_r4_blocked_to_ready_is_not_a_generic_dag_transition(tmp_path: Path) -> 
     with pytest.raises(IllegalTransitionError):
         governor.transition(successor.binding.package_id, NodeState.READY, "generic restore")
     with pytest.raises(GovernorError) as exc_info:
-        governor._restore_blocked_materialization(successor.binding.package_id)
+        governor._restore_blocked_materialization(
+            successor.binding.package_id,
+            generation=successor.generation,
+            lifecycle_revision=successor.lifecycle_revision,
+            owner_token="untrusted-owner",
+            guard=object(),
+        )
 
     assert exc_info.value.code == "MATERIALIZATION_REVALIDATION_REQUIRED"
     assert mailbox.successor_records()[0].lifecycle == SuccessorLifecycle.READY
     assert governor.snapshot().nodes[0].state == NodeState.BLOCKED
+
+
+def test_r4_external_loop_dispatch_revalidates_mailbox_authority(tmp_path: Path) -> None:
+    authority = {"valid": True}
+    _mailbox, governor, bridge, successor = _r4_prepared_successor(
+        tmp_path, "r4-external-loop-dispatch-guard"
+    )
+    bridge.authority_verifier = lambda _item: authority["valid"]
+    ready = bridge.reconcile()
+    assert len(ready) == 1
+    assert ready[0].execution_host_class.value == "EXTERNAL_AGENT"
+    dispatches: list[dict[str, object]] = []
+    loop = AutonomousLoop(
+        governor=governor,
+        trusted=governor._trusted,
+        store=tmp_path / "loop-store",
+        root=tmp_path,
+        dispatch=CallableDispatchPort(
+            lambda _root: (
+                dispatches.append({"dispatch_id": "dispatch-r4", "status": "RUNNING"})
+                or dispatches[-1]
+            )
+        ),
+    )
+
+    lease = governor.lease(
+        successor.binding.package_id,
+        "discover-worker",
+        branch="test",
+        worktree=str(tmp_path),
+    )
+    loop._save(
+        phase=LoopPhase.LEASED,
+        active_package_id=successor.binding.package_id,
+        active_lease_id=lease.lease_id,
+    )
+    authority["valid"] = False
+    with pytest.raises(LoopError) as exc_info:
+        loop.tick()
+
+    assert exc_info.value.code == "MAILBOX_AUTHORITY_REVALIDATION_REQUIRED"
+    assert dispatches == []
+    assert governor.snapshot().nodes[0].state == NodeState.LEASED
 
 
 def test_r4_recovery_claim_rotates_owner_and_fences_stale_finalize(tmp_path: Path) -> None:

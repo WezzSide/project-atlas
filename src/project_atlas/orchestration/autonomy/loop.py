@@ -503,8 +503,14 @@ class AutonomousLoop:
             return self.apply_observed_result(in_process_id, in_process_id, passed=True)
         if self._dispatch is None:
             return self._fail("external dispatch port is required", code="DISPATCH_UNAVAILABLE")
+        dispatch = self._dispatch
         self._save(phase=LoopPhase.DISPATCHING)
-        receipt = self._dispatch.dispatch_once(self._root)
+        try:
+            receipt = self._governor.dispatch_external_leased(
+                lease_id, lambda: dispatch.dispatch_once(self._root)
+            )
+        except GovernorError as exc:
+            return self._fail(str(exc), code=exc.code)
         dispatch_id = str(receipt.get("dispatch_id") or "")
         if not dispatch_id:
             return self._fail("001D dispatch returned no identity", code="DISPATCH_UNAVAILABLE")
