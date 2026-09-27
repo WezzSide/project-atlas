@@ -17,9 +17,12 @@ name: atlas-runner-verify
 on:
   workflow_run:
     workflows:
-      - atlas-runner-smoke.yml
-      - atlas-agent-execute.yml
-      - atlas-runner-acceptance.yml
+      # workflow_run matches the workflow display `name:` (extensionless),
+      # not the filename with .yml — the previous list never matched, which
+      # is why the auto-verify path never fired in production.
+      - atlas-runner-smoke
+      - atlas-agent-execute
+      - atlas-runner-acceptance
     types: [completed]
     # No branches: filter here — it did not match workflow_dispatch source
     # runs in production (run 36315974012 completed without triggering this
