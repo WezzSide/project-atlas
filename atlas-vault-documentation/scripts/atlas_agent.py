@@ -13,7 +13,24 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from agent_control import authority, bootstrap, capability, doctor, event_client, postflight, preflight, readiness, receipt_gate, repository_gate, session, skill_ack, skill_compiler, skill_loader, spool_sync, vault_identity  # noqa: E402
+from agent_control import (
+    authority,
+    bootstrap,
+    capability,
+    doctor,
+    event_client,
+    event_reprocess,
+    postflight,
+    preflight,
+    readiness,
+    receipt_gate,
+    repository_gate,
+    session,
+    skill_ack,
+    skill_compiler,
+    skill_loader,
+    spool_sync,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 SKILL_ROOT = ROOT / "skills" / "atlas-governed-work"
@@ -59,6 +76,15 @@ def main(argv: list[str] | None = None) -> int:
     sync_parser.add_argument("--vault-root", type=Path, required=True)
     sync_parser.add_argument("--mda-command", required=True)
     sync_parser.add_argument("--json", action="store_true", dest="json_output")
+    reprocess_parser = sub.add_parser(
+        "reprocess-events", help="resume captured Vault events for one managed session"
+    )
+    reprocess_parser.add_argument("--vault-root", type=Path, required=True)
+    reprocess_parser.add_argument("--session-id", required=True)
+    reprocess_parser.add_argument(
+        "--mda-command", required=True, help="trusted mda-cli command name or path"
+    )
+    reprocess_parser.add_argument("--json", action="store_true", dest="json_output")
     promote_parser = sub.add_parser("promote-readiness")
     promote_parser.add_argument("--registry", type=Path, required=True)
     promote_parser.add_argument("--adapter-id", required=True)
@@ -190,6 +216,18 @@ def main(argv: list[str] | None = None) -> int:
             return 0 if result["ready"] else 4
         if args.command == "sync-spool":
             result = spool_sync.synchronize(args.spool_root, args.vault_root, args.mda_command)
+            _json(result, args.json_output)
+            return 0
+        if args.command == "reprocess-events":
+            try:
+                result = event_reprocess.reprocess(
+                    vault_root=args.vault_root,
+                    session_id=args.session_id,
+                    mda_command=args.mda_command,
+                )
+            except event_reprocess.EventReprocessError as exc:
+                _json({"ok": False, "status": "blocked", "error_code": exc.code, "message": str(exc)}, args.json_output)
+                return 4
             _json(result, args.json_output)
             return 0
         if args.command == "issue-authority":

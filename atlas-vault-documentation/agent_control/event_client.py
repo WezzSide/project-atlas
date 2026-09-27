@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import os
 import subprocess
 import sys
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator, cast
+from typing import Any, cast
 
 from agent_control import session
 
@@ -24,13 +25,24 @@ def _normalization_lock(vault_root: Path) -> Iterator[None]:
     is captured, normalized, verified and routed.
     """
     lock_path = vault_root / ".atlas-normalization.lock"
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    handle = lock_path.open("a+", encoding="utf-8")
+    handle = lock_path.open("a+b")
     try:
         try:
             import fcntl
         except ImportError:  # pragma: no cover - Windows fallback
-            yield
+            msvcrt = cast(Any, __import__("msvcrt"))
+
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() == 0:
+                handle.write(b"\0")
+                handle.flush()
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+            try:
+                yield
+            finally:
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
         else:
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
             try:
@@ -59,9 +71,18 @@ def document(*, vault_root: Path, session_id: str, event_type: str, summary: str
 
 def _document(*, vault_root: Path, session_id: str, event_type: str, summary: str, work_package: str | None = None, validation: list[str] | None = None, decision: list[str] | None = None, changed_files: list[str] | None = None, spool: bool = False) -> dict[str, Any]:
     state = session.load(vault_root, session_id)
-    if state.get("skill", {}).get("id") == "atlas-governed-work" and event_type != "session-start":
-        if not state.get("skill_acknowledgement") or not state.get("capability", {}).get("ready", False):
-            raise ValueError("governed event rejected before skill acknowledgement and capability readiness")
+    missing_governed_readiness = not state.get("skill_acknowledgement") or not state.get(
+        "capability", {}
+    ).get("ready", False)
+    if (
+        state.get("skill", {}).get("id") == "atlas-governed-work"
+        and event_type != "session-start"
+        and missing_governed_readiness
+    ):
+        raise ValueError(
+            "governed event rejected before skill acknowledgement "
+            "and capability readiness"
+        )
     spool = spool or bool(state.get("preflight", {}).get("spool", {}).get("mode"))
     script = vault_root.parent / "atlas-vault-documentation" / "scripts" / "capture_event.py"
     if not script.is_file():
@@ -83,7 +104,13 @@ def _document(*, vault_root: Path, session_id: str, event_type: str, summary: st
     if spool:
         state["pipeline"]["pending_spool"] += 1
         state.setdefault("spool_hashes", {})[payload["event_id"]] = hashlib.sha256(Path(payload["path"]).read_bytes()).hexdigest()
-    elif os.environ.get("ATLAS_MDA_COMMAND"):
+        session.save(vault_root, state)
+        return payload
+    # Persist capture ownership before any provider or routing operation. If
+    # normalization fails, the durable session still registers the raw event
+    # so the public reprocess-events command can resume it without guessing.
+    session.save(vault_root, state)
+    if os.environ.get("ATLAS_MDA_COMMAND"):
         normalize = Path(__file__).resolve().parents[1] / "scripts" / "normalize_event.py"
         route = Path(__file__).resolve().parents[1] / "scripts" / "route_event.py"
         normalized = subprocess.run([sys.executable, str(normalize), "--event", str(payload["path"]), "--root", str(vault_root), "--mda-command", os.environ["ATLAS_MDA_COMMAND"], "--skill-dir", str(Path(__file__).resolve().parents[1]), "--skill", "atlas-governed-work", "--json"], capture_output=True, text=True, check=False)
@@ -96,5 +123,5 @@ def _document(*, vault_root: Path, session_id: str, event_type: str, summary: st
         state["pipeline"]["normalized"] += 1
         state["pipeline"]["verified"] += 1
         state["pipeline"]["routed"] += 1
-    session.save(vault_root, state)
+        session.save(vault_root, state)
     return payload
