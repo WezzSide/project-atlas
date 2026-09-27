@@ -203,7 +203,11 @@ jobs:
               with urllib.request.urlopen(req, timeout=30) as resp:
                   jobs_payload = json.loads(resp.read().decode("utf-8"))
               for job in jobs_payload.get("jobs", []):
-                  labels = [l.get("name", "") for l in (job.get("labels") or [])]
+                  labels = job.get("labels") or []
+                  if not isinstance(labels, list) or any(
+                      not isinstance(label, str) for label in labels
+                  ):
+                      raise ValueError("jobs API labels must be a list of strings")
                   if "atlas" in labels or "self-hosted" in labels:
                       runner_name_api = job.get("runner_name")
                       runner_labels_api = labels

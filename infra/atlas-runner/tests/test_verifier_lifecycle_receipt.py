@@ -35,6 +35,11 @@ def test_verifier_classifies_fields_and_fails_closed() -> None:
     assert 'report["verdict"] = "UNESTABLISHED"' in text
     # VERIFIED requires all checks PASS; violations -> REJECTED
     assert 'report["verdict"] = "VERIFIED" if all_ok else "REJECTED"' in text
+    # GitHub's jobs API returns labels as strings. Reject malformed shapes
+    # without treating strings as objects or silently establishing identity.
+    assert 'labels = job.get("labels") or []' in text
+    assert "not isinstance(label, str) for label in labels" in text
+    assert "labels = [l.get(\"name\", \"\")" not in text
     # no remaining pass-with-note on runner identity
     fragment_note = "record(\"runner_name_not_github_hosted\", True"
     assert fragment_note not in text, "runner identity still pass-with-note"
