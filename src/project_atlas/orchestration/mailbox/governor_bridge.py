@@ -700,6 +700,12 @@ class MailboxGovernorBridge:
                     node, _message = self._validate_current_materialization(current)
                 except SuccessorAdmissionError:
                     if recovery_request is not None:
+                        if existing is not None and existing.state == NodeState.READY:
+                            self.governor.transition(
+                                package_id,
+                                NodeState.BLOCKED,
+                                "mailbox materialization requires current authority revalidation",
+                            )
                         if current.lifecycle == SuccessorLifecycle.MATERIALIZING:
                             if current.materialization_owner_token is None:
                                 raise SuccessorAdmissionError(
@@ -858,7 +864,7 @@ class MailboxGovernorBridge:
                     owner_token=claim.owner_token,
                     guard=guard,
                 )
-                if observed.state == NodeState.DISCOVERED:
+                if observed.state in {NodeState.DISCOVERED, NodeState.BLOCKED}:
                     try:
                         self.governor.mark_ready(package_id)
                     except GovernorError as exc:

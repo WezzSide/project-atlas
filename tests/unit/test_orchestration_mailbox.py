@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from project_atlas.orchestration.autonomy.governor import AutonomousGovernor
+from project_atlas.orchestration.autonomy.governor import AutonomousGovernor, GovernorError
 from project_atlas.orchestration.autonomy.models import (
     CANONICAL_REPOSITORY_IDENTITY,
     AgentCapability,
@@ -1855,6 +1855,53 @@ def test_r4_wait_reconciliation_resumes_same_generation_after_authority_returns(
 
     admitted = restored.admit("r4-authority-restored")
     assert admitted == nodes[0]
+
+
+def test_r4_revoked_authority_blocks_live_ready_node_until_revalidated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mailbox, governor, bridge, successor = _r4_prepared_successor(
+        tmp_path, "r4-live-ready-authority-revoked"
+    )
+    original_finalize = mailbox.finalize_materialization
+
+    def crash_before_finalize(*args: Any, **kwargs: Any) -> MailboxSuccessorRecord:
+        raise RuntimeError("injected crash after governor ready")
+
+    monkeypatch.setattr(mailbox, "finalize_materialization", crash_before_finalize)
+    with pytest.raises(RuntimeError, match="injected crash"):
+        bridge.admit("r4-live-ready-authority-revoked")
+    assert governor.snapshot().nodes[0].state == NodeState.READY
+    assert mailbox.successor_records()[0].lifecycle == SuccessorLifecycle.MATERIALIZING
+    monkeypatch.setattr(mailbox, "finalize_materialization", original_finalize)
+
+    revoked = MailboxGovernorBridge(
+        mailbox=AgentMailbox(tmp_path, project_id="project-atlas"),
+        governor=governor,
+        authority_verifier=lambda _item: False,
+    )
+    assert revoked.reconcile() == ()
+    assert mailbox.successor_records()[0].lifecycle == SuccessorLifecycle.WAIT_RECONCILIATION
+    assert governor.snapshot().nodes[0].state == NodeState.BLOCKED
+    with pytest.raises(GovernorError):
+        governor.lease(
+            successor.binding.package_id,
+            "discover-worker",
+            branch="test",
+            worktree=str(tmp_path),
+        )
+
+    restored = MailboxGovernorBridge(
+        mailbox=AgentMailbox(tmp_path, project_id="project-atlas"),
+        governor=governor,
+        authority_verifier=lambda _item: True,
+    )
+    recovered = restored.reconcile()
+    assert len(recovered) == 1
+    assert recovered[0].package_id == successor.binding.package_id
+    assert mailbox.successor_records()[0].generation == successor.generation
+    assert recovered[0].state == NodeState.READY
+    assert governor.snapshot().nodes == recovered
 
 
 def test_r4_recovery_claim_rotates_owner_and_fences_stale_finalize(tmp_path: Path) -> None:
