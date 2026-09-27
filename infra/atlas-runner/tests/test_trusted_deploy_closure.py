@@ -86,6 +86,14 @@ def test_health_without_required_environment_fails_closed(tmp_path: Path) -> Non
 
 
 def test_health_with_unreadable_env_file_fails_closed(tmp_path: Path) -> None:
+    """Non-root context: chmod-000 env file must be unreadable -> exit 2.
+
+    Skipped when the suite runs as root: root bypasses file permission bits
+    (this is exactly what the deploy host does — see the paired root test
+    below). Running this assertion as root would be a false expectation.
+    """
+    if os.geteuid() == 0:
+        pytest.skip("root bypasses permission bits; see root-context test below")
     env_file = tmp_path / "atlas-runner.env"
     env_file.write_text(f"ATLAS_GITHUB_TOKEN={SECRET_MARKER}\n", encoding="utf-8")
     env_file.chmod(0)
@@ -98,6 +106,29 @@ def test_health_with_unreadable_env_file_fails_closed(tmp_path: Path) -> None:
         env_file.chmod(stat.S_IRUSR | stat.S_IWUSR)
     assert proc.returncode == 2
     assert "unreadable" in proc.stderr.decode()
+
+
+@pytest.mark.skipif(os.geteuid() != 0, reason="root-context test: requires euid 0")
+def test_health_env_file_sourced_when_readable_by_root(tmp_path: Path) -> None:
+    """Root context (deploy host): a chmod-000 env file is still readable by
+    root, so the helper sources it and runs the CLI. Documents the real
+    permission semantics the deploy gate operates under, and still asserts no
+    secret reaches the output."""
+    env_file = tmp_path / "atlas-runner.env"
+    env_file.write_text(f"ATLAS_GITHUB_TOKEN={SECRET_MARKER}\n", encoding="utf-8")
+    env_file.chmod(0)
+    seen = tmp_path / "seen.txt"
+    fake = _fake_bin(tmp_path, f'echo "sourced" > "{seen}"; echo \'"status": "healthy"\'')
+    try:
+        proc = _run(
+            ["bash", str(HEALTH)],
+            env={"ATLAS_RUNNER_ENV_FILE": str(env_file), "ATLAS_RUNNER_BIN": str(fake)},
+        )
+    finally:
+        env_file.chmod(stat.S_IRUSR | stat.S_IWUSR)
+    assert proc.returncode == 0, proc.stderr.decode()
+    assert seen.read_text(encoding="utf-8").strip() == "sourced"
+    assert SECRET_MARKER not in proc.stdout.decode() + proc.stderr.decode()
 
 
 def test_health_never_prints_secret_values(tmp_path: Path) -> None:
