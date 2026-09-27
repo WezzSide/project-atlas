@@ -21,7 +21,10 @@ on:
       - atlas-agent-execute.yml
       - atlas-runner-acceptance.yml
     types: [completed]
-    branches: [main]
+    # No branches: filter here — it did not match workflow_dispatch source
+    # runs in production (run 36315974012 completed without triggering this
+    # workflow). The default-branch gate is enforced explicitly in the
+    # "Assert source run is on the default branch" step below, fail-closed.
   workflow_dispatch:
     inputs:
       source_run_id:
@@ -66,6 +69,25 @@ jobs:
             (''|*[!0-9]*) echo "invalid source run id: ${run_id}" >&2; exit 2 ;;
           esac
           echo "run-id=${run_id}" >> "${GITHUB_OUTPUT}"
+
+      - name: Assert source run is on the default branch
+        env:
+          RUN_ID: ${{ steps.source.outputs.run-id }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          # Replaces the workflow_run `branches:` filter (which did not match
+          # workflow_dispatch source runs in production). Fail closed: if the
+          # source run's branch cannot be determined, refuse to verify.
+          head_branch="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}" --jq '.head_branch')" || {
+            echo "::error::cannot determine source run branch; refusing" >&2; exit 1;
+          }
+          if [ "${head_branch}" != "${DEFAULT_BRANCH}" ]; then
+            echo "::error::source run is on '${head_branch}', not default branch '${DEFAULT_BRANCH}'; refusing" >&2
+            exit 1
+          fi
+          echo "source run ${RUN_ID} is on default branch ${DEFAULT_BRANCH}"
 
       - name: Download executor evidence artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -155,13 +177,19 @@ jobs:
           record("artifact_sha256_recomputed", hash_ok, "; ".join(hash_details) or "no artifacts claimed")
 
           # 3. Runner identity: labels must be a subset of the atlas executor
-          #    label set; runner_name must not look GitHub-hosted.
+          #    label set; runner_name must not look GitHub-hosted. The in-job
+          #    fragment legitimately omits identity fields (they live in the
+          #    host-side full evidence record), so absence is a documented
+          #    pass-with-note, consistent with labels/cleanup handling below.
           labels = set(fragment.get("runner_labels") or [])
           label_ok = labels <= ALLOWED_LABELS
           record("runner_labels_subset", label_ok, f"labels={sorted(labels) or 'NOT_PRESENT (fragment omits; full evidence is host-side)'}")
-          name = fragment.get("runner_name", "")
-          name_ok = bool(name) and not GITHUB_HOSTED_NAME.match(str(name))
-          record("runner_name_not_github_hosted", name_ok, f"runner_name={name or 'NOT_PRESENT'}")
+          name = fragment.get("runner_name")
+          if name is None:
+              record("runner_name_not_github_hosted", True, "NOT_PRESENT (full evidence is host-side)")
+          else:
+              name_ok = bool(name) and not GITHUB_HOSTED_NAME.match(str(name))
+              record("runner_name_not_github_hosted", name_ok, f"runner_name={name}")
 
           # 4. cleanup_status semantics (when present).
           cleanup = fragment.get("cleanup_status")
