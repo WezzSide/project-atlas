@@ -115,3 +115,27 @@ VPS-02-produced: the verifier's independence is what gives it weight.
   not a commitment.
 - **`ANTHROPIC_API_KEY` is a long-lived secret** until the OIDC federation
   upgrade lands; rotation is manual.
+- **Runner registration material is written mode 0644 in the job workspace —
+  `ACCEPTED_RESIDUAL_RISK_FOR_V1`, not equivalent to 0600.** Why not 0600:
+  the worker container runs as the non-root `runner` user (UID ≠
+  `atlas-runner`), while the workspace must stay group-writable (0777) for
+  container write compatibility; a 0600 file owned by `atlas-runner` was
+  unreadable in-container and registration failed (live-observed during
+  bring-up). Why 0644 is currently required: the in-container UID must be
+  able to read the registration token / JIT config at start-up. Inherited
+  protection: the jobs root (`/var/lib/atlas-runner/jobs/`) is mode 0750
+  `atlas-runner:atlas-runner`, so the 0644 file is reachable only by
+  principals who can already traverse that directory — the `atlas-runner`
+  user, members of the `atlas-runner` group, and root — plus the disposable
+  worker container itself through its own workspace mount (the intended
+  consumer). Exposure window: from provisioning until post-exit deletion
+  (the entrypoint deletes the token file after `config.sh`; the controller
+  deletes remaining registration material after worker exit). Threat
+  assumption: single-tenant VPS-02 with no untrusted local principal holding
+  `atlas-runner` group membership; a hostile local root or group member is
+  already outside the fabric's threat model (see same-host limits above).
+  Future hardening options (require a dedicated runtime-hardening band, since
+  they change live runtime bytes): matched UID/GID between controller and
+  container user enabling 0600 again; group-scoped 0640 with a controlled
+  supplementary group; tmpfs/secret-mount transport; pipe/fd delivery of
+  registration material instead of a workspace file.
