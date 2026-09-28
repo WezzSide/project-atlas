@@ -35,25 +35,47 @@ from typing import Any
 BLOCKING_MARKERS = (
     re.compile(r"BLOCKING_P0\s*=\s*([1-9]\d*)", re.I),
     re.compile(r"BLOCKING_P1\s*=\s*([1-9]\d*)", re.I),
-    re.compile(r"\bIV[_ ]VERDICT\s*[:=]\s*\**FAIL", re.I),
+    re.compile(r"\bIV_VERDICT\s*=\s*`?\**FAIL", re.I),
     re.compile(r"\bIV verdict:\s*\**FAIL", re.I),
     re.compile(r"\bIV_FAIL\b", re.I),
     re.compile(r"\bREJECTED\b"),
     re.compile(r"\bSECURITY[_ ]BLOCKER\b", re.I),
     re.compile(r"\bMERGE_AUTHORITY_INVALIDATED\b"),
 )
-PASS_MARKERS = (
-    re.compile(r"\bIV_VERDICT\s*=\s*\**PASS", re.I),
-    re.compile(r"\bIV[^\n]{0,40}\bPASS\b"),
-)
+# Canonical machine-readable verdict token. Quoted or code-spanned occurrences ("IV_VERDICT=PASS",
+# `IV_VERDICT=PASS`) are prose/examples and never establish a verdict; bold (**...**) is allowed.
+VERDICT_RE = re.compile(r"(?<![`'\"\w])\**IV_VERDICT\s*=\s*\**([A-Za-z_]+)\**(?![`'\"\w])")
 P0_RE = re.compile(r"BLOCKING_P0\s*=\s*(\d+)", re.I)
 P1_RE = re.compile(r"BLOCKING_P1\s*=\s*(\d+)", re.I)
-SHA_RE = re.compile(r"\b[0-9a-f]{40}\b")
+SHA_RE = re.compile(r"\b[0-9a-fA-F]{40}\b")
 TERMINAL_OK = {"success"}
 
 
-def _ts(value: str) -> _dt.datetime:
-    return _dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+class MalformedEvidence(ValueError):
+    """Evidence that cannot be interpreted; the caller must DENY, never ALLOW."""
+
+
+def _ts(value: Any) -> _dt.datetime:
+    if not isinstance(value, str) or not value.strip():
+        raise MalformedEvidence(f"timestamp missing or not a string: {value!r}")
+    try:
+        parsed = _dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise MalformedEvidence(f"timestamp not ISO-8601: {value!r}") from exc
+    if parsed.tzinfo is None:
+        raise MalformedEvidence(f"timestamp has no timezone: {value!r}")
+    return parsed
+
+
+def _classify_verdict(body: str) -> str:
+    """Return PASS, FAIL, AMBIGUOUS or MISSING from canonical IV_VERDICT lines only."""
+    found = {m.group(1).upper() for m in VERDICT_RE.finditer(body or "")}
+    if not found:
+        return "MISSING"
+    if len(found) > 1:
+        return "AMBIGUOUS"
+    verdict = found.pop()
+    return verdict if verdict in {"PASS", "FAIL"} else "AMBIGUOUS"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -66,6 +88,13 @@ class Decision:
         return {"verdict": self.verdict, "reasons": list(self.reasons), "receipt": self.receipt}
 
 
+def _sha(value: Any) -> str | None:
+    """Normalize a 40-hex sha to lowercase; anything else -> None (never equal to a real sha)."""
+    if isinstance(value, str) and re.fullmatch(r"[0-9a-fA-F]{40}", value.strip()):
+        return value.strip().lower()
+    return None
+
+
 def _is_blocking(body: str) -> bool:
     return any(m.search(body or "") for m in BLOCKING_MARKERS)
 
@@ -76,6 +105,23 @@ def _is_iv_record(body: str) -> bool:
 
 
 def evaluate(authority: dict[str, Any], snapshot: dict[str, Any]) -> Decision:
+    """Decide ALLOW/DENY for one merge mutation; malformed inputs always DENY (never raise)."""
+    try:
+        return _evaluate(authority, snapshot)
+    except (MalformedEvidence, KeyError, TypeError, ValueError, AttributeError) as exc:
+        return Decision(
+            "DENY",
+            (f"MALFORMED_EVIDENCE:{type(exc).__name__}:{str(exc)[:120]}",),
+            {
+                "schema": "atlas-merge-gate-receipt/v1",
+                "pr": authority.get("pr") if isinstance(authority, dict) else None,
+                "observed_at": snapshot.get("observed_at") if isinstance(snapshot, dict) else None,
+                "malformed": True,
+            },
+        )
+
+
+def _evaluate(authority: dict[str, Any], snapshot: dict[str, Any]) -> Decision:
     """Decide ALLOW/DENY for one merge mutation.
 
     authority: {"pr", "head", "tree", "base", "decided_at", "required_checks": [names],
@@ -97,12 +143,13 @@ def evaluate(authority: dict[str, Any], snapshot: dict[str, Any]) -> Decision:
         reasons.append("PR_MISMATCH")
     if pr.get("merged") or str(pr.get("state", "")).upper() != "OPEN":
         reasons.append("PR_NOT_OPEN")
-    if pr.get("head") != authority["head"]:
+    a_head, a_tree = _sha(authority["head"]), _sha(authority["tree"])
+    if _sha(pr.get("head")) != a_head:
         reasons.append(f"HEAD_DRIFT:{pr.get('head')}")
-    if pr.get("tree") != authority["tree"]:
+    if _sha(pr.get("tree")) != a_tree:
         reasons.append(f"TREE_DRIFT:{pr.get('tree')}")
-    expected_base = authority.get("rebind_base") or authority["base"]
-    if pr.get("base") != expected_base:
+    expected_base = _sha(authority.get("rebind_base") or authority["base"])
+    if _sha(pr.get("base")) != expected_base:
         reasons.append(f"BASE_DRIFT:{pr.get('base')}")
 
     # required CI: terminal SUCCESS, exact head, and current (newest run per name)
@@ -110,8 +157,15 @@ def evaluate(authority: dict[str, Any], snapshot: dict[str, Any]) -> Decision:
     for r in snapshot.get("check_runs") or []:
         runs_by_name.setdefault(str(r.get("name")), []).append(r)
     ci_ids: dict[str, Any] = {}
-    for name in authority.get("required_checks") or []:
-        runs = [r for r in runs_by_name.get(name, []) if r.get("head_sha") == authority["head"]]
+    required = authority.get("required_checks")
+    if not isinstance(required, list) or not required:
+        reasons.append("NO_REQUIRED_CHECKS")
+        required = []
+    elif any(not isinstance(n, str) or not n.strip() for n in required):
+        reasons.append("MALFORMED_REQUIRED_CHECKS")
+        required = []
+    for name in required:
+        runs = [r for r in runs_by_name.get(name, []) if _sha(r.get("head_sha")) == a_head]
         if not runs:
             reasons.append(f"CI_MISSING:{name}")
             continue
@@ -138,9 +192,10 @@ def evaluate(authority: dict[str, Any], snapshot: dict[str, Any]) -> Decision:
             }
         )
     for rv in snapshot.get("reviews") or []:
-        body = (rv.get("body") or "") + (
-            " REJECTED" if str(rv.get("state", "")).upper() == "CHANGES_REQUESTED" else ""
-        )
+        state = str(rv.get("state") or "").upper()
+        if state not in {"APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED", "PENDING"}:
+            raise MalformedEvidence(f"review {rv.get('id')} has unknown state {state!r}")
+        body = (rv.get("body") or "") + (" REJECTED" if state == "CHANGES_REQUESTED" else "")
         events.append(
             {
                 "kind": "review",
@@ -152,7 +207,7 @@ def evaluate(authority: dict[str, Any], snapshot: dict[str, Any]) -> Decision:
         )
     events.sort(key=lambda e: _ts(e["at"]))
 
-    newer_blocking = [e for e in events if _ts(e["at"]) > decided_at and _is_blocking(e["body"])]
+    newer_blocking = [e for e in events if _ts(e["at"]) >= decided_at and _is_blocking(e["body"])]
     for e in newer_blocking:
         reasons.append(f"NEWER_BLOCKING_EVIDENCE:{e['kind']}:{e['id']}@{e['at']}")
 
@@ -162,19 +217,25 @@ def evaluate(authority: dict[str, Any], snapshot: dict[str, Any]) -> Decision:
         reasons.append("IV_MISSING")
     else:
         body = latest_iv["body"]
-        shas = set(SHA_RE.findall(body))
-        if authority["head"] not in shas or authority["tree"] not in shas:
+        shas = {x.lower() for x in SHA_RE.findall(body)}
+        if a_head not in shas or a_tree not in shas:
             reasons.append(f"IV_NOT_BOUND_TO_CANDIDATE:{latest_iv['id']}")
-        p0 = int((P0_RE.search(body) or [None, "1"])[1])
-        p1 = int((P1_RE.search(body) or [None, "1"])[1])
-        if p0 or p1 or _is_blocking(body) or not any(m.search(body) for m in PASS_MARKERS):
-            reasons.append(f"IV_NOT_PASS:{latest_iv['id']}:P0={p0}:P1={p1}")
+        p0_m, p1_m = P0_RE.search(body), P1_RE.search(body)
+        p0 = int(p0_m.group(1)) if p0_m else None
+        p1 = int(p1_m.group(1)) if p1_m else None
+        verdict = _classify_verdict(body)
+        if verdict != "PASS" or p0 is None or p1 is None or p0 or p1 or _is_blocking(body):
+            reasons.append(f"IV_NOT_PASS:{latest_iv['id']}:verdict={verdict}:P0={p0}:P1={p1}")
 
     receipt = {
         "schema": "atlas-merge-gate-receipt/v1",
         "pr": authority["pr"],
         "authority": {
-            k: authority.get(k) for k in ("head", "tree", "base", "rebind_base", "decided_at")
+            "head": a_head,
+            "tree": a_tree,
+            "base": _sha(authority["base"]),
+            "rebind_base": _sha(authority.get("rebind_base")),
+            "decided_at": authority["decided_at"],
         },
         "observed_at": snapshot["observed_at"],
         "observed": {k: pr.get(k) for k in ("head", "tree", "base", "state", "merged")},
@@ -195,27 +256,54 @@ def evaluate(authority: dict[str, Any], snapshot: dict[str, Any]) -> Decision:
 
 
 def _gh_json(args: list[str], runner: Callable[..., Any] = subprocess.run) -> Any:
-    out = runner(["gh", *args], check=True, capture_output=True, text=True).stdout
-    return json.loads(out) if out.strip() else None
+    try:
+        out = runner(["gh", *args], check=True, capture_output=True, text=True).stdout
+    except (subprocess.CalledProcessError, OSError) as exc:
+        raise MalformedEvidence(f"gh api failed: {' '.join(args)}: {exc}") from exc
+    try:
+        return json.loads(out) if out.strip() else None
+    except ValueError as exc:
+        raise MalformedEvidence(f"gh api returned non-JSON for {' '.join(args)}") from exc
+
+
+def _gh_paginated(path: str, runner: Callable[..., Any]) -> list[Any]:
+    """All pages of a list endpoint; --slurp yields one JSON array of page arrays."""
+    pages = _gh_json(["api", path, "--paginate", "--slurp"], runner) or []
+    items: list[Any] = []
+    for page in pages:
+        if not isinstance(page, list):
+            raise MalformedEvidence(f"unexpected page shape for {path}")
+        items.extend(page)
+    return items
 
 
 def collect_snapshot(
     repo: str, pr: int, runner: Callable[..., Any] = subprocess.run
 ) -> dict[str, Any]:
     p = _gh_json(["api", f"repos/{repo}/pulls/{pr}"], runner)
+    if not isinstance(p, dict):
+        raise MalformedEvidence("pull request payload missing")
     head = p["head"]["sha"]
     tree = _gh_json(["api", f"repos/{repo}/git/commits/{head}"], runner)["tree"]["sha"]
-    runs = (
-        _gh_json(["api", f"repos/{repo}/actions/runs?head_sha={head}&per_page=100"], runner) or {}
-    )
-    comments = (
-        _gh_json(["api", f"repos/{repo}/issues/{pr}/comments?per_page=100", "--paginate"], runner)
+    run_pages = (
+        _gh_json(
+            [
+                "api",
+                f"repos/{repo}/actions/runs?head_sha={head}&per_page=100",
+                "--paginate",
+                "--slurp",
+            ],
+            runner,
+        )
         or []
     )
-    reviews = (
-        _gh_json(["api", f"repos/{repo}/pulls/{pr}/reviews?per_page=100", "--paginate"], runner)
-        or []
-    )
+    runs: list[dict[str, Any]] = []
+    for page in run_pages:
+        if not isinstance(page, dict) or not isinstance(page.get("workflow_runs"), list):
+            raise MalformedEvidence("unexpected workflow_runs page shape")
+        runs.extend(page["workflow_runs"])
+    comments = _gh_paginated(f"repos/{repo}/issues/{pr}/comments?per_page=100", runner)
+    reviews = _gh_paginated(f"repos/{repo}/pulls/{pr}/reviews?per_page=100", runner)
     return {
         "observed_at": _dt.datetime.now(_dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "pr": {
@@ -236,7 +324,7 @@ def collect_snapshot(
                 "completed_at": r.get("updated_at"),
                 "created_at": r.get("created_at"),
             }
-            for r in runs.get("workflow_runs", [])
+            for r in runs
         ],
         "comments": [
             {
@@ -277,7 +365,16 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--receipt", help="write decision receipt JSON here")
     a = ap.parse_args(argv)
     authority = json.loads(pathlib.Path(a.authority).read_text(encoding="utf-8"))
-    decision = evaluate(authority, collect_snapshot(a.repo, a.pr))
+    try:
+        snapshot = collect_snapshot(a.repo, a.pr)
+    except MalformedEvidence as exc:
+        decision = Decision(
+            "DENY",
+            (f"EVIDENCE_COLLECTION_FAILED:{exc}",),
+            {"schema": "atlas-merge-gate-receipt/v1", "pr": a.pr},
+        )
+    else:
+        decision = evaluate(authority, snapshot)
     text = json.dumps(decision.to_dict(), indent=2)
     if a.receipt:
         pathlib.Path(a.receipt).write_text(text + "\n", encoding="utf-8")

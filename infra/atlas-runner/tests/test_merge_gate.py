@@ -235,31 +235,35 @@ def test_collect_snapshot_shape_with_fake_gh():
         if "/actions/runs" in api:
             return R(
                 json.dumps(
-                    {
-                        "workflow_runs": [
-                            {
-                                "name": "ci",
-                                "head_sha": HEAD,
-                                "status": "completed",
-                                "conclusion": "success",
-                                "id": 1,
-                                "updated_at": "2026-09-28T09:40:00Z",
-                                "created_at": "x",
-                            }
-                        ]
-                    }
+                    [
+                        {
+                            "workflow_runs": [
+                                {
+                                    "name": "ci",
+                                    "head_sha": HEAD,
+                                    "status": "completed",
+                                    "conclusion": "success",
+                                    "id": 1,
+                                    "updated_at": "2026-09-28T09:40:00Z",
+                                    "created_at": "x",
+                                }
+                            ]
+                        }
+                    ]
                 )
             )
         if "/comments" in api:
             return R(
                 json.dumps(
                     [
-                        {
-                            "id": 9,
-                            "created_at": "2026-09-28T09:45:59Z",
-                            "user": {"login": "iv"},
-                            "body": PASS_IV,
-                        }
+                        [
+                            {
+                                "id": 9,
+                                "created_at": "2026-09-28T09:45:59Z",
+                                "user": {"login": "iv"},
+                                "body": PASS_IV,
+                            }
+                        ]
                     ]
                 )
             )
