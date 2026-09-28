@@ -64,8 +64,9 @@ def test_verifier_selects_one_complete_string_label_set() -> None:
     runner_name, labels = select_verifier_runner(
         {
             "jobs": [
-                {"runner_name": "GitHub Actions 123", "labels": ["ubuntu-latest"]},
+                {"id": 1, "runner_name": "GitHub Actions 123", "labels": ["ubuntu-latest"]},
                 {
+                    "id": 2,
                     "runner_name": "atlas-runner-1",
                     "labels": ["self-hosted", "linux", "x64", "atlas", "executor"],
                 },
@@ -87,7 +88,9 @@ def test_verifier_selects_one_complete_string_label_set() -> None:
 )
 def test_verifier_rejects_partial_wrong_or_duplicate_runner_labels(labels) -> None:
     with pytest.raises(ValueError):
-        select_verifier_runner({"jobs": [{"runner_name": "unrelated-host", "labels": labels}]})
+        select_verifier_runner(
+            {"jobs": [{"id": 1, "runner_name": "unrelated-host", "labels": labels}]}
+        )
 
 
 @pytest.mark.parametrize(
@@ -97,10 +100,10 @@ def test_verifier_rejects_partial_wrong_or_duplicate_runner_labels(labels) -> No
         {"jobs": None},
         {"jobs": {"runner_name": "host"}},
         {"jobs": [None]},
-        {"jobs": [{"runner_name": "host"}]},
-        {"jobs": [{"runner_name": "host", "labels": None}]},
-        {"jobs": [{"runner_name": "host", "labels": {"atlas": True}}]},
-        {"jobs": [{"runner_name": "host", "labels": ["atlas", 7]}]},
+        {"jobs": [{"id": 1, "runner_name": "host"}]},
+        {"jobs": [{"id": 1, "runner_name": "host", "labels": None}]},
+        {"jobs": [{"id": 1, "runner_name": "host", "labels": {"atlas": True}}]},
+        {"jobs": [{"id": 1, "runner_name": "host", "labels": ["atlas", 7]}]},
     ],
 )
 def test_verifier_rejects_malformed_jobs_api_identity(payload) -> None:
@@ -114,8 +117,8 @@ def test_verifier_rejects_ambiguous_complete_runner_matches() -> None:
         select_verifier_runner(
             {
                 "jobs": [
-                    {"runner_name": "atlas-runner-1", "labels": labels},
-                    {"runner_name": "atlas-runner-2", "labels": labels},
+                    {"id": 1, "runner_name": "atlas-runner-1", "labels": labels},
+                    {"id": 2, "runner_name": "atlas-runner-2", "labels": labels},
                 ]
             }
         )
@@ -127,7 +130,79 @@ def _job(index: int, *, qualifying: bool = False) -> dict[str, object]:
         if qualifying
         else ["ubuntu-latest"]
     )
-    return {"id": index, "runner_name": f"runner-{index}", "labels": labels}
+    return {"id": index + 1, "runner_name": f"runner-{index}", "labels": labels}
+
+
+def test_verifier_rejects_conflicting_duplicate_job_id() -> None:
+    """P1 regression: two records sharing one job ID, one qualifying, must
+    fail closed — a contradictory duplicate identity must never establish a
+    verifier."""
+    labels = sorted(REQUIRED_VERIFIER_LABELS)
+    with pytest.raises(ValueError, match="duplicate job id"):
+        select_verifier_runner(
+            {
+                "jobs": [
+                    {"id": 42, "runner_name": "atlas-vps-02", "labels": labels},
+                    {"id": 42, "runner_name": "gh-9", "labels": ["ubuntu-latest"]},
+                ]
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    "jobs",
+    [
+        # identical duplicate records (same id, same content)
+        [
+            {"id": 7, "runner_name": "a", "labels": ["ubuntu-latest"]},
+            {"id": 7, "runner_name": "a", "labels": ["ubuntu-latest"]},
+        ],
+        # both records qualify under one duplicate id
+        [
+            {"id": 7, "runner_name": "a", "labels": sorted(REQUIRED_VERIFIER_LABELS)},
+            {"id": 7, "runner_name": "b", "labels": sorted(REQUIRED_VERIFIER_LABELS)},
+        ],
+        # duplicate non-qualifying records alongside a separate valid verifier
+        [
+            {"id": 7, "runner_name": "a", "labels": ["ubuntu-latest"]},
+            {"id": 7, "runner_name": "a", "labels": ["ubuntu-latest"]},
+            {"id": 8, "runner_name": "v", "labels": sorted(REQUIRED_VERIFIER_LABELS)},
+        ],
+        # same id three times
+        [
+            {"id": 7, "runner_name": "a", "labels": ["ubuntu-latest"]},
+            {"id": 7, "runner_name": "b", "labels": ["ubuntu-latest"]},
+            {"id": 7, "runner_name": "c", "labels": ["ubuntu-latest"]},
+        ],
+    ],
+)
+def test_verifier_rejects_all_duplicate_job_id_forms(jobs) -> None:
+    with pytest.raises(ValueError, match="duplicate job id"):
+        select_verifier_runner({"jobs": jobs})
+
+
+@pytest.mark.parametrize(
+    "bad_id",
+    [None, True, False, "42", 4.5, 0, -1],
+)
+def test_verifier_rejects_missing_malformed_nonpositive_job_id(bad_id) -> None:
+    with pytest.raises(ValueError):
+        select_verifier_runner(
+            {"jobs": [{"id": bad_id, "runner_name": "h", "labels": ["ubuntu-latest"]}]}
+        )
+
+
+def test_verifier_duplicate_id_across_pages_rejected() -> None:
+    page1 = [_job(i) for i in range(1, 101)]
+    pages = {
+        1: {"total_count": 101, "jobs": page1},
+        2: {
+            "total_count": 101,
+            "jobs": [{"id": 50, "runner_name": "dup", "labels": ["ubuntu-latest"]}],
+        },
+    }
+    with pytest.raises(ValueError, match="duplicate job id"):
+        fetch_complete_jobs(_page_fetcher(pages, []))
 
 
 def _page_fetcher(
