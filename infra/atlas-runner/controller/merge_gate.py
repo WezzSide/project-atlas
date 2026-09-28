@@ -56,12 +56,18 @@ RECORD_KEYS = ("IV_VERDICT", "BLOCKING_P0", "BLOCKING_P1")
 RECORD_LINE_RE = re.compile(
     r"^\s*(?:[-*]\s*)?\*{0,2}(IV_VERDICT|BLOCKING_P0|BLOCKING_P1)\s*=\s*([A-Za-z0-9_]+)\*{0,2}\s*[.;]?\s*$"
 )
-FENCE_RE = re.compile(r"```.*?(?:```|\Z)|~~~.*?(?:~~~|\Z)", re.S)
-HTML_COMMENT_RE = re.compile(r"<!--.*?(?:-->|\Z)", re.S)
-HTML_BLOCK_RE = re.compile(r"<(pre|code|script|style)\b.*?(?:</\1\s*>|\Z)", re.S | re.I)
-# CommonMark indented code block: >=4 spaces / tab after a block boundary (body start, blank
-# or whitespace-only line, ATX heading). Bodies are CRLF-normalised before this is applied.
-INDENTED_CODE_RE = re.compile(r"(\A|\n[ \t]*\n|(?:\A|\n)#[^\n]*\n)((?:(?: {4}|\t)[^\n]*\n?)+)")
+# --- Inert Markdown context scanner -------------------------------------------------------
+# A bounded, line-based CommonMark *block* scanner (not a renderer) decides which source lines
+# are inert (code, comments, raw HTML blocks) and replaces them with STRIPPED. Only the visible
+# remainder is eligible for record lines. Every rule errs towards stripping more (false DENY),
+# never less. Invariant: INERT_MARKDOWN_CONTEXT_CAN_NEVER_ESTABLISH_POSITIVE_IV.
+FENCE_OPEN_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+ATX_HEADING_RE = re.compile(r"^ {0,3}#{1,6}(?:[ \t]|$)")
+THEMATIC_BREAK_RE = re.compile(r"^ {0,3}(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$")
+SETEXT_UNDERLINE_RE = re.compile(r"^ {0,3}(?:=+|-+)[ \t]*$")
+HTML_BLOCK_OPEN_RE = re.compile(r"<(pre|code|script|style|textarea)\b", re.I)
+HTML_COMMENT_OPEN = "<!--"
+HTML_COMMENT_CLOSE = "-->"
 # Stripped contexts are replaced by a visible placeholder, never by bare whitespace, so text that
 # shared a line with a code span / fence / comment cannot become a whole-line record.
 STRIPPED = "[stripped]"
@@ -97,12 +103,100 @@ class Decision:
         return {"verdict": self.verdict, "reasons": list(self.reasons), "receipt": self.receipt}
 
 
+def _indent_columns(line: str) -> int:
+    """Leading indentation in CommonMark columns (a tab advances to the next multiple of 4)."""
+    col = 0
+    for ch in line:
+        if ch == " ":
+            col += 1
+        elif ch == "\t":
+            col += 4 - (col % 4)
+        else:
+            break
+    return col
+
+
+def _strip_block_contexts(text: str) -> str:
+    """Replace inert block-level contexts line by line: fenced code (opener >= 3 backticks or
+    tildes at <= 3 indent; a backtick fence's info string may not contain backticks; closed only
+    by the same character with length >= the opener; unterminated => rest of body), indented code
+    (>= 4 columns, tab-aware, when no paragraph is open: at body start, after a blank line, an ATX
+    heading, a thematic break, a setext underline, a closed fence, a closed HTML block or comment;
+    an indented block continues across blank lines), HTML comments and raw HTML blocks (pre, code,
+    script, style, textarea; whole lines, terminated or not). Everything else stays visible."""
+    out: list[str] = []
+    fence_char = ""
+    fence_len = 0
+    html_close = ""  # pending close tag (lowercase) or HTML_COMMENT_CLOSE while inside a block
+    in_paragraph = False
+    in_indented = False
+    for line in text.split("\n"):
+        if fence_char:
+            m = FENCE_OPEN_RE.match(line)
+            if (
+                m
+                and m.group(1)[0] == fence_char
+                and len(m.group(1)) >= fence_len
+                and not m.group(2).strip()
+            ):
+                fence_char = ""
+            out.append(STRIPPED)
+            continue
+        if html_close:
+            if html_close in line.lower():
+                html_close = ""
+                in_paragraph = False
+            out.append(STRIPPED)
+            continue
+        stripped = line.strip()
+        if not stripped:
+            out.append(line)
+            in_paragraph = False
+            continue  # in_indented survives blank lines (block continues if next line is indented)
+        cols = _indent_columns(line)
+        m = FENCE_OPEN_RE.match(line)
+        if m and (m.group(1)[0] == "~" or "`" not in m.group(2)):
+            fence_char, fence_len = m.group(1)[0], len(m.group(1))
+            in_paragraph = in_indented = False
+            out.append(STRIPPED)
+            continue
+        if cols >= 4 and (in_indented or not in_paragraph):
+            in_indented = True
+            out.append(STRIPPED)
+            continue
+        in_indented = False
+        lower = line.lower()
+        hm = HTML_BLOCK_OPEN_RE.search(line)
+        if HTML_COMMENT_OPEN in line and (hm is None or line.index(HTML_COMMENT_OPEN) < hm.start()):
+            if HTML_COMMENT_CLOSE not in line[line.index(HTML_COMMENT_OPEN) + 4 :]:
+                html_close = HTML_COMMENT_CLOSE
+            in_paragraph = False
+            out.append(STRIPPED)
+            continue
+        if hm is not None:
+            close = f"</{hm.group(1).lower()}"
+            if close not in lower[hm.end() :]:
+                html_close = close
+            in_paragraph = False
+            out.append(STRIPPED)
+            continue
+        # block boundaries that close a paragraph: ATX heading, thematic break, setext underline
+        boundary = bool(
+            ATX_HEADING_RE.match(line)
+            or THEMATIC_BREAK_RE.match(line)
+            or (in_paragraph and SETEXT_UNDERLINE_RE.match(line))
+        )
+        in_paragraph = not boundary
+        out.append(line)
+    return "\n".join(out)
+
+
 def _strip_code_spans(text: str) -> str:
     """CommonMark code spans: a backtick run of length n opens a span closed by the next run of
     exactly length n (runs of other lengths are literal); a span never crosses a blank line.
-    Any length of run is handled (`x`, ``x``, ``` `x` ```), unlike a single-backtick regex."""
-    runs = BACKTICK_RUN_RE.finditer(text)
-    runs = list(runs)
+    Any run length is handled. Conservative extension: an unmatched run of >= 3 backticks (a
+    fence-like literal) strips the rest of its paragraph, so nothing after it can be a record."""
+    runs = list(BACKTICK_RUN_RE.finditer(text))
     out: list[str] = []
     pos = 0
     i = 0
@@ -117,6 +211,15 @@ def _strip_code_spans(text: str) -> str:
             out.append(STRIPPED)
             pos = runs[j].end()
             i = j + 1
+        elif n >= 3:
+            blank = BLANK_LINE_RE.search(text, opener.end())
+            stop = blank.start() if blank else len(text)
+            out.append(text[pos : opener.start()])
+            out.append(STRIPPED)
+            pos = stop
+            i += 1
+            while i < len(runs) and runs[i].start() < stop:
+                i += 1
         else:
             i += 1
     out.append(text[pos:])
@@ -124,14 +227,11 @@ def _strip_code_spans(text: str) -> str:
 
 
 def _strip_non_record_context(body: str, *, inline_code: bool = True) -> str:
-    """Remove fenced/indented code, HTML comments and pre/code blocks (terminated or not) and,
-    by default, code spans. Nothing inside those contexts is a record field. Line endings are
-    normalised first so CRLF bodies (GitHub web submissions) get identical treatment."""
+    """Return only the visible, non-inert part of a Markdown body. Line endings are normalised
+    first (CRLF/CR -> LF) so GitHub web submissions get identical treatment; then block contexts
+    are stripped by the state-machine scanner and, by default, code spans as well."""
     text = (body or "").replace("\r\n", "\n").replace("\r", "\n")
-    text = FENCE_RE.sub(STRIPPED, text)
-    text = HTML_COMMENT_RE.sub(STRIPPED, text)
-    text = HTML_BLOCK_RE.sub(STRIPPED, text)
-    text = INDENTED_CODE_RE.sub(lambda m: m.group(1) + STRIPPED + "\n", text)
+    text = _strip_block_contexts(text)
     return _strip_code_spans(text) if inline_code else text
 
 

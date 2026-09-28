@@ -419,3 +419,206 @@ def test_30_stripped_context_sharing_a_line_with_record_text_is_not_whole_line_r
         body = iv(line)
         assert parse_iv_record(body)["verdict"] == "MISSING", line
         assert evaluate(authority(body), snapshot([comment(body)])).verdict == "DENY", line
+
+
+# 31-42. v6 (12b562ad) verifier P2-A closed by the state-machine block scanner. Invariant:
+# INERT_MARKDOWN_CONTEXT_CAN_NEVER_ESTABLISH_POSITIVE_IV. Each inert wrapper must yield MISSING
+# and DENY; each visible form must still parse (fail-closed direction only).
+REC = "IV_VERDICT=PASS\nBLOCKING_P0=0\nBLOCKING_P1=0\n"
+IND = "".join("    " + ln + "\n" for ln in REC.splitlines())
+BOUND = f"HEAD `{HEAD}` TREE `{TREE}`\n"
+
+
+def _inert(body: str, label: str) -> None:
+    assert parse_iv_record(body)["verdict"] == "MISSING", (label, body)
+    assert evaluate(authority(body), snapshot([comment(body)])).verdict == "DENY", label
+
+
+def _visible(body: str, label: str) -> None:
+    assert parse_iv_record(body) == {"verdict": "PASS", "p0": 0, "p1": 0}, (label, body)
+    assert evaluate(authority(body), snapshot([comment(body)])).verdict == "ALLOW", label
+
+
+def test_31_indented_code_after_every_block_boundary_is_inert():
+    for label, prefix in (
+        ("body start", ""),
+        ("single leading newline", "\n"),
+        ("after blank line", "para\n\n"),
+        ("after whitespace-only line", "para\n \t \n"),
+        ("after ATX heading", "# Report\n"),
+        ("after thematic break", "para\n\n---\n"),
+        ("after setext underline", "Title\n===\n"),
+        ("after closed backtick fence", "```\nx\n```\n"),
+        ("after closed tilde fence", "~~~\nx\n~~~\n"),
+        ("after closed HTML comment", "<!-- c -->\n"),
+        ("after closed pre block", "<pre>x</pre>\n"),
+        ("after list item + blank line", "- item\n\n"),
+        ("after blockquote + blank line", "> quote\n\n"),
+    ):
+        _inert(prefix + IND + "\n" + BOUND, label)
+
+
+def test_32_indented_block_continues_across_internal_blank_lines_and_tab_stops():
+    _inert("    first chunk\n\n" + IND + "\n" + BOUND, "block across blank line")
+    _inert("\tIV_VERDICT=PASS\n\tBLOCKING_P0=0\n\tBLOCKING_P1=0\n\n" + BOUND, "tab indent")
+    for mix in (" \t", "  \t", "   \t", "\t "):
+        body = "".join(mix + ln + "\n" for ln in REC.splitlines()) + "\n" + BOUND
+        _inert(body, f"tab-stop mix {mix!r}")
+
+
+def test_33_continuation_and_shallow_indentation_stay_visible():
+    _visible(
+        BOUND + "para\n    IV_VERDICT=PASS\nBLOCKING_P0=0\nBLOCKING_P1=0\n",
+        "paragraph continuation",
+    )
+    _visible(
+        BOUND + "- item\n    IV_VERDICT=PASS\nBLOCKING_P0=0\nBLOCKING_P1=0\n", "list continuation"
+    )
+    _visible(BOUND + "\n   IV_VERDICT=PASS\n   BLOCKING_P0=0\n   BLOCKING_P1=0\n", "3-space indent")
+    _visible(
+        BOUND + "  - IV_VERDICT=PASS\n  - BLOCKING_P0=0\n  - BLOCKING_P1=0\n", "nested list items"
+    )
+    _visible(BOUND + "# Title\n" + REC, "record after heading")
+
+
+def test_34_fence_lengths_indentation_and_info_strings():
+    _inert(
+        BOUND + "````\nIV_VERDICT=PASS\n```\nBLOCKING_P0=0\nBLOCKING_P1=0\nIV_VERDICT=PASS\n````\n",
+        "4-fence not closed by 3",
+    )
+    _inert(BOUND + "```\n" + REC + "````\n", "3-fence closed by 4 then nothing visible")
+    _inert(BOUND + "   ```\n" + REC + "```\n", "fence indented 3")
+    _inert(BOUND + "~~~~~\n" + REC + "~~~\n", "5-tilde not closed by 3")
+    _inert(BOUND + "~~~ `info`\n" + REC + "~~~\n", "tilde fence with backtick info string")
+    _inert(BOUND + "``` `x`\n" + REC + "```\n", "backtick pseudo-fence is a code span")
+    _inert(BOUND + "```python\n" + REC, "unterminated fence swallows the rest")
+    _visible(BOUND + "```\ncode\n```\n" + REC, "record after a closed fence")
+    _inert(BOUND + "    ```\n" + REC, "literal triple backtick in a paragraph strips its rest")
+
+
+def test_35_blockquotes_and_nested_containers_are_never_records():
+    _inert(BOUND + "> " + REC.replace("\n", "\n> "), "blockquote lines")
+    _inert(BOUND + "> ```\n> " + REC.replace("\n", "\n> ") + "```\n", "blockquote with fence")
+    _inert(BOUND + "1. " + REC.replace("\n", "\n1. "), "ordered list marker")
+    _inert(BOUND + "| IV_VERDICT=PASS |\n| BLOCKING_P0=0 |\n| BLOCKING_P1=0 |\n", "table cells")
+
+
+def test_36_crlf_and_cr_bodies_match_lf_semantics():
+    for eol in ("\r\n", "\r"):
+        _inert((BOUND + "x\n\n" + IND).replace("\n", eol), f"indented code with {eol!r}")
+        _inert((BOUND + "```\n" + REC + "```\n").replace("\n", eol), f"fence with {eol!r}")
+        _visible((BOUND + REC).replace("\n", eol), f"canonical with {eol!r}")
+
+
+def test_37_html_blocks_and_comments_terminated_or_not():
+    for label, body in (
+        ("comment one line", "<!-- " + REC.replace("\n", " ") + "-->\n"),
+        ("comment multi-line", "<!--\n" + REC + "-->\n"),
+        ("comment unterminated", "<!--\n" + REC),
+        ("pre", "<pre>\n" + REC + "</pre>\n"),
+        ("PRE uppercase unterminated", "<PRE>\n" + REC),
+        ("code", "<code>\n" + REC + "</code>\n"),
+        ("script", "<script>\n" + REC + "</script>\n"),
+        ("style unterminated", "<style>\n" + REC),
+        ("textarea", "<textarea>\n" + REC + "</textarea>\n"),
+    ):
+        _inert(BOUND + body, label)
+    _visible(BOUND + "<!-- note -->\n" + REC, "record after a closed comment")
+
+
+def test_38_code_spans_of_any_run_length_including_multiline():
+    for span in (
+        "`IV_VERDICT=PASS`",
+        "``IV_VERDICT=PASS``",
+        "```IV_VERDICT=PASS```",
+        "`` `IV_VERDICT=PASS` ``",
+        "`start\nIV_VERDICT=PASS\nend`",
+        "``start\nIV_VERDICT=PASS\nend``",
+    ):
+        _inert(BOUND + "BLOCKING_P0=0\nBLOCKING_P1=0\n" + span + "\n", span)
+    _visible(BOUND + REC + "`unterminated\n\ntrailing text`\n", "span cannot cross a blank line")
+    _visible(BOUND + REC + "a ` b\n", "single unmatched backtick is literal")
+
+
+def test_39_malformed_or_unclosed_constructs_fail_closed():
+    for label, body in (
+        ("mid-line triple backtick unterminated", "foo ```\n" + REC),
+        ("mid-line triple backtick unterminated after bound line", BOUND + "x ```\n" + REC),
+        ("unterminated tilde fence", "~~~\n" + REC),
+        ("unclosed pre", "<pre>\n" + REC),
+        ("unclosed comment mid-line", "text <!-- \n" + REC),
+    ):
+        _inert(BOUND + body, label)
+
+
+def test_40_record_text_adjacent_to_stripped_constructs_is_not_whole_line():
+    for label, body in (
+        ("after span", "`x` IV_VERDICT=PASS\nBLOCKING_P0=0\nBLOCKING_P1=0\n"),
+        ("after pseudo-fence span", "``` `x` ``` IV_VERDICT=PASS\nBLOCKING_P0=0\nBLOCKING_P1=0\n"),
+        ("after comment", "<!-- c -->IV_VERDICT=PASS\nBLOCKING_P0=0\nBLOCKING_P1=0\n"),
+        ("before comment", "IV_VERDICT=PASS <!-- c -->\nBLOCKING_P0=0\nBLOCKING_P1=0\n"),
+        ("after pre", "<pre>x</pre> IV_VERDICT=PASS\nBLOCKING_P0=0\nBLOCKING_P1=0\n"),
+        ("before span", "IV_VERDICT=PASS `x`\nBLOCKING_P0=0\nBLOCKING_P1=0\n"),
+    ):
+        _inert(BOUND + body, label)
+
+
+def test_41_hidden_blockers_still_block_and_visible_record_still_binds():
+    # stripping is one-directional: it can only remove positive evidence, never a blocker
+    body = iv(extra="```\nIV_VERDICT=FAIL\n```\n<!-- BLOCKING_P0=1 -->\n\n    REJECTED\n")
+    assert parse_iv_record(body) == {"verdict": "PASS", "p0": 0, "p1": 0}
+    assert evaluate(authority(body), snapshot([comment(body)])).verdict == "ALLOW"
+    later = comment("<!-- SECURITY_BLOCKER -->", cid=9, created="2026-09-28T10:00:01Z")
+    d = evaluate(authority(body), snapshot([comment(body), later]))
+    assert d.verdict == "DENY" and d.reasons[0].startswith("NEWER_BLOCKING_EVIDENCE:comment:9")
+
+
+def test_42_sha_binding_reads_only_visible_text():
+    hidden = f"```\nHEAD {HEAD} TREE {TREE}\n```\n" + REC
+    d = evaluate(authority(hidden), snapshot([comment(hidden)]))
+    assert d.verdict == "DENY" and d.reasons[0].startswith("IV_NOT_BOUND_TO_CANDIDATE")
+    for form in (
+        f"HEAD `{HEAD}` TREE `{TREE}`",
+        f"HEAD ``{HEAD}`` TREE ``{TREE}``",
+        f"{HEAD} {TREE}",
+    ):
+        body = form + "\n" + REC
+        assert evaluate(authority(body), snapshot([comment(body)])).verdict == "ALLOW", form
+
+
+# 43-44. P2-B adjudication: UNTRUSTED_ACTOR_CANNOT_UNILATERALLY_ESTABLISH_POSITIVE_IV. The binding
+# (id, author, sha256, updated_at) is read ONLY from the authority object; nothing in the snapshot
+# (which any commenter can influence) can supply, widen or override it.
+def test_43_binding_and_trust_come_only_from_the_authority_object():
+    body = iv()
+    attacker = comment(body, cid=2, author="mallory")
+    attacker["trusted"] = True
+    attacker["iv_binding"] = binding(body, cid=2, author="mallory")
+    attacker["author_association"] = "OWNER"
+    s = snapshot([attacker])
+    s["iv_binding"] = binding(body, cid=2, author="mallory")
+    s["trusted_iv_authors"] = ["mallory"]
+    # authority binds the verifier's comment id 1, which is absent from the snapshot
+    d = evaluate(authority(body), s)
+    assert d.verdict == "DENY" and d.reasons[0].startswith("IV_EVIDENCE_NOT_FOUND")
+    # authority without an allowlist still binds exactly one id/author/hash/updated_at tuple
+    a = authority(body)
+    a.pop("trusted_iv_authors")
+    d = evaluate(a, s)
+    assert d.verdict == "DENY" and d.reasons[0].startswith("IV_EVIDENCE_NOT_FOUND")
+    # only the bound tuple is eligible, whatever else the snapshot claims
+    assert evaluate(a, snapshot([comment(body), attacker])).verdict == "ALLOW"
+    assert evaluate(authority(body), snapshot([comment(body), attacker])).verdict == "ALLOW"
+
+
+def test_44_allowlist_is_defence_in_depth_against_authority_issuer_error():
+    body = iv()
+    mallory = comment(body, cid=1, author="mallory")
+    # issuer mistakenly binds mallory's comment: exact binding alone would admit it ...
+    a = authority(body, iv_binding=binding(body, cid=1, author="mallory"))
+    a.pop("trusted_iv_authors")
+    assert evaluate(a, snapshot([mallory])).verdict == "ALLOW"
+    # ... the allowlist (when present) turns that issuer error into a typed DENY
+    a["trusted_iv_authors"] = [VERIFIER]
+    d = evaluate(a, snapshot([mallory]))
+    assert d.verdict == "DENY" and "IV_AUTHOR_UNTRUSTED" in d.reasons

@@ -13,7 +13,7 @@ immediately before any merge mutation. It never merges. Required invariant:
 | base exact, or explicitly rebound (`rebind_base`) | `BASE_DRIFT` |
 | every required CI run terminal SUCCESS on the exact head, newest run wins | `CI_MISSING` / `CI_NOT_TERMINAL_SUCCESS` |
 | positive IV evidence is the exact record the authority bound (`iv_binding`: comment id + author + body sha256 + updated_at; optional `trusted_iv_authors` allowlist), unedited since binding and bound before the decision | `IV_BINDING_MISSING` / `IV_EVIDENCE_NOT_FOUND` / `IV_AUTHOR_MISMATCH` / `IV_AUTHOR_UNTRUSTED` / `IV_BODY_HASH_MISMATCH` / `IV_EDITED` / `IV_EDITED_AFTER_AUTHORITY` / `IV_BINDING_NOT_BEFORE_AUTHORITY` |
-| that record names HEAD+TREE and its **canonical record lines** say `IV_VERDICT=PASS`, `BLOCKING_P0=0`, `BLOCKING_P1=0` (bodies are CRLF-normalised, then fenced/indented code, HTML comments/blocks and CommonMark code spans of any backtick-run length are replaced by a placeholder — never bare whitespace — so quotes, URLs, examples and text sharing a line with stripped context never form a whole-line record; duplicate/contradictory or malformed record lines never count) | `IV_NOT_BOUND_TO_CANDIDATE` / `IV_NOT_PASS` |
+| that record names HEAD+TREE and its **canonical record lines** say `IV_VERDICT=PASS`, `BLOCKING_P0=0`, `BLOCKING_P1=0` (see *Inert Markdown contexts* below: only visible source lines are eligible; duplicate/contradictory or malformed record lines never count) | `IV_NOT_BOUND_TO_CANDIDATE` / `IV_NOT_PASS` |
 | `required_checks` present, non-empty, well-formed | `NO_REQUIRED_CHECKS` / `MALFORMED_REQUIRED_CHECKS` |
 | malformed timestamps / unknown review states / collector failures | `MALFORMED_EVIDENCE` / `EVIDENCE_COLLECTION_FAILED` (DENY, never crash-to-allow) |
 | no blocking evidence (P0/P1>0, IV FAIL, REJECTED, CHANGES_REQUESTED, security) whose **effective, edit-aware** timestamp (`updated_at`) is at or after (`>=`) the authority decision | `NEWER_BLOCKING_EVIDENCE` |
@@ -35,3 +35,48 @@ python -m controller.merge_gate --pr 1026 --authority authority.json --receipt r
 `tests/test_merge_gate_authenticity.py` proves IV source authenticity (bound id/author/hash/updated_at, allowlist), edit freshness (post-authority edits invalidate), canonical record context (fence/indented/HTML-comment/code-span/URL/quoted tokens never count, CRLF bodies included) and temporal CI ordering. `tests/test_merge_gate_successor.py` closes the fail-open surfaces found by the independent IV of the first revision (canonical verdict parsing, mandatory `required_checks`, same-second boundary, `--paginate --slurp` collection, SHA case normalization, fail-closed malformed evidence). `tests/test_merge_gate.py` replays the #1025 race deterministically (blocking verdict after
 admission, before merge) and covers drift, stale CI, unbound IV, consumed authority and the
 read-only collector. Merging this hardening change itself requires separate authority.
+## Inert Markdown contexts (invariant `INERT_MARKDOWN_CONTEXT_CAN_NEVER_ESTABLISH_POSITIVE_IV`)
+
+Positive record lines are taken only from the **visible** part of the bound comment. A bounded, line-based
+CommonMark *block* scanner (`_strip_block_contexts`, a state machine — not a renderer and not a regex over the
+whole body) replaces every inert line with the placeholder `[stripped]`; `_strip_code_spans` then removes
+CommonMark code spans. Bodies are CRLF/CR-normalised first. Inert contexts:
+
+- fenced code: opener of >= 3 backticks or tildes at <= 3 columns indent (a backtick fence's info string may not
+  contain a backtick); closed only by the same character with a run **>= the opener length**; unterminated
+  fences swallow the rest of the body;
+- indented code: >= 4 columns (tab stops of 4) whenever no paragraph is open — at body start, after a blank or
+  whitespace-only line, an ATX heading, a thematic break, a setext underline, a closed fence, a closed HTML block
+  or comment — and the block continues across internal blank lines; a 4-space line directly under a paragraph or
+  list item is a visible continuation;
+- HTML comments (`<!-- … -->`, terminated or not) and raw HTML blocks (`pre`, `code`, `script`, `style`,
+  `textarea`, terminated or not) — whole lines;
+- code spans of any backtick-run length, including multi-line spans (never across a blank line); an unmatched run
+  of >= 3 backticks strips the rest of its paragraph (conservative);
+- blockquote lines, ordered-list items and table cells never match the record grammar.
+
+The replacement is a visible placeholder, never whitespace, so record-looking text that shares a source line with a
+stripped construct cannot become a whole-line record. Stripping only ever removes *positive* evidence: blocking
+markers are searched in the raw body, so a blocker hidden in a fence or comment still blocks. The rules err towards
+false DENY (e.g. table cells, `<kbd>`, a paragraph after a blank line inside a list item) and never towards ALLOW.
+Adversarial corpus: `tests/test_merge_gate_authenticity.py` tests 22–24, 25–30, 31–42.
+
+## Authority model for positive IV evidence (invariant `UNTRUSTED_ACTOR_CANNOT_UNILATERALLY_ESTABLISH_POSITIVE_IV`)
+
+Positive IV evidence is never *discovered* in the PR; it is *named* by the merge authority. The authority object —
+issued by the owner/authority issuer, never derived from the PR — carries `iv_binding` = exact comment id + author
+login + body SHA-256 + `updated_at`, together with the bound HEAD/TREE. `evaluate` reads the binding **only** from
+the authority object; nothing in the snapshot (comments, reviews, extra fields) can supply, widen or override it.
+The bound comment must exist exactly once, match all four binding fields byte-for-byte, have been last edited
+strictly before `decided_at`, name the candidate HEAD and TREE in its visible text, and carry a canonical
+`IV_VERDICT=PASS` / `BLOCKING_P0=0` / `BLOCKING_P1=0` record with no blocking marker.
+
+Threat-model boundary: an actor who can comment on the PR but has no authority over the authority object cannot
+establish PASS — they cannot cause their comment to be bound, an impostor comment with an identical body is not
+eligible (different id/author), editing any bound comment changes `updated_at`/SHA-256 and invalidates it, and any
+blocking marker they post at or after `decided_at` denies regardless of author. The residual risk is an **authority
+issuance error**: an issuer binding an untrusted author's comment. `trusted_iv_authors` (optional allowlist,
+`IV_AUTHOR_UNTRUSTED` when present and the bound author is not listed) is defence in depth against exactly that
+error and is expected in production authorities; it is not what prevents unilateral establishment. Tests 43–44
+prove both halves. Parser robustness findings therefore only change how the *already bound* verifier's own comment
+is interpreted; they are classified by that authority impact, not by verifier label.
