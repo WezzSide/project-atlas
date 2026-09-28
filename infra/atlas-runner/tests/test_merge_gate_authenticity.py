@@ -347,3 +347,28 @@ def test_21_malformed_authority_sha_denies_even_if_snapshot_matches():
     d = evaluate(authority(rebind_base="short"), snapshot())
     assert d.verdict == "DENY" and d.reasons[0].startswith("MALFORMED_EVIDENCE")
     assert evaluate(authority(rebind_base=None), snapshot()).verdict == "ALLOW"
+
+
+# 22-24. verifier P2s on 50302e0e closed: indented/pre-code blocks, unterminated HTML comment,
+# case-exact record values
+def test_22_indented_code_and_pre_code_blocks_are_not_record_context():
+    for body in (
+        iv("\n    IV_VERDICT=PASS"),  # CommonMark indented code block
+        iv("<pre>\nIV_VERDICT=PASS\n</pre>"),
+        iv("<code>\nIV_VERDICT=PASS"),  # unterminated block
+    ):
+        assert parse_iv_record(body)["verdict"] == "MISSING", body
+        assert evaluate(authority(body), snapshot([comment(body)])).verdict == "DENY", body
+
+
+def test_23_unterminated_html_comment_hides_rest_of_body():
+    body = iv("<!--\nIV_VERDICT=PASS")
+    assert parse_iv_record(body)["verdict"] == "MISSING"
+    assert evaluate(authority(body), snapshot([comment(body)])).verdict == "DENY"
+
+
+def test_24_record_values_are_case_exact():
+    for line in ("IV_VERDICT=pass", "IV_VERDICT=Pass", "iv_verdict=PASS"):
+        body = iv(line)
+        assert parse_iv_record(body)["verdict"] in {"MISSING", "MALFORMED"}, line
+        assert evaluate(authority(body), snapshot([comment(body)])).verdict == "DENY", line

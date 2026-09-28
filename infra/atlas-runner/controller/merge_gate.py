@@ -57,7 +57,9 @@ RECORD_LINE_RE = re.compile(
     r"^\s*(?:[-*]\s*)?\*{0,2}(IV_VERDICT|BLOCKING_P0|BLOCKING_P1)\s*=\s*([A-Za-z0-9_]+)\*{0,2}\s*[.;]?\s*$"
 )
 FENCE_RE = re.compile(r"```.*?(?:```|\Z)|~~~.*?(?:~~~|\Z)", re.S)
-HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.S)
+HTML_COMMENT_RE = re.compile(r"<!--.*?(?:-->|\Z)", re.S)
+HTML_BLOCK_RE = re.compile(r"<(pre|code|script|style)\b.*?(?:</\1\s*>|\Z)", re.S | re.I)
+INDENTED_CODE_RE = re.compile(r"(?:^|\n)\n((?:(?: {4}|\t)[^\n]*\n?)+)")
 INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
 SHA_RE = re.compile(r"\b[0-9a-fA-F]{40}\b")
 TERMINAL_OK = {"success"}
@@ -90,9 +92,14 @@ class Decision:
 
 
 def _strip_non_record_context(body: str, *, inline_code: bool = True) -> str:
-    """Remove fenced code, HTML comments and (by default) inline code spans."""
+    """Remove fenced/indented code, HTML comments and pre/code blocks (terminated or not) and,
+    by default, inline code spans. Nothing inside those contexts is a record field."""
     text = FENCE_RE.sub(" ", body or "")
     text = HTML_COMMENT_RE.sub(" ", text)
+    text = HTML_BLOCK_RE.sub(" ", text)
+    text = INDENTED_CODE_RE.sub(
+        "\n\n", text
+    )  # CommonMark indented code block (blank line + 4 spaces)
     return INLINE_CODE_RE.sub(" ", text) if inline_code else text
 
 
@@ -107,7 +114,7 @@ def parse_iv_record(body: str) -> dict[str, Any]:
     for line in _strip_non_record_context(body).splitlines():
         m = RECORD_LINE_RE.match(line)
         if m:
-            found[m.group(1)].add(m.group(2).upper())
+            found[m.group(1)].add(m.group(2))  # case-exact: PASS/FAIL only
     out: dict[str, Any] = {"verdict": "MISSING", "p0": None, "p1": None}
     vals = found["IV_VERDICT"]
     if len(vals) > 1:
