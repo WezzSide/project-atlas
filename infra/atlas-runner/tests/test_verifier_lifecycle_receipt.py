@@ -158,8 +158,16 @@ def test_receipt_command_emits_full_receipt(tmp_path):
     config_path = _write_config(tmp_path, db)
     import os
 
+    import atlas_contracts
+
+    # The child must resolve atlas_contracts exactly as this process does
+    # (conftest sys.path in a checkout, the deploy PYTHONPATH in a staged
+    # release) rather than losing it when PYTHONPATH is overridden.
+    contracts_root = str(Path(atlas_contracts.__file__).resolve().parents[1])
     env = dict(os.environ)
-    env["PYTHONPATH"] = str(INFRA)
+    env["PYTHONPATH"] = os.pathsep.join(
+        p for p in (str(INFRA), contracts_root, env.get("PYTHONPATH", "")) if p
+    )
     proc = subprocess.run(
         [sys.executable, "-m", "controller", "--config", str(config_path),
          "receipt", execution_id],
