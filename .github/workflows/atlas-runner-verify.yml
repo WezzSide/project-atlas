@@ -116,8 +116,12 @@ jobs:
           from pathlib import Path
 
           import jsonschema
+          sys.path.insert(0, str(Path("infra/atlas-runner")))
+          from controller.verifier_labels import (
+              REQUIRED_VERIFIER_LABELS,
+              select_verifier_runner,
+          )
 
-          ALLOWED_LABELS = {"self-hosted", "linux", "x64", "atlas", "executor"}
           GITHUB_HOSTED_NAME = re.compile(r"^(GitHub Actions|Hosted Ubuntu|Hosted Windows|Hosted macOS)")
 
           ev_dir = Path("executor-evidence")
@@ -202,12 +206,7 @@ jobs:
               )
               with urllib.request.urlopen(req, timeout=30) as resp:
                   jobs_payload = json.loads(resp.read().decode("utf-8"))
-              for job in jobs_payload.get("jobs", []):
-                  labels = [l.get("name", "") for l in (job.get("labels") or [])]
-                  if "atlas" in labels or "self-hosted" in labels:
-                      runner_name_api = job.get("runner_name")
-                      runner_labels_api = labels
-                      break
+              runner_name_api, runner_labels_api = select_verifier_runner(jobs_payload)
           except Exception as exc:  # noqa: BLE001 - any API failure is UNESTABLISHED
               api_error = str(exc)[:200]
 
@@ -220,7 +219,7 @@ jobs:
           else:
               name_ok = not GITHUB_HOSTED_NAME.match(str(runner_name_api))
               labels = set(runner_labels_api or [])
-              label_ok = labels <= ALLOWED_LABELS
+              label_ok = labels == REQUIRED_VERIFIER_LABELS
               record(
                   "runner_identity_from_api",
                   name_ok and label_ok,

@@ -19,6 +19,10 @@ from conftest import drive_to_state  # noqa: E402
 
 from controller import lifecycle  # noqa: E402
 from controller.cli import _fabric_state  # noqa: E402
+from controller.verifier_labels import (  # noqa: E402
+    REQUIRED_VERIFIER_LABELS,
+    select_verifier_runner,
+)
 
 # --- Band D: verifier fail-closed completeness (static contract invariants) ---
 
@@ -35,6 +39,10 @@ def test_verifier_classifies_fields_and_fails_closed() -> None:
     assert 'report["verdict"] = "UNESTABLISHED"' in text
     # VERIFIED requires all checks PASS; violations -> REJECTED
     assert 'report["verdict"] = "VERIFIED" if all_ok else "REJECTED"' in text
+    # Runner identity must use strict selection over the API's string labels.
+    assert "select_verifier_runner(jobs_payload)" in text
+    assert 'from controller.verifier_labels import (' in text
+    assert "REQUIRED_VERIFIER_LABELS" in text
     # no remaining pass-with-note on runner identity
     fragment_note = "record(\"runner_name_not_github_hosted\", True"
     assert fragment_note not in text, "runner identity still pass-with-note"
@@ -45,6 +53,67 @@ def test_verifier_rejects_on_unestablished_exit() -> None:
         pytest.skip("workflow file unavailable outside a git checkout")
     text = VERIFY.read_text(encoding="utf-8")
     assert 'if report["verdict"] in {"REJECTED", "UNESTABLISHED"}:' in text
+
+
+def test_verifier_selects_one_complete_string_label_set() -> None:
+    runner_name, labels = select_verifier_runner(
+        {
+            "jobs": [
+                {"runner_name": "GitHub Actions 123", "labels": ["ubuntu-latest"]},
+                {
+                    "runner_name": "atlas-runner-1",
+                    "labels": ["self-hosted", "linux", "x64", "atlas", "executor"],
+                },
+            ]
+        }
+    )
+    assert runner_name == "atlas-runner-1"
+    assert set(labels) == REQUIRED_VERIFIER_LABELS
+
+
+@pytest.mark.parametrize(
+    "labels",
+    [
+        ["self-hosted"],
+        ["self-hosted", "linux", "x64", "executor"],
+        ["self-hosted", "linux", "x64", "atlas", "executor", "gpu"],
+        ["self-hosted", "linux", "x64", "atlas", "executor", "atlas"],
+    ],
+)
+def test_verifier_rejects_partial_wrong_or_duplicate_runner_labels(labels) -> None:
+    with pytest.raises(ValueError):
+        select_verifier_runner({"jobs": [{"runner_name": "unrelated-host", "labels": labels}]})
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"jobs": None},
+        {"jobs": {"runner_name": "host"}},
+        {"jobs": [None]},
+        {"jobs": [{"runner_name": "host"}]},
+        {"jobs": [{"runner_name": "host", "labels": None}]},
+        {"jobs": [{"runner_name": "host", "labels": {"atlas": True}}]},
+        {"jobs": [{"runner_name": "host", "labels": ["atlas", 7]}]},
+    ],
+)
+def test_verifier_rejects_malformed_jobs_api_identity(payload) -> None:
+    with pytest.raises(ValueError):
+        select_verifier_runner(payload)
+
+
+def test_verifier_rejects_ambiguous_complete_runner_matches() -> None:
+    labels = sorted(REQUIRED_VERIFIER_LABELS)
+    with pytest.raises(ValueError, match="exactly one job"):
+        select_verifier_runner(
+            {
+                "jobs": [
+                    {"runner_name": "atlas-runner-1", "labels": labels},
+                    {"runner_name": "atlas-runner-2", "labels": labels},
+                ]
+            }
+        )
 
 
 # --- Band H: fabric readiness is separate from the worker lifecycle ---------
