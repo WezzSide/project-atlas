@@ -42,6 +42,8 @@ def test_verifier_classifies_fields_and_fails_closed() -> None:
     # VERIFIED requires all checks PASS; violations -> REJECTED
     assert 'report["verdict"] = "VERIFIED" if all_ok else "REJECTED"' in text
     # Runner identity must use strict selection over the API's string labels.
+    assert "def fetch_jobs_page(page, per_page):" in text
+    assert 'f"?per_page={per_page}&page={page}"' in text
     assert "jobs_payload = fetch_complete_jobs(fetch_jobs_page)" in text
     assert text.count("select_verifier_runner(jobs_payload)") == 1
     assert 'from controller.verifier_labels import (' in text
