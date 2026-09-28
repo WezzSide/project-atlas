@@ -146,6 +146,94 @@ def cmd_health(args: argparse.Namespace) -> int:
     return exit_code
 
 
+FABRIC_STATES = ("BUSY", "CLEANUP_PENDING", "IDLE_READY", "DEGRADED")
+
+
+def _fabric_state(store, docker) -> str:
+    """FABRIC/HOST READINESS layer — deliberately separate from the worker
+    execution lifecycle (Band H): derived from durable execution state plus
+    live worker containers."""
+    actives = store.active_executions()
+    cleanup_pending = any(
+        e["terminal_status"] in {"failed", "timed_out"} and e["cleanup_status"] != "ok"
+        for e in store.all_executions()
+    )
+    try:
+        workers = docker.ps_all()
+    except Exception:
+        return "DEGRADED"
+    unknown = [w for w in workers if w.labels.get("atlas.runner") != "owned"]
+    if unknown:
+        return "DEGRADED"
+    if actives:
+        return "BUSY"
+    if cleanup_pending or workers:
+        return "CLEANUP_PENDING"
+    return "IDLE_READY"
+
+
+def cmd_fabric_state(args: argparse.Namespace) -> int:
+    _config, store, docker, _github = _build_context(args.config)
+    try:
+        state = _fabric_state(store, docker)
+    finally:
+        store.close()
+    print(json.dumps({"fabric_state": state}, sort_keys=True))
+    return 0
+
+
+def cmd_receipt(args: argparse.Namespace) -> int:
+    """Durable Atlas reconciliation receipt (Band I)."""
+    _config, store, docker, _github = _build_context(args.config)
+    try:
+        execution = store.get_execution(args.execution_id)
+        if execution is None:
+            print(f"no such execution: {args.execution_id}", file=sys.stderr)
+            return 2
+        task = store.get_task(execution["task_id"]) or {}
+        definition = json.loads(task.get("definition_json") or "{}")
+        evidence = {}
+        if execution.get("evidence_path"):
+            try:
+                evidence = json.loads(Path(execution["evidence_path"]).read_text("utf-8"))
+            except OSError:
+                evidence = {}
+        receipt = {
+            "schema_version": 1,
+            "receipt": "atlas-runner-execution",
+            "task_id": execution["task_id"],
+            "execution_id": execution["execution_id"],
+            "authority_reference": definition.get("authority_reference"),
+            "repository": definition.get("repository"),
+            "base_revision": definition.get("base_revision"),
+            "result_revision": evidence.get("result_revision"),
+            "executor_type": definition.get("executor_type"),
+            "runner_name": execution.get("runner_name"),
+            "release_identity": _release_identity(),
+            "started_at": execution.get("started_at"),
+            "finished_at": execution.get("finished_at"),
+            "terminal_status": execution.get("terminal_status"),
+            "verifier_verdict": execution.get("verifier_verdict") or "PENDING",
+            "atlas_reconciliation": "RECONCILED" if execution.get("reconciled") else "PENDING",
+            "cleanup_status": execution.get("cleanup_status"),
+            "artifact_sha256": evidence.get("artifact_sha256", {}),
+            "fabric_state": _fabric_state(store, docker),
+        }
+        print(json.dumps(receipt, indent=2, sort_keys=True))
+    finally:
+        store.close()
+    return 0
+
+
+def _release_identity() -> dict:
+    link = "/opt/atlas-runner/current"
+    try:
+        target = str(Path(link).resolve())
+    except OSError:
+        target = None
+    return {"current_link": link, "release": target}
+
+
 def cmd_version(args: argparse.Namespace) -> int:
     config, _store, docker, _github = _build_context(args.config)
     release_link = "/opt/atlas-runner/current"
@@ -263,6 +351,12 @@ def build_parser() -> argparse.ArgumentParser:
     rec.set_defaults(func=cmd_reconcile)
     sub.add_parser("list-workers", help="list active workers").set_defaults(func=cmd_list_workers)
 
+    sub.add_parser(
+        "fabric-state", help="fabric readiness: BUSY/CLEANUP_PENDING/IDLE_READY/DEGRADED"
+    ).set_defaults(func=cmd_fabric_state)
+    receipt = sub.add_parser("receipt", help="durable Atlas reconciliation receipt JSON")
+    receipt.add_argument("execution_id")
+    receipt.set_defaults(func=cmd_receipt)
     show = sub.add_parser("show", help="show one execution")
     show.add_argument("execution_id")
     show.set_defaults(func=cmd_show)
