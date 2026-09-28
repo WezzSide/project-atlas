@@ -119,6 +119,7 @@ jobs:
           sys.path.insert(0, str(Path("infra/atlas-runner")))
           from controller.verifier_labels import (
               REQUIRED_VERIFIER_LABELS,
+              fetch_complete_jobs,
               select_verifier_runner,
           )
 
@@ -196,16 +197,20 @@ jobs:
           runner_labels_api = None
           api_error = None
           try:
-              req = urllib.request.Request(
-                  f"https://api.github.com/repos/{_os.environ['GITHUB_REPOSITORY']}"
-                  f"/actions/runs/{report['source_run_id']}/jobs?per_page=100",
-                  headers={
-                      "Authorization": f"Bearer {_os.environ['GH_TOKEN']}",
-                      "Accept": "application/vnd.github+json",
-                  },
-              )
-              with urllib.request.urlopen(req, timeout=30) as resp:
-                  jobs_payload = json.loads(resp.read().decode("utf-8"))
+              def fetch_jobs_page(page, per_page):
+                  req = urllib.request.Request(
+                      f"https://api.github.com/repos/{_os.environ['GITHUB_REPOSITORY']}"
+                      f"/actions/runs/{report['source_run_id']}/jobs"
+                      f"?per_page={per_page}&page={page}",
+                      headers={
+                          "Authorization": f"Bearer {_os.environ['GH_TOKEN']}",
+                          "Accept": "application/vnd.github+json",
+                      },
+                  )
+                  with urllib.request.urlopen(req, timeout=30) as resp:
+                      return json.loads(resp.read().decode("utf-8"))
+
+              jobs_payload = fetch_complete_jobs(fetch_jobs_page)
               runner_name_api, runner_labels_api = select_verifier_runner(jobs_payload)
           except Exception as exc:  # noqa: BLE001 - any API failure is UNESTABLISHED
               api_error = str(exc)[:200]

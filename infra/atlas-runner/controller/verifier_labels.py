@@ -2,11 +2,71 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 REQUIRED_VERIFIER_LABELS = frozenset(
     {"self-hosted", "linux", "x64", "atlas", "executor"}
 )
+JOBS_PAGE_SIZE = 100
+
+
+def fetch_complete_jobs(
+    fetch_page: Callable[[int, int], Any],
+) -> dict[str, Any]:
+    """Fetch and validate the complete workflow-run jobs collection."""
+    all_jobs: list[Any] = []
+    expected_total: int | None = None
+    required_pages: int | None = None
+
+    page = 1
+    while required_pages is None or page <= required_pages:
+        payload = fetch_page(page, JOBS_PAGE_SIZE)
+        if not isinstance(payload, dict):
+            raise ValueError("jobs API page payload must be an object")
+
+        total_count = payload.get("total_count")
+        if (
+            isinstance(total_count, bool)
+            or not isinstance(total_count, int)
+            or total_count < 0
+        ):
+            raise ValueError("jobs API total_count must be a non-negative integer")
+
+        jobs = payload.get("jobs")
+        if not isinstance(jobs, list):
+            raise ValueError("jobs API page must contain a jobs list")
+
+        if expected_total is None:
+            expected_total = total_count
+            required_pages = max(
+                1, (expected_total + JOBS_PAGE_SIZE - 1) // JOBS_PAGE_SIZE
+            )
+        elif total_count != expected_total:
+            raise ValueError("jobs API total_count changed between pages")
+
+        if required_pages is None or expected_total is None:
+            raise ValueError("jobs API pagination state was not established")
+        expected_page_size = min(
+            JOBS_PAGE_SIZE,
+            max(0, expected_total - ((page - 1) * JOBS_PAGE_SIZE)),
+        )
+        if len(jobs) != expected_page_size:
+            raise ValueError(
+                f"jobs API page {page} contained {len(jobs)} jobs; "
+                f"expected {expected_page_size}"
+            )
+
+        all_jobs.extend(jobs)
+        page += 1
+
+    if expected_total is None:
+        raise ValueError("jobs API pagination completed without a total_count")
+    if len(all_jobs) != expected_total:
+        raise ValueError(
+            f"jobs API retrieved {len(all_jobs)} jobs; expected {expected_total}"
+        )
+    return {"total_count": expected_total, "jobs": all_jobs}
 
 
 def select_verifier_runner(jobs_payload: Any) -> tuple[str, tuple[str, ...]]:

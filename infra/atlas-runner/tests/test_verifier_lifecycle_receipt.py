@@ -20,7 +20,9 @@ from conftest import drive_to_state  # noqa: E402
 from controller import lifecycle  # noqa: E402
 from controller.cli import _fabric_state  # noqa: E402
 from controller.verifier_labels import (  # noqa: E402
+    JOBS_PAGE_SIZE,
     REQUIRED_VERIFIER_LABELS,
+    fetch_complete_jobs,
     select_verifier_runner,
 )
 
@@ -32,7 +34,7 @@ def test_verifier_classifies_fields_and_fails_closed() -> None:
         pytest.skip("workflow file unavailable outside a git checkout")
     text = VERIFY.read_text(encoding="utf-8")
     # mandatory runner identity sourced from the canonical jobs API
-    assert "actions/runs/" in text and "/jobs?per_page=100" in text
+    assert "actions/runs/" in text
     assert 'record("runner_identity_from_api"' in text
     # UNESTABLISHED verdict exists and is produced by the mandatory-evidence path
     assert '"UNESTABLISHED"' in text
@@ -40,7 +42,8 @@ def test_verifier_classifies_fields_and_fails_closed() -> None:
     # VERIFIED requires all checks PASS; violations -> REJECTED
     assert 'report["verdict"] = "VERIFIED" if all_ok else "REJECTED"' in text
     # Runner identity must use strict selection over the API's string labels.
-    assert "select_verifier_runner(jobs_payload)" in text
+    assert "jobs_payload = fetch_complete_jobs(fetch_jobs_page)" in text
+    assert text.count("select_verifier_runner(jobs_payload)") == 1
     assert 'from controller.verifier_labels import (' in text
     assert "REQUIRED_VERIFIER_LABELS" in text
     # no remaining pass-with-note on runner identity
@@ -114,6 +117,152 @@ def test_verifier_rejects_ambiguous_complete_runner_matches() -> None:
                 ]
             }
         )
+
+
+def _job(index: int, *, qualifying: bool = False) -> dict[str, object]:
+    labels = (
+        sorted(REQUIRED_VERIFIER_LABELS)
+        if qualifying
+        else ["ubuntu-latest"]
+    )
+    return {"id": index, "runner_name": f"runner-{index}", "labels": labels}
+
+
+def _page_fetcher(
+    pages: dict[int, object],
+    calls: list[tuple[int, int]],
+):
+    def fetch(page: int, per_page: int) -> object:
+        calls.append((page, per_page))
+        if page not in pages:
+            raise RuntimeError(f"unexpected page {page}")
+        return pages[page]
+
+    return fetch
+
+
+def test_verifier_fetches_all_pages_before_rejecting_hidden_ambiguity() -> None:
+    calls: list[tuple[int, int]] = []
+    first_page = [_job(index) for index in range(100)]
+    first_page[0] = _job(0, qualifying=True)
+    payload = fetch_complete_jobs(
+        _page_fetcher(
+            {
+                1: {"total_count": 101, "jobs": first_page},
+                2: {"total_count": 101, "jobs": [_job(100, qualifying=True)]},
+            },
+            calls,
+        )
+    )
+    assert calls == [(1, JOBS_PAGE_SIZE), (2, JOBS_PAGE_SIZE)]
+    with pytest.raises(ValueError, match="exactly one job"):
+        select_verifier_runner(payload)
+
+
+def test_verifier_selects_unique_runner_found_only_on_second_page() -> None:
+    calls: list[tuple[int, int]] = []
+    payload = fetch_complete_jobs(
+        _page_fetcher(
+            {
+                1: {
+                    "total_count": 101,
+                    "jobs": [_job(index) for index in range(100)],
+                },
+                2: {"total_count": 101, "jobs": [_job(100, qualifying=True)]},
+            },
+            calls,
+        )
+    )
+    runner_name, labels = select_verifier_runner(payload)
+    assert calls == [(1, JOBS_PAGE_SIZE), (2, JOBS_PAGE_SIZE)]
+    assert runner_name == "runner-100"
+    assert set(labels) == REQUIRED_VERIFIER_LABELS
+
+
+def test_verifier_rejects_zero_qualifying_jobs_at_page_boundary() -> None:
+    payload = fetch_complete_jobs(
+        lambda page, per_page: {
+            "total_count": 100,
+            "jobs": [_job(index) for index in range(per_page)],
+        }
+    )
+    with pytest.raises(ValueError, match="found 0"):
+        select_verifier_runner(payload)
+
+
+@pytest.mark.parametrize(
+    ("second_page", "match"),
+    [
+        ({"total_count": 101, "jobs": []}, "contained 0 jobs"),
+        ({"total_count": 101}, "jobs list"),
+        (["not", "an", "object"], "page payload"),
+        ({"total_count": 102, "jobs": [_job(100)]}, "changed between pages"),
+    ],
+)
+def test_verifier_rejects_incomplete_or_malformed_later_page(
+    second_page: object,
+    match: str,
+) -> None:
+    first_page = [_job(index) for index in range(100)]
+    with pytest.raises(ValueError, match=match):
+        fetch_complete_jobs(
+            _page_fetcher(
+                {
+                    1: {"total_count": 101, "jobs": first_page},
+                    2: second_page,
+                },
+                [],
+            )
+        )
+
+
+@pytest.mark.parametrize("total_count", [None, True, -1, "101"])
+def test_verifier_rejects_invalid_total_count(total_count: object) -> None:
+    with pytest.raises(ValueError, match="total_count"):
+        fetch_complete_jobs(
+            lambda page, per_page: {"total_count": total_count, "jobs": []}
+        )
+
+
+def test_verifier_rejects_retrieved_count_mismatch() -> None:
+    with pytest.raises(ValueError, match="contained 100 jobs; expected 1"):
+        fetch_complete_jobs(
+            lambda page, per_page: {
+                "total_count": 1,
+                "jobs": [_job(index) for index in range(100)],
+            }
+        )
+
+
+def test_verifier_propagates_later_page_api_failure() -> None:
+    first_page = [_job(index) for index in range(100)]
+
+    def fetch(page: int, per_page: int) -> object:
+        if page == 1:
+            return {"total_count": 101, "jobs": first_page}
+        raise OSError("jobs API unavailable")
+
+    with pytest.raises(OSError, match="unavailable"):
+        fetch_complete_jobs(fetch)
+
+
+def test_verifier_normal_single_page_remains_valid() -> None:
+    calls: list[tuple[int, int]] = []
+    payload = fetch_complete_jobs(
+        _page_fetcher(
+            {
+                1: {
+                    "total_count": 2,
+                    "jobs": [_job(0), _job(1, qualifying=True)],
+                }
+            },
+            calls,
+        )
+    )
+    runner_name, labels = select_verifier_runner(payload)
+    assert calls == [(1, JOBS_PAGE_SIZE)]
+    assert runner_name == "runner-1"
+    assert set(labels) == REQUIRED_VERIFIER_LABELS
 
 
 # --- Band H: fabric readiness is separate from the worker lifecycle ---------
