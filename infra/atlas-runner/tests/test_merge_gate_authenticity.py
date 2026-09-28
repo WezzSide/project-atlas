@@ -372,3 +372,50 @@ def test_24_record_values_are_case_exact():
         body = iv(line)
         assert parse_iv_record(body)["verdict"] in {"MISSING", "MALFORMED"}, line
         assert evaluate(authority(body), snapshot([comment(body)])).verdict == "DENY", line
+
+
+# 25-30. verifier P2s on 7a97b5c2 closed: CRLF bodies, indented code at block boundaries,
+# CommonMark code spans of any backtick-run length, no whitespace-only context replacement
+def test_25_crlf_bodies_are_normalised_before_context_stripping():
+    hidden = "x\r\n\r\n    IV_VERDICT=PASS\r\n    BLOCKING_P0=0\r\n    BLOCKING_P1=0\r\n"
+    assert parse_iv_record(hidden)["verdict"] == "MISSING"
+    assert evaluate(authority(hidden), snapshot([comment(hidden)])).verdict == "DENY"
+    plain = iv().replace("\n", "\r\n")  # canonical record with CRLF endings still parses
+    assert parse_iv_record(plain) == {"verdict": "PASS", "p0": 0, "p1": 0}
+    assert evaluate(authority(plain), snapshot([comment(plain)])).verdict == "ALLOW"
+
+
+def test_26_indented_code_at_body_start_heading_or_whitespace_line_is_not_record():
+    rec = "    IV_VERDICT=PASS\n    BLOCKING_P0=0\n    BLOCKING_P1=0\n"
+    for body in (rec, "# Report\n" + rec, "intro\n# Report\n" + rec, "intro\n \t \n" + rec):
+        assert parse_iv_record(body)["verdict"] == "MISSING", body
+        assert evaluate(authority(body), snapshot([comment(body)])).verdict == "DENY", body
+
+
+def test_27_indented_continuation_lines_remain_visible_text():
+    # a 4-space line directly under a paragraph/list item is a continuation, not a code block
+    for body in (iv().replace("IV_VERDICT=PASS", "    IV_VERDICT=PASS"), iv("  IV_VERDICT=PASS")):
+        assert parse_iv_record(body)["verdict"] == "PASS", body
+        assert evaluate(authority(body), snapshot([comment(body)])).verdict == "ALLOW", body
+
+
+def test_28_code_spans_of_any_backtick_run_length_are_not_record():
+    for span in ("``IV_VERDICT=PASS``", "`` `IV_VERDICT=PASS` ``", "```IV_VERDICT=PASS```"):
+        body = iv(span)
+        assert parse_iv_record(body)["verdict"] == "MISSING", span
+        assert evaluate(authority(body), snapshot([comment(body)])).verdict == "DENY", span
+    multiline = iv("`note\nIV_VERDICT=PASS\nend`")  # a code span may span soft line breaks
+    assert parse_iv_record(multiline)["verdict"] == "MISSING"
+
+
+def test_29_code_span_cannot_cross_blank_line_so_record_after_it_is_visible():
+    body = iv(extra="`unterminated\n\ntrailing text`")
+    assert parse_iv_record(body)["verdict"] == "PASS"
+    assert evaluate(authority(body), snapshot([comment(body)])).verdict == "ALLOW"
+
+
+def test_30_stripped_context_sharing_a_line_with_record_text_is_not_whole_line_record():
+    for line in ("`x` IV_VERDICT=PASS", "``` `x` ``` IV_VERDICT=PASS", "<!-- c -->IV_VERDICT=PASS"):
+        body = iv(line)
+        assert parse_iv_record(body)["verdict"] == "MISSING", line
+        assert evaluate(authority(body), snapshot([comment(body)])).verdict == "DENY", line

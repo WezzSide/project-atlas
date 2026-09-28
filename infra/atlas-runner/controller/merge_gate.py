@@ -50,7 +50,7 @@ BLOCKING_MARKERS = (
     re.compile(r"\bMERGE_AUTHORITY_INVALIDATED\b"),
 )
 # Canonical IV record fields are whole lines of the form KEY=VALUE (optionally **bold** or a list
-# item). Fenced code blocks, inline code spans and HTML comments are stripped BEFORE parsing, so
+# item). Fenced/indented code, code spans and HTML comments/blocks are stripped BEFORE parsing, so
 # examples, quotes and hidden markup can never establish a verdict. No fuzzy fallback exists.
 RECORD_KEYS = ("IV_VERDICT", "BLOCKING_P0", "BLOCKING_P1")
 RECORD_LINE_RE = re.compile(
@@ -59,8 +59,14 @@ RECORD_LINE_RE = re.compile(
 FENCE_RE = re.compile(r"```.*?(?:```|\Z)|~~~.*?(?:~~~|\Z)", re.S)
 HTML_COMMENT_RE = re.compile(r"<!--.*?(?:-->|\Z)", re.S)
 HTML_BLOCK_RE = re.compile(r"<(pre|code|script|style)\b.*?(?:</\1\s*>|\Z)", re.S | re.I)
-INDENTED_CODE_RE = re.compile(r"(?:^|\n)\n((?:(?: {4}|\t)[^\n]*\n?)+)")
-INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
+# CommonMark indented code block: >=4 spaces / tab after a block boundary (body start, blank
+# or whitespace-only line, ATX heading). Bodies are CRLF-normalised before this is applied.
+INDENTED_CODE_RE = re.compile(r"(\A|\n[ \t]*\n|(?:\A|\n)#[^\n]*\n)((?:(?: {4}|\t)[^\n]*\n?)+)")
+# Stripped contexts are replaced by a visible placeholder, never by bare whitespace, so text that
+# shared a line with a code span / fence / comment cannot become a whole-line record.
+STRIPPED = "[stripped]"
+BACKTICK_RUN_RE = re.compile(r"`+")
+BLANK_LINE_RE = re.compile(r"\n[ \t]*\n")
 SHA_RE = re.compile(r"\b[0-9a-fA-F]{40}\b")
 TERMINAL_OK = {"success"}
 
@@ -91,16 +97,42 @@ class Decision:
         return {"verdict": self.verdict, "reasons": list(self.reasons), "receipt": self.receipt}
 
 
+def _strip_code_spans(text: str) -> str:
+    """CommonMark code spans: a backtick run of length n opens a span closed by the next run of
+    exactly length n (runs of other lengths are literal); a span never crosses a blank line.
+    Any length of run is handled (`x`, ``x``, ``` `x` ```), unlike a single-backtick regex."""
+    runs = BACKTICK_RUN_RE.finditer(text)
+    runs = list(runs)
+    out: list[str] = []
+    pos = 0
+    i = 0
+    while i < len(runs):
+        opener = runs[i]
+        n = opener.end() - opener.start()
+        j = i + 1
+        while j < len(runs) and (runs[j].end() - runs[j].start()) != n:
+            j += 1
+        if j < len(runs) and not BLANK_LINE_RE.search(text[opener.end() : runs[j].start()]):
+            out.append(text[pos : opener.start()])
+            out.append(STRIPPED)
+            pos = runs[j].end()
+            i = j + 1
+        else:
+            i += 1
+    out.append(text[pos:])
+    return "".join(out)
+
+
 def _strip_non_record_context(body: str, *, inline_code: bool = True) -> str:
     """Remove fenced/indented code, HTML comments and pre/code blocks (terminated or not) and,
-    by default, inline code spans. Nothing inside those contexts is a record field."""
-    text = FENCE_RE.sub(" ", body or "")
-    text = HTML_COMMENT_RE.sub(" ", text)
-    text = HTML_BLOCK_RE.sub(" ", text)
-    text = INDENTED_CODE_RE.sub(
-        "\n\n", text
-    )  # CommonMark indented code block (blank line + 4 spaces)
-    return INLINE_CODE_RE.sub(" ", text) if inline_code else text
+    by default, code spans. Nothing inside those contexts is a record field. Line endings are
+    normalised first so CRLF bodies (GitHub web submissions) get identical treatment."""
+    text = (body or "").replace("\r\n", "\n").replace("\r", "\n")
+    text = FENCE_RE.sub(STRIPPED, text)
+    text = HTML_COMMENT_RE.sub(STRIPPED, text)
+    text = HTML_BLOCK_RE.sub(STRIPPED, text)
+    text = INDENTED_CODE_RE.sub(lambda m: m.group(1) + STRIPPED + "\n", text)
+    return _strip_code_spans(text) if inline_code else text
 
 
 def parse_iv_record(body: str) -> dict[str, Any]:
