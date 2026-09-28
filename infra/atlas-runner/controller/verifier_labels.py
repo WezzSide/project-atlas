@@ -11,6 +11,29 @@ REQUIRED_VERIFIER_LABELS = frozenset(
 JOBS_PAGE_SIZE = 100
 
 
+def validate_job_ids(jobs: list[Any]) -> None:
+    """Require one valid, globally unique GitHub Actions job ID per record.
+
+    GitHub Actions job IDs are positive integers. A missing, malformed, or
+    duplicated ID is evidence ambiguity: the collection must fail closed
+    (UNESTABLISHED) rather than let one record of a conflicting identity
+    establish verifier authority. Identical duplicates are rejected too —
+    no deduplication, no first-wins, no label preference.
+    """
+    seen: set[int] = set()
+    for job in jobs:
+        if not isinstance(job, dict):
+            raise ValueError("jobs API entries must be objects")
+        job_id = job.get("id")
+        if isinstance(job_id, bool) or not isinstance(job_id, int):
+            raise ValueError("jobs API job id must be an integer")
+        if job_id <= 0:
+            raise ValueError("jobs API job id must be a positive integer")
+        if job_id in seen:
+            raise ValueError(f"jobs API duplicate job id {job_id}")
+        seen.add(job_id)
+
+
 def fetch_complete_jobs(
     fetch_page: Callable[[int, int], Any],
 ) -> dict[str, Any]:
@@ -66,6 +89,7 @@ def fetch_complete_jobs(
         raise ValueError(
             f"jobs API retrieved {len(all_jobs)} jobs; expected {expected_total}"
         )
+    validate_job_ids(all_jobs)
     return {"total_count": expected_total, "jobs": all_jobs}
 
 
@@ -82,6 +106,7 @@ def select_verifier_runner(jobs_payload: Any) -> tuple[str, tuple[str, ...]]:
     jobs = jobs_payload.get("jobs")
     if not isinstance(jobs, list):
         raise ValueError("jobs API payload must contain a jobs list")
+    validate_job_ids(jobs)
 
     candidates: list[tuple[str, tuple[str, ...]]] = []
     for job in jobs:
