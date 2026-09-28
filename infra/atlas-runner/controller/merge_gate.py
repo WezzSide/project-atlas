@@ -54,13 +54,11 @@ BLOCKING_MARKERS = (
 # examples, quotes and hidden markup can never establish a verdict. No fuzzy fallback exists.
 RECORD_KEYS = ("IV_VERDICT", "BLOCKING_P0", "BLOCKING_P1")
 RECORD_LINE_RE = re.compile(
-    r"^\s*(?:[-*>]\s*)?\*{0,2}(IV_VERDICT|BLOCKING_P0|BLOCKING_P1)\s*=\s*([A-Za-z0-9_]+)\*{0,2}\s*[.;]?\s*$"
+    r"^\s*(?:[-*]\s*)?\*{0,2}(IV_VERDICT|BLOCKING_P0|BLOCKING_P1)\s*=\s*([A-Za-z0-9_]+)\*{0,2}\s*[.;]?\s*$"
 )
-FENCE_RE = re.compile(r"```.*?```|~~~.*?~~~", re.S)
+FENCE_RE = re.compile(r"```.*?(?:```|\Z)|~~~.*?(?:~~~|\Z)", re.S)
 HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.S)
 INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
-P0_RE = re.compile(r"BLOCKING_P0\s*=\s*(\d+)", re.I)
-P1_RE = re.compile(r"BLOCKING_P1\s*=\s*(\d+)", re.I)
 SHA_RE = re.compile(r"\b[0-9a-fA-F]{40}\b")
 TERMINAL_OK = {"success"}
 
@@ -184,6 +182,10 @@ def _evaluate(authority: dict[str, Any], snapshot: dict[str, Any]) -> Decision:
     if pr.get("merged") or str(pr.get("state", "")).upper() != "OPEN":
         reasons.append("PR_NOT_OPEN")
     a_head, a_tree = _sha(authority["head"]), _sha(authority["tree"])
+    if a_head is None or a_tree is None or _sha(authority["base"]) is None:
+        raise MalformedEvidence("authority head/tree/base must be 40-hex shas")
+    if authority.get("rebind_base") is not None and _sha(authority["rebind_base"]) is None:
+        raise MalformedEvidence("authority rebind_base must be a 40-hex sha")
     if _sha(pr.get("head")) != a_head:
         reasons.append(f"HEAD_DRIFT:{pr.get('head')}")
     if _sha(pr.get("tree")) != a_tree:

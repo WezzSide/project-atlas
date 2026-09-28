@@ -329,8 +329,9 @@ def test_sha_case_normalized_without_weakening_binding():
     )
     assert d.verdict == "ALLOW", d.reasons
     assert d.receipt["authority"]["head"] == HEAD  # normalized lowercase
-    bad = authority(head="9c06069c")  # short sha is not a binding
-    assert "HEAD_DRIFT" in reasons(evaluate(bad, snapshot()))
+    bad = authority(head="9c06069c")  # short sha is not a binding -> malformed authority, DENY
+    d = evaluate(bad, snapshot())
+    assert d.verdict == "DENY" and d.reasons[0].startswith("MALFORMED_EVIDENCE")
 
 
 def test_main_exit_codes_and_no_crash_to_allow(tmp_path, monkeypatch):

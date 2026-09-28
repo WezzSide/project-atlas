@@ -205,7 +205,6 @@ def test_10_canonical_record_outside_excluded_contexts_allows():
         "**IV_VERDICT=PASS**",
         "- IV_VERDICT=PASS",
         "IV_VERDICT = PASS.",
-        "> IV_VERDICT=PASS",
     ):
         body = iv(line, extra="```\nIV_VERDICT=FAIL\n```\n<!-- IV_VERDICT=FAIL -->")
         rec = parse_iv_record(body)
@@ -321,3 +320,30 @@ def test_18_existing_invariants_hold_with_binding():
         "IV_BINDING_MISSING"
         in evaluate(authority(iv_binding={"iv_evidence_id": 1}), snapshot()).reasons
     )
+
+
+# 19-21. verifier P2s on 906dbaae closed: blockquote, unterminated fence, malformed authority sha
+def test_19_blockquote_is_quote_context_not_record():
+    body = iv("> IV_VERDICT=PASS")
+    assert parse_iv_record(body)["verdict"] == "MISSING"
+    assert evaluate(authority(body), snapshot([comment(body)])).verdict == "DENY"
+
+
+def test_20_unterminated_fence_excludes_rest_of_body():
+    body = iv("```\nIV_VERDICT=PASS")  # fence never closed
+    assert parse_iv_record(body)["verdict"] == "MISSING"
+    assert evaluate(authority(body), snapshot([comment(body)])).verdict == "DENY"
+    body = iv(
+        "IV_VERDICT=PASS", extra="```text\nIV_VERDICT=FAIL"
+    )  # canonical line before the open fence
+    assert parse_iv_record(body)["verdict"] == "PASS"
+
+
+def test_21_malformed_authority_sha_denies_even_if_snapshot_matches():
+    s = snapshot()
+    s["pr"]["base"] = "not-a-sha"
+    d = evaluate(authority(base="not-a-sha"), s)
+    assert d.verdict == "DENY" and d.reasons[0].startswith("MALFORMED_EVIDENCE")
+    d = evaluate(authority(rebind_base="short"), snapshot())
+    assert d.verdict == "DENY" and d.reasons[0].startswith("MALFORMED_EVIDENCE")
+    assert evaluate(authority(rebind_base=None), snapshot()).verdict == "ALLOW"
