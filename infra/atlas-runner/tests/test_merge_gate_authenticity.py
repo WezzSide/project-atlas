@@ -422,8 +422,11 @@ def test_28_code_spans_of_any_backtick_run_length_are_not_record():
 
 def test_29_code_span_cannot_cross_blank_line_so_record_after_it_is_visible():
     body = iv(extra="`unterminated\n\ntrailing text`")
-    assert parse_iv_record(body)["verdict"] == "PASS"
-    assert evaluate(authority(body), snapshot([comment(body)])).verdict == "ALLOW"
+    # the scanner alone would keep the record visible; the grammar rejects unpaired backticks
+    stripped = _strip_non_record_context(body)
+    assert any(RECORD_LINE_RE.match(ln) for ln in stripped.split("\n"))
+    assert parse_iv_record(body)["verdict"] == "NON_CANONICAL"
+    assert evaluate(authority(body), snapshot([comment(body)])).verdict == "DENY"
 
 
 def test_30_stripped_context_sharing_a_line_with_record_text_is_not_whole_line_record():
@@ -851,3 +854,35 @@ def test_54_collector_reads_review_thread_comments_and_tolerates_deleted_users()
     ]
     assert snap["comments"][0]["author"] is None
     assert any("pulls/5/comments" in c[2] for c in calls)
+
+
+# 55-57. v9 (e6a88989) verifier P2/P3 closed by grammar tightening: tables, list-wrapped
+# blockquotes, list-item-initial indented code, cross-line backtick pairing, bidi controls.
+def test_55_tables_blockquotes_tabs_and_bidi_controls_are_not_canonical():
+    for label, extra in (
+        ("table row hiding SHAs", "| a | b |\n|---|---|\n| x | y | z |"),
+        ("list-wrapped blockquote", "- > quoting\nIV_VERDICT=PASS"),
+        ("plain gt", "a -> b"),
+        ("tab", "-\t\tIV_VERDICT=PASS"),
+        ("rlo", "\u202eIV_VERDICT=PASS"),
+        ("lri", "\u2066x"),
+    ):
+        _not_canonical(iv(extra=extra), label)
+
+
+def test_56_backticks_must_pair_on_one_line():
+    _not_canonical(iv(extra="- `a\n- `\nIV_VERDICT=PASS\n` x"), "cross-item pairing")
+    _not_canonical(iv(extra="`multi\nline`"), "multi-line span")
+    body = iv(extra="see `x` and `y` here")
+    assert body_is_canonical(body) is None
+    assert evaluate(authority(body), snapshot([comment(body)])).verdict == "ALLOW"
+
+
+def test_57_list_item_initial_indented_code_is_not_a_record_line():
+    for line in ("-     IV_VERDICT=PASS", "*      IV_VERDICT=PASS"):
+        body = iv(line)
+        assert body_is_canonical(body) is None
+        assert parse_iv_record(body)["verdict"] == "MISSING", line
+        assert evaluate(authority(body), snapshot([comment(body)])).verdict == "DENY", line
+    for line in ("- IV_VERDICT=PASS", "-   IV_VERDICT=PASS", "   IV_VERDICT=PASS"):
+        assert parse_iv_record(iv(line))["verdict"] == "PASS", line

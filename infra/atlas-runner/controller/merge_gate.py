@@ -54,7 +54,8 @@ BLOCKING_MARKERS = (
 # examples, quotes and hidden markup can never establish a verdict. No fuzzy fallback exists.
 RECORD_KEYS = ("IV_VERDICT", "BLOCKING_P0", "BLOCKING_P1")
 RECORD_LINE_RE = re.compile(
-    r"^\s*(?:[-*]\s*)?\*{0,2}(IV_VERDICT|BLOCKING_P0|BLOCKING_P1)\s*=\s*([A-Za-z0-9_]+)\*{0,2}\s*[.;]?\s*$"
+    r"^ {0,3}(?:[-*] {1,3})?\*{0,2}(IV_VERDICT|BLOCKING_P0|BLOCKING_P1)\s*=\s*([A-Za-z0-9_]+)"
+    r"\*{0,2}\s*[.;]?\s*$"
 )
 # --- Inert Markdown context scanner -------------------------------------------------------
 # A bounded, line-based CommonMark *block* scanner (not a renderer) decides which source lines
@@ -97,10 +98,14 @@ UNTIL_BLANK = "\0BLANK"
 # autolinks, inline tags/attributes), '[' / ']' (links, images, reference definitions, titles, alt),
 # '~' and backtick runs >= 2 (fences, multi-backtick spans), '$' (math), backslash (escapes that
 # re-pair code spans), no line indented >= 4 columns (indented code, also inside list items), no
-# blockquote line. With those absent, the only remaining span construct is the single-backtick
-# code span, which _strip_code_spans handles exactly. Anything else -> IV_BODY_NOT_CANONICAL (DENY).
-CANONICAL_FORBIDDEN_RE = re.compile(r"[<\[\]~$\\]|``")
-BLOCKQUOTE_LINE_RE = re.compile(r"^ {0,3}>")
+# blockquote line. With those absent, the only remaining span construct is the single-line single-
+# backtick code span, which _strip_code_spans handles exactly; anything else is NON_CANONICAL.
+# Also forbidden: '>' (blockquotes, incl. list-wrapped ones), '|' (GFM tables drop excess cells),
+# tabs (list-item-initial indented code), and bidi/format controls (visual reordering).
+CANONICAL_FORBIDDEN_RE = re.compile(r"[<\[\]~$\\>|\t\u202a-\u202e\u2066-\u2069]|``")
+# a single-backtick code span must open and close on the same source line (even count per line),
+# so span stripping is exact and can never pair across block boundaries
+ODD_BACKTICKS_RE = re.compile(r"^(?:[^`]*`[^`]*`)*[^`]*`[^`]*$")
 # Stripped contexts are replaced by a visible placeholder, never by bare whitespace, so text that
 # shared a line with a code span / fence / comment cannot become a whole-line record.
 STRIPPED = "[stripped]"
@@ -301,8 +306,8 @@ def body_is_canonical(body: str) -> str | None:
     for n, line in enumerate(text.split("\n"), 1):
         if line.strip() and _indent_columns(line) >= 4:
             return f"line {n} indented >= 4 columns"
-        if BLOCKQUOTE_LINE_RE.match(line):
-            return f"line {n} is a blockquote"
+        if ODD_BACKTICKS_RE.match(line):
+            return f"line {n} has an unpaired backtick"
     return None
 
 

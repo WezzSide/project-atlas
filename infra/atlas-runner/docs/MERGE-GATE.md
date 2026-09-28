@@ -42,15 +42,21 @@ read-only collector. Merging this hardening change itself requires separate auth
 The primary guarantee is **structural, not semantic**: the gate never tries to decide what GitHub would render.
 A comment is admissible as positive IV evidence only if its body satisfies `body_is_canonical`:
 
-- none of the characters `<` `[` `]` `~` `$` `\` and no backtick run of length ≥ 2 anywhere in the body;
-- no non-blank line indented ≥ 4 columns (tab stops of 4) and no line starting a blockquote (`>` at ≤ 3 indent).
+- none of the characters `<` `[` `]` `~` `$` `\` `>` `|`, no tab, no bidi/format control (U+202A–U+202E,
+  U+2066–U+2069) and no backtick run of length ≥ 2 anywhere in the body;
+- no non-blank line indented ≥ 4 columns; every line contains an even number of backticks (a single-backtick code
+  span opens and closes on one source line);
+- a record line is `KEY=VALUE` at ≤ 3 indent, optionally as a `-`/`*` list item with 1–3 spaces after the marker,
+  optionally `**bold**`.
 
 Every CommonMark/GitHub construct that can hide text needs one of those: raw HTML blocks and inline HTML, comments,
 declarations, CDATA, autolinks (`<`); links, images, reference definitions, titles and alt text (`[` `]`); fenced code
 (``` ``` ``` / `~~~`); multi-backtick code spans; math (`$`); backslash escapes that re-pair code spans; indented code
-(≥ 4 columns, also inside list items); blockquotes. With them absent the only remaining span construct is the
-single-backtick code span, which `_strip_code_spans` handles exactly, and every other construct (headings, emphasis,
-list items, thematic breaks, tables, entities) renders its text visibly. A non-canonical body yields
+(≥ 4 columns, or ≥ 5 spaces / a tab after a list marker); blockquotes, also list-wrapped ones (`>`); GFM tables,
+which silently drop excess cells (`|`); bidi controls, which reorder text visually. With them absent the only
+remaining span construct is the single-line single-backtick code span, which `_strip_code_spans` handles exactly,
+and every other construct (headings, emphasis, list items, thematic breaks, entities, bare URLs) renders its text
+visibly — verified against markdown-it (commonmark, gfm-like, gfm-like+breaks) by the fresh-context IVs. A non-canonical body yields
 `parse_iv_record → NON_CANONICAL` and `IV_BODY_NOT_CANONICAL` (DENY) — regardless of what the scanner below would see.
 Verifier lanes therefore write records as plain Markdown; single-backtick SHAs (`HEAD `…``) remain fine.
 
@@ -85,7 +91,7 @@ stripped construct cannot become a whole-line record. Stripping only ever remove
 markers are searched in the raw body, so a blocker hidden in a fence or comment still blocks. The rules err towards
 false DENY (e.g. table cells, `<kbd>`, a paragraph after a blank line inside a list item) and never towards ALLOW.
 Only `\n` separates record lines (form feed, vertical tab, U+2028/2029, NEL are not line breaks here).
-Adversarial corpus: `tests/test_merge_gate_authenticity.py` tests 22–24, 25–30, 31–42, 45–51.
+Adversarial corpus: `tests/test_merge_gate_authenticity.py` tests 22–24, 25–30, 31–42, 45–51, 55–57.
 
 ## Authority model for positive IV evidence (invariant `UNTRUSTED_ACTOR_CANNOT_UNILATERALLY_ESTABLISH_POSITIVE_IV`)
 
