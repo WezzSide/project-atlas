@@ -49,8 +49,14 @@ CommonMark code spans. Bodies are CRLF/CR-normalised first. Inert contexts:
   whitespace-only line, an ATX heading, a thematic break, a setext underline, a closed fence, a closed HTML block
   or comment — and the block continues across internal blank lines; a 4-space line directly under a paragraph or
   list item is a visible continuation;
-- HTML comments (`<!-- … -->`, terminated or not) and raw HTML blocks (`pre`, `code`, `script`, `style`,
-  `textarea`, terminated or not) — whole lines;
+- HTML comments (`<!-- … -->`, terminated or not; `<!-->` never closes itself) and hidden/removed raw HTML
+  containers (`pre`, `code`, `script`, `style`, `textarea`, `noscript`, `iframe`, `xmp`, `plaintext`, `noembed`,
+  `noframes`, `svg`, `math`), anywhere on a line, whole lines until the closer, terminated or not;
+- CommonMark HTML block types 3–5 (`<? … ?>`, `<!DECL … >`, `<![CDATA[ … ]]>`) until their closer, and types 6–7
+  (a block-level tag or a lone complete tag at line start, e.g. `<details>`, `<div hidden>`) until the next blank
+  line — their rendering is sanitizer-dependent, so they are inert by rule;
+- link reference definitions (`[label]: …`) through the end of their paragraph — a multi-line title is consumed by the
+  renderer and never shown;
 - code spans of any backtick-run length, including multi-line spans (never across a blank line); an unmatched run
   of >= 3 backticks strips the rest of its paragraph (conservative);
 - blockquote lines, ordered-list items and table cells never match the record grammar.
@@ -59,7 +65,8 @@ The replacement is a visible placeholder, never whitespace, so record-looking te
 stripped construct cannot become a whole-line record. Stripping only ever removes *positive* evidence: blocking
 markers are searched in the raw body, so a blocker hidden in a fence or comment still blocks. The rules err towards
 false DENY (e.g. table cells, `<kbd>`, a paragraph after a blank line inside a list item) and never towards ALLOW.
-Adversarial corpus: `tests/test_merge_gate_authenticity.py` tests 22–24, 25–30, 31–42.
+Only `\n` separates record lines (form feed, vertical tab, U+2028/2029, NEL are not line breaks here).
+Adversarial corpus: `tests/test_merge_gate_authenticity.py` tests 22–24, 25–30, 31–42, 45–48.
 
 ## Authority model for positive IV evidence (invariant `UNTRUSTED_ACTOR_CANNOT_UNILATERALLY_ESTABLISH_POSITIVE_IV`)
 

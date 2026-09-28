@@ -622,3 +622,47 @@ def test_44_allowlist_is_defence_in_depth_against_authority_issuer_error():
     a["trusted_iv_authors"] = [VERIFIER]
     d = evaluate(a, snapshot([mallory]))
     assert d.verdict == "DENY" and "IV_AUTHOR_UNTRUSTED" in d.reasons
+
+
+# 45-48. v7 (8deffd0d) verifier P1/P2/P3 closed: link reference definitions, CommonMark HTML block
+# types 3-7, sanitizer-removed containers, and non-LF line separators.
+def test_45_link_reference_definition_titles_are_inert():
+    for title in ("'\n" + REC + "'", '"\n' + REC + '"', "(\n" + REC + ")"):
+        _inert(BOUND + "\n[ref]: /u " + title + "\n", title)
+        _inert("para\n\n[ref]: <u> " + title + "\n\n" + BOUND, "after paragraph " + title)
+    _visible(BOUND + "see [ref]: not a definition\n" + REC, "bracket text inside a paragraph")
+
+
+def test_46_html_block_types_3_to_7_and_removed_containers_are_inert():
+    for label, body in (
+        ("CDATA", "<![CDATA[\n" + REC + "]]>\n"),
+        ("processing instruction", "<?php\n" + REC + "?>\n"),
+        ("declaration", "<!DOCTYPE html\n" + REC + ">\n"),
+        ("unterminated declaration", "<!X\n" + REC),
+        ("noscript", "<noscript>\n" + REC + "</noscript>\n"),
+        ("iframe unterminated", "<iframe>\n" + REC),
+        ("xmp", "<xmp>\n" + REC + "</xmp>\n"),
+        ("plaintext", "<plaintext>\n" + REC),
+        ("svg", "<svg>\n" + REC + "</svg>\n"),
+        ("math", "<math>\n" + REC + "</math>\n"),
+        ("details block", "<details>\n" + REC + "</details>\n"),
+        ("div hidden", "<div hidden>\n" + REC + "</div>\n"),
+        ("lone custom tag line", "<x-widget>\n" + REC + "</x-widget>\n"),
+        ("closing tag line", "</div>\n" + REC),
+        ("degenerate comment", "<!-->\n" + REC + "\n-->\n"),
+    ):
+        _inert(BOUND + body, label)
+    _visible(BOUND + "<div>\nhidden until blank\n\n" + REC, "record after the HTML block ended")
+    _visible(BOUND + "a <b>bold</b> word\n" + REC, "inline HTML inside a paragraph is visible")
+
+
+def test_47_only_lf_separates_record_lines():
+    for sep in ("\x0c", "\x0b", chr(0x2028), chr(0x2029), "\x85", "\x1e"):
+        body = BOUND + "`x`" + sep + "IV_VERDICT=PASS\nBLOCKING_P0=0\nBLOCKING_P1=0\n"
+        _inert(body, f"separator {sep!r}")
+
+
+def test_48_visible_forms_unchanged_by_scanner_extensions():
+    _visible(BOUND + "<!-- note -->\n\n" + REC, "after closed comment + blank")
+    _visible(BOUND + "Intro paragraph.\n\n" + REC, "plain paragraph then record")
+    _visible(BOUND + "- **IV_VERDICT=PASS**\n- BLOCKING_P0=0\n- BLOCKING_P1=0\n", "bold list")

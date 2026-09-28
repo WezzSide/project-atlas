@@ -65,9 +65,31 @@ FENCE_OPEN_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 ATX_HEADING_RE = re.compile(r"^ {0,3}#{1,6}(?:[ \t]|$)")
 THEMATIC_BREAK_RE = re.compile(r"^ {0,3}(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$")
 SETEXT_UNDERLINE_RE = re.compile(r"^ {0,3}(?:=+|-+)[ \t]*$")
-HTML_BLOCK_OPEN_RE = re.compile(r"<(pre|code|script|style|textarea)\b", re.I)
+# Raw HTML that hides or removes its content (CommonMark HTML block type 1 plus elements GitHub's
+# sanitizer drops with their content). Matched anywhere on a line; stripped until the close tag.
+HTML_CONTAINER_RE = re.compile(
+    r"<(pre|code|script|style|textarea|noscript|iframe|xmp|plaintext|noembed|noframes|svg|math)\b",
+    re.I,
+)
 HTML_COMMENT_OPEN = "<!--"
 HTML_COMMENT_CLOSE = "-->"
+# CommonMark HTML block types 3-5 (processing instruction, declaration, CDATA): raw, never rendered
+# as text. Start at <= 3 columns indent; stripped until their closer.
+HTML_DECL_RE = re.compile(r"^ {0,3}<(\?|!\[CDATA\[|![A-Za-z])")
+# CommonMark HTML block types 6-7 (block-level tag or a lone complete tag on the line): raw HTML
+# whose rendering is sanitizer-dependent; stripped until the next blank line (conservative).
+HTML_TAG_LINE_RE = re.compile(
+    r"^ {0,3}(?:</?[A-Za-z][A-Za-z0-9-]*(?:\s[^<>]*)?/?>\s*$|</?(?:address|article|aside|base|"
+    r"basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|"
+    r"fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|"
+    r"legend|li|link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|search|section|"
+    r"summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul)(?:\s|/?>|$))",
+    re.I,
+)
+# Link reference definition: its (possibly multi-line) title is consumed by the renderer and never
+# shown. The whole paragraph starting with one is stripped (conservative).
+LINK_REF_DEF_RE = re.compile(r"^ {0,3}\[[^\]]*\]:")
+UNTIL_BLANK = "\0BLANK"
 # Stripped contexts are replaced by a visible placeholder, never by bare whitespace, so text that
 # shared a line with a code span / fence / comment cannot become a whole-line record.
 STRIPPED = "[stripped]"
@@ -117,17 +139,24 @@ def _indent_columns(line: str) -> int:
 
 
 def _strip_block_contexts(text: str) -> str:
-    """Replace inert block-level contexts line by line: fenced code (opener >= 3 backticks or
-    tildes at <= 3 indent; a backtick fence's info string may not contain backticks; closed only
-    by the same character with length >= the opener; unterminated => rest of body), indented code
-    (>= 4 columns, tab-aware, when no paragraph is open: at body start, after a blank line, an ATX
-    heading, a thematic break, a setext underline, a closed fence, a closed HTML block or comment;
-    an indented block continues across blank lines), HTML comments and raw HTML blocks (pre, code,
-    script, style, textarea; whole lines, terminated or not). Everything else stays visible."""
+    """Replace inert block-level contexts line by line, erring towards stripping:
+    - fenced code: opener >= 3 backticks/tildes at <= 3 columns (backtick info string may not hold
+      a backtick), closed only by the same character with length >= the opener; unterminated =>
+      rest of body;
+    - indented code: >= 4 columns (tab stops) whenever no paragraph is open (body start, after a
+      blank/whitespace-only line, ATX heading, thematic break, setext underline, closed fence or
+      closed HTML block); continues across blank lines;
+    - HTML comments and hidden/removed raw HTML containers (pre, code, script, style, textarea,
+      noscript, iframe, xmp, plaintext, noembed, noframes, svg, math): whole lines until the closer,
+      terminated or not;
+    - CommonMark HTML block types 3-5 (<? ?>, <!DECL >, <![CDATA[ ]]>) until their closer;
+    - HTML block types 6-7 (block-level or lone tags at line start) and link reference definitions
+      until the next blank line.
+    Everything else stays visible."""
     out: list[str] = []
     fence_char = ""
     fence_len = 0
-    html_close = ""  # pending close tag (lowercase) or HTML_COMMENT_CLOSE while inside a block
+    until = ""  # closer (lowercase) of the raw block being stripped, or UNTIL_BLANK
     in_paragraph = False
     in_indented = False
     for line in text.split("\n"):
@@ -142,14 +171,19 @@ def _strip_block_contexts(text: str) -> str:
                 fence_char = ""
             out.append(STRIPPED)
             continue
-        if html_close:
-            if html_close in line.lower():
-                html_close = ""
+        if until:
+            if until == UNTIL_BLANK:
+                if not line.strip():
+                    until = ""
+                    in_paragraph = False
+                    out.append(line)
+                    continue
+            elif until in line.lower():
+                until = ""
                 in_paragraph = False
             out.append(STRIPPED)
             continue
-        stripped = line.strip()
-        if not stripped:
+        if not line.strip():
             out.append(line)
             in_paragraph = False
             continue  # in_indented survives blank lines (block continues if next line is indented)
@@ -166,17 +200,29 @@ def _strip_block_contexts(text: str) -> str:
             continue
         in_indented = False
         lower = line.lower()
-        hm = HTML_BLOCK_OPEN_RE.search(line)
-        if HTML_COMMENT_OPEN in line and (hm is None or line.index(HTML_COMMENT_OPEN) < hm.start()):
-            if HTML_COMMENT_CLOSE not in line[line.index(HTML_COMMENT_OPEN) + 4 :]:
-                html_close = HTML_COMMENT_CLOSE
+        # raw HTML: earliest opener on the line decides the closer
+        cands: list[tuple[int, str]] = []
+        if HTML_COMMENT_OPEN in line:
+            cands.append((line.index(HTML_COMMENT_OPEN), HTML_COMMENT_CLOSE))
+        hm = HTML_CONTAINER_RE.search(line)
+        if hm is not None:
+            cands.append((hm.start(), f"</{hm.group(1).lower()}"))
+        dm = HTML_DECL_RE.match(line)
+        if dm is not None:
+            kind = dm.group(1)
+            cands.append(
+                (dm.start(1), "?>" if kind == "?" else "]]>" if kind.startswith("![") else ">")
+            )
+        if cands:
+            start, closer = min(cands)
+            opener_len = 4 if closer == HTML_COMMENT_CLOSE else 9 if closer == "]]>" else 2
+            if closer not in lower[start + opener_len :]:  # <!--> never closes itself
+                until = closer
             in_paragraph = False
             out.append(STRIPPED)
             continue
-        if hm is not None:
-            close = f"</{hm.group(1).lower()}"
-            if close not in lower[hm.end() :]:
-                html_close = close
+        if HTML_TAG_LINE_RE.match(line) or LINK_REF_DEF_RE.match(line):
+            until = UNTIL_BLANK
             in_paragraph = False
             out.append(STRIPPED)
             continue
@@ -243,7 +289,7 @@ def parse_iv_record(body: str) -> dict[str, Any]:
     value outside its domain => MALFORMED. Never raises.
     """
     found: dict[str, set[str]] = {k: set() for k in RECORD_KEYS}
-    for line in _strip_non_record_context(body).splitlines():
+    for line in _strip_non_record_context(body).split("\n"):
         m = RECORD_LINE_RE.match(line)
         if m:
             found[m.group(1)].add(m.group(2))  # case-exact: PASS/FAIL only
