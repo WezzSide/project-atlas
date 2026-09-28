@@ -6,6 +6,10 @@
 poll_interval_seconds = 10
 max_concurrent_jobs = 1
 labels = ["self-hosted", "linux", "x64", "atlas", "executor"]
+# GitHub queued transport: fail-closed by default. Enable explicitly
+# AND set transport_grant_id to a valid standing grant.
+queued_transport_enabled = false
+# transport_grant_id = "grant-github-transport"
 
 min_free_memory_mb = 1024
 min_free_disk_mb = 5120

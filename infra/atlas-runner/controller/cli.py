@@ -19,9 +19,10 @@ from controller.controller import Controller, source_revision
 from controller.dockerctl import DockerCtl
 from controller.evidence import validate_evidence
 from controller.github import GitHubClient, StaticTokenProvider, TokenProvider
+from controller.grants import GrantError
 from controller.health import health_json, run_health
 from controller.reconcile import Reconciler
-from controller.state import StateStore, TaskConflictError
+from controller.state import StateError, StateStore, TaskConflictError
 
 
 def _build_context(config_path: str):
@@ -40,6 +41,13 @@ def _build_context(config_path: str):
     return config, store, docker, github
 
 
+def _attach_grants(controller: Controller, store: StateStore) -> None:
+    """Use the controller database as the shared authority/admission boundary."""
+    from controller.grants import GrantStore
+
+    controller.attach_grants(GrantStore(store.db_path))
+
+
 def _load_task_file(path: str) -> dict:
     try:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -51,17 +59,18 @@ def _load_task_file(path: str) -> dict:
 
 
 def _validate_task_schema(task: dict) -> None:
-    """Validate a submitted task against the worker-task contract (stdlib)."""
-    from controller.schemas import validate_worker_task
+    """Validate the canonical Atlas production binding at the CLI boundary."""
+    from controller.schemas import validate_atlas_task_binding
 
-    errors = validate_worker_task(task)
+    errors = validate_atlas_task_binding(task)
     if errors:
-        raise ConfigError("task rejected by worker-task schema: " + "; ".join(errors))
+        raise ConfigError("task rejected by Atlas task-binding schema: " + "; ".join(errors))
 
 
 def cmd_run(args: argparse.Namespace) -> int:
     config, store, docker, github = _build_context(args.config)
     controller = Controller(config=config, store=store, docker=docker, github=github)
+    _attach_grants(controller, store)
     Reconciler(config=config, store=store, docker=docker).reconcile()
     controller.run_forever()
     return 0
@@ -70,6 +79,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 def cmd_once(args: argparse.Namespace) -> int:
     config, store, docker, github = _build_context(args.config)
     controller = Controller(config=config, store=store, docker=docker, github=github)
+    _attach_grants(controller, store)
     admitted = controller.poll_once()
     print(json.dumps({"admitted": admitted}, sort_keys=True))
     return 0
@@ -84,12 +94,13 @@ def cmd_submit(args: argparse.Namespace) -> int:
         print(str(exc), file=sys.stderr)
         return 2
     controller = Controller(config=config, store=store, docker=docker, github=github)
+    _attach_grants(controller, store)
     try:
         outcome, detail = controller.submit_task(task)
     except ConfigError as exc:
         print(str(exc), file=sys.stderr)
         return 2
-    except (TaskConflictError, ValueError) as exc:
+    except (TaskConflictError, StateError, GrantError, ValueError) as exc:
         print(str(exc), file=sys.stderr)
         return 2
     print(json.dumps({"outcome": outcome, "detail": detail}, sort_keys=True))

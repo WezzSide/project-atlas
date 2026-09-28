@@ -51,6 +51,43 @@ class Reconciler:
         self.docker = docker
         self.clock = clock
 
+    STUCK_GRACE_SECONDS = 60.0
+
+    def _reconcile_stuck_admissions(self) -> int:
+        """P1-2: repair admissions that committed but never started.
+
+        An execution stuck in REQUESTED/ADMITTED past the grace window with no
+        live worker is treated as a start failure: exactly-once refund, task
+        REJECTED, execution FAILED. Bounded, idempotent, identity-aware; safe
+        under repeated invocation and restart; never creates a second execution
+        for the same canonical execution_id; never touches started executions.
+        """
+        now = self.clock() if hasattr(self, "clock") else __import__("time").time()
+        cutoff = now - self.STUCK_GRACE_SECONDS
+        rows = self.store._conn.execute(
+            "SELECT execution_id, task_id FROM executions"
+            " WHERE status IN (?, ?) AND created_at < ? LIMIT 50",
+            (lifecycle.REQUESTED, lifecycle.ADMITTED, cutoff),
+        ).fetchall()
+        repaired = 0
+        for row in rows:
+            worker = self.store.get_execution(row["execution_id"]) or {}
+            worker_name = worker.get("worker_name")
+            if worker_name:
+                try:
+                    info = self.docker.inspect(worker_name)
+                    if info.get("State", {}).get("Running"):
+                        continue  # a live worker owns it; not stuck
+                except Exception:
+                    pass  # container gone -> stuck
+            self.store.fail_admitted_start(
+                task_id=row["task_id"],
+                execution_id=row["execution_id"],
+                reason="start_failed:recovered",
+            )
+            repaired += 1
+        return repaired
+
     def reconcile(self) -> dict:
         """Run all reconciliation rules; returns a summary dict."""
         summary = {
@@ -58,7 +95,9 @@ class Reconciler:
             "stale_destroyed": 0,
             "foreign_blocked": 0,
             "workspaces_pruned": 0,
+            "stuck_admissions": 0,
         }
+        summary["stuck_admissions"] = self._reconcile_stuck_admissions()
         try:
             containers = self.docker.ps_all()
         except Exception:

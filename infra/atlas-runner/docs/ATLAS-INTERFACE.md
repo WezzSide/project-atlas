@@ -114,3 +114,61 @@ OWNER_REQUIRED | TERMINAL | REJECTED`):
   policy evaluation).
 - No verifier in the fabric (verification is host-independent, on
   GitHub-hosted runners; same-host separation is not independence).
+
+## Queued GitHub transport (P1-1 disposition)
+
+GitHub-queued execution remains a SUPPORTED production transport, gated by
+BOTH conditions (neither bypasses the other):
+
+```
+QUEUED_EXECUTION_ALLOWED =
+    config.queued_transport_enabled            (explicit production enablement)
+AND config.transport_grant_id resolves        (standing transport grant)
+AND grant valid for this repository           (scope + active + unexpired)
+```
+
+- Default is fail-closed (`queued_transport_enabled = false`): queued jobs
+  are rejected with a `blocked_authority` audit record.
+- The transport grant is validated per admission but NOT consumed per job
+  (standing grant); per-job bounding is provided by capacity admission.
+- The constructor `allow_internal_queued_jobs` switch is a TEST-ONLY bypass
+  (audited as `test_only_queue_bypass`, class `internal_non_production`);
+  it is never set by the production CLI and grants itself no authority.
+- Configuration: `queued_transport_enabled` + `transport_grant_id` in
+  `controller-config.schema.json`; non-boolean values fail closed at parse.
+
+## Post-commit compensation and reconciliation (P1-2 disposition)
+
+Admission (consume + task + execution) is one database transaction. If the
+execution subsequently cannot start, `fail_admitted_start` compensates
+deterministically: exactly-once refund (guarded by the `grant_refunds`
+table, idempotent under repetition/restart), task -> REJECTED, execution ->
+FAILED with the reason recorded. `Reconciler` additionally repairs
+committed-but-never-started admissions after process death (bounded,
+identity-aware, no double refund, no second execution for a canonical id,
+never touches started executions).
+
+## Real Atlas workload admission contract (integration hardening)
+
+The first genuine Atlas workload must traverse, without routine human relay:
+
+```
+ATLAS GRANT (durable registry record, grants.db)
+  → TASK BINDING (schemas/atlas-task-binding.schema.json;
+      execution_id is a required explicit string — never invented downstream)
+  → AUTHORITY VALIDATION (GrantStore.validate: missing/unknown/expired/
+      scope-mismatch/consumed all fail closed; transport records are never authority)
+  → UNIQUE ADMISSION (idempotent submit_task; dedupe identity is
+      (run_id, run_attempt, job_id) for queued GitHub jobs)
+  → TRUSTED DISPATCH → VPS-02 EXECUTION → COMPLETE EVIDENCE
+  → INDEPENDENT VERIFICATION (VERIFIED requires every REQUIRED assertion
+      evidenced; missing mandatory evidence -> UNESTABLISHED, never silent PASS)
+  → ATLAS RECONCILIATION ('atlas-runner receipt <execution_id>' emits the
+      machine-consumable receipt; verdict + reconciliation recorded on the execution)
+  → CLEANUP → FABRIC IDLE_READY ('atlas-runner fabric-state')
+```
+
+Machine-consumable surfaces: task binding schema (in); execution evidence
+schema + GitHub artifacts + verification-report artifact + `atlas-runner
+receipt` JSON (out). Human authority decisions are never automated; only
+already-authorized result transport is.

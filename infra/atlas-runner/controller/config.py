@@ -98,10 +98,27 @@ class ControllerConfig:
     min_free_memory_mb: int = 1024
     min_free_disk_mb: int = 5120
     allow_secret_env: tuple[str, ...] = ()
+    # Grant that authorizes the fabric itself to admit GitHub-queued transport
+    # jobs (acceptance/executor/smoke). Queued jobs without a resolvable
+    # transport grant are rejected — no admission path bypasses authority.
+    transport_grant_id: str | None = None
+    # Production enablement of the GitHub queued transport path. Fail-closed
+    # default: queued jobs are rejected unless this is explicitly enabled AND
+    # transport_grant_id resolves to a valid grant. Neither gate may bypass
+    # the other (overnight admission mission, owner disposition P1-1).
+    queued_transport_enabled: bool = False
 
     @property
     def label_set(self) -> frozenset[str]:
         return frozenset(self.labels)
+
+
+def _opt_str(name: str, value: Any) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value:
+        raise ConfigError(f"{name} must be a non-empty string or null")
+    return value
 
 
 def _parse_github(data: dict[str, Any]) -> GitHubConfig:
@@ -204,6 +221,8 @@ def parse_config(data: dict[str, Any]) -> ControllerConfig:
             "min_free_memory_mb",
             "min_free_disk_mb",
             "allow_secret_env",
+            "transport_grant_id",
+            "queued_transport_enabled",
         },
     )
     if "github" not in data:
@@ -222,6 +241,8 @@ def parse_config(data: dict[str, Any]) -> ControllerConfig:
 
     allow_secret_env_raw = data.get("allow_secret_env", [])
     _require_type("root", "allow_secret_env", allow_secret_env_raw, list)
+    transport_grant_id_raw = data.get("transport_grant_id")
+    queued_transport_enabled_raw = data.get("queued_transport_enabled", False)
     env_key_re = re.compile(rf"^{_ENV_KEY_RE}$")
     allow_secret_env: list[str] = []
     for key in allow_secret_env_raw:
@@ -250,6 +271,10 @@ def parse_config(data: dict[str, Any]) -> ControllerConfig:
             "root", "min_free_disk_mb", data.get("min_free_disk_mb", 5120)
         ),
         allow_secret_env=tuple(allow_secret_env),
+        transport_grant_id=_opt_str("transport_grant_id", transport_grant_id_raw),
+        queued_transport_enabled=_require_type(
+            "root", "queued_transport_enabled", queued_transport_enabled_raw, bool
+        ),
     )
     # Permit explicitly allow-listed secret-shaped env keys (operator opt-in only).
     for key in cfg.worker.env:

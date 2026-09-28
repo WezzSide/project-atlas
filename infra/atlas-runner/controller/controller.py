@@ -18,12 +18,18 @@ from controller import lifecycle
 from controller.config import ControllerConfig, validate_task_env
 from controller.dockerctl import DockerCtl
 from controller.github import GitHubClient, GitHubError
+from controller.grants import GrantMissingError
 from controller.state import StateStore, definition_hash
 from controller.worker import WorkerManager
 
 
 class Capacity:
     """Host capacity snapshot used for admission control."""
+
+    grants = None  # optional GrantStore; set via attach_grants()
+
+    def attach_grants(self, grants) -> None:
+        self.grants = grants
 
     def __init__(self, *, free_memory_mb: int, free_disk_mb: int, active_workers: int):
         self.free_memory_mb = free_memory_mb
@@ -66,6 +72,11 @@ def source_revision() -> str:
 
 
 class Controller:
+    grants = None  # optional GrantStore; set via attach_grants()
+
+    def attach_grants(self, grants) -> None:
+        self.grants = grants
+
     def __init__(
         self,
         *,
@@ -74,6 +85,8 @@ class Controller:
         docker: DockerCtl,
         github: GitHubClient | None,
         worker_manager: WorkerManager | None = None,
+        allow_internal_queued_jobs: bool = False,
+        allow_legacy_internal_tasks: bool = False,
         clock=time.time,
         sleeper=time.sleep,
     ):
@@ -81,6 +94,10 @@ class Controller:
         self.store = store
         self.docker = docker
         self.github = github
+        # Test/staged-release-only compatibility for untrusted transport jobs.
+        # The production CLI never enables this switch.
+        self.allow_internal_queued_jobs = allow_internal_queued_jobs
+        self.allow_legacy_internal_tasks = allow_legacy_internal_tasks
         self.worker_manager = worker_manager or WorkerManager(
             config=config, store=store, docker=docker, github=github,
             token_provider=github.token_provider if github else None,
@@ -128,28 +145,97 @@ class Controller:
         for job in jobs:
             if self._stop:
                 break
-            existing = self.store.find_execution_by_run(job.run_id, job.run_attempt)
-            if existing is not None:
-                continue  # duplicate suppression: one execution per (run, attempt)
-            reason = self.admission_reason(self.capacity())
+            # Dedupe identity: (run_id, run_attempt, job_id) — distinct jobs in one
+            # run/attempt are distinct admissions; reruns are separate identities.
             task_id = f"gh-{job.run_id}-{job.run_attempt}-{job.job_id}"
+            # P1-1 (overnight admission mission): the GitHub queued transport is
+            # SUPPORTED but executes only when BOTH gates hold:
+            #   A. config.queued_transport_enabled (explicit production enablement)
+            #   B. config.transport_grant_id resolves to a valid grant bound to
+            #      this repository (never consumed per job: standing transport
+            #      grant). Neither gate may bypass the other.
+            # Explicit test/dev bypass (fixture/dedupe tests only): loudly
+            # audited, never production authority; no grant validation implied.
+            test_bypass = self.allow_internal_queued_jobs
+            if not (self.config.queued_transport_enabled or test_bypass):
+                self.store.audit(
+                    "blocked_authority",
+                    task_id=task_id,
+                    detail={"reason": "queued_transport_disabled"},
+                )
+                continue
+            transport = None
+            if test_bypass:
+                self.store.audit(
+                    "test_only_queue_bypass", task_id=task_id,
+                    detail={"flag": "allow_internal_queued_jobs"},
+                )
+            else:
+                transport = self.config.transport_grant_id
+                if not transport:
+                    self.store.audit(
+                        "blocked_authority",
+                        task_id=task_id,
+                        detail={"reason": "no_transport_grant_configured"},
+                    )
+                    continue
+                if self.grants is None:
+                    self.store.audit(
+                        "blocked_authority", task_id=task_id,
+                        detail={"reason": "grant_registry_required"},
+                    )
+                    continue
+                repository = f"{self.config.github.owner}/{self.config.github.repo}"
+                try:
+                    self.grants.validate(transport, repository=repository)
+                except Exception as exc:
+                    self.store.audit(
+                        "blocked_authority", task_id=task_id,
+                        detail={"reason": f"transport_grant_invalid: {exc}"},
+                    )
+                    continue
+            reason = self.admission_reason(self.capacity())
             definition = {
                 "task_id": task_id,
+                "execution_class": (
+                    "internal_non_production"
+                    if self.allow_internal_queued_jobs
+                    else "github_transport"
+                ),
                 "github_run_id": job.run_id,
                 "github_run_attempt": job.run_attempt,
                 "github_job_id": job.job_id,
                 "job_name": job.job_name,
                 "labels": list(job.labels),
+                "authority_reference": transport,
             }
+            if transport:
+                self.store.audit(
+                    "transport_grant_validated",
+                    task_id=task_id,
+                    detail={"grant_id": transport},
+                )
             outcome, _status = self.store.submit_task(task_id, definition)
             if outcome != "admitted":
+                # existing_terminal / existing_active: duplicate suppression keyed on
+                # (run_id, run_attempt, job_id) via the task identity above.
+                self.store.audit(
+                    "duplicate_suppressed",
+                    task_id=task_id,
+                    detail={"run_id": job.run_id, "run_attempt": job.run_attempt,
+                            "job_id": job.job_id, "outcome": outcome},
+                )
                 continue
             if reason is not None:
                 # Stay REQUESTED with reason; re-evaluated next poll. No crash loop.
                 self.store.audit("admission_deferred", task_id=task_id, detail={"reason": reason})
                 continue
             self._start_execution(
-                task_id, definition, run_id=job.run_id, run_attempt=job.run_attempt
+                task_id,
+                definition,
+                run_id=job.run_id,
+                run_attempt=job.run_attempt,
+                github_job_id=job.job_id,
             )
             admitted.append(task_id)
         return admitted
@@ -161,6 +247,57 @@ class Controller:
             raise ValueError("task definition requires a non-empty 'task_id'")
         if validate:
             validate_task_env(definition.get("env") or {}, allow=self.config.allow_secret_env)
+        atlas_binding = any(
+            key in definition
+            for key in (
+                "repository",
+                "executor_type",
+                "execution",
+                "execution_id",
+                "authority_reference",
+            )
+        )
+        if not atlas_binding and not self.allow_legacy_internal_tasks:
+            raise GrantMissingError("production submit requires an Atlas task binding")
+        authority = definition.get("authority_reference")
+        if atlas_binding and not authority:
+            raise GrantMissingError("authority_reference is required for Atlas tasks")
+        if atlas_binding:
+            from controller.schemas import validate_atlas_task_binding
+
+            errors = validate_atlas_task_binding(definition)
+            if errors:
+                raise ValueError("invalid Atlas task binding: " + "; ".join(errors))
+            if self.grants is None:
+                raise GrantMissingError("no durable grant registry is configured")
+            # Authority consumption, task persistence and execution identity are
+            # one database transaction. GitHub transport jobs never enter here.
+            outcome, execution_id = self.store.admit_atlas_task(
+                grants=self.grants,
+                task_id=task_id,
+                definition=definition,
+            )
+            if outcome == "admitted" or self._can_resume_execution(execution_id):
+                try:
+                    self._start_execution(
+                        task_id,
+                        definition,
+                        run_id=definition.get("github_run_id"),
+                        run_attempt=definition.get("github_run_attempt", 1),
+                        execution_id=execution_id,
+                    )
+                except Exception as exc:
+                    # P1-2 (overnight admission mission): the admission transaction
+                    # already committed; a start failure must NOT strand consumed
+                    # budget or an ambiguous REQUESTED task. Single idempotent
+                    # refund + REJECTED, durable and reconciliation-safe.
+                    self.store.fail_admitted_start(
+                        task_id=task_id,
+                        execution_id=execution_id,
+                        reason=f"start_failed: {exc}"[:200],
+                    )
+                    raise
+            return outcome, execution_id
         outcome, status = self.store.submit_task(task_id, definition)
         if outcome == "admitted":
             self._start_execution(
@@ -184,6 +321,10 @@ class Controller:
             raise ValueError(f"no execution for task {task_id}")
         return str(row["execution_id"])
 
+    def _can_resume_execution(self, execution_id: str) -> bool:
+        row = self.store.get_execution(execution_id)
+        return bool(row and row["status"] in {lifecycle.REQUESTED, lifecycle.ADMITTED})
+
     def _start_execution(
         self,
         task_id: str,
@@ -191,17 +332,22 @@ class Controller:
         *,
         run_id: int | None,
         run_attempt: int | None,
+        github_job_id: int | None = None,
+        execution_id: str | None = None,
     ) -> str:
         digest = definition_hash(definition)
-        execution_id = self.store.create_execution(
+        execution_id = execution_id or self.store.create_execution(
             task_id=task_id,
             definition_hash=digest,
+            execution_id=definition.get("execution_id"),
             github_run_id=run_id,
             github_run_attempt=run_attempt,
+            github_job_id=github_job_id,
         )
         execution = self.store.get_execution(execution_id)
-        self.store.transition(execution_id, lifecycle.ADMITTED)
-        self.store.update_task_status(task_id, lifecycle.ADMITTED)
+        if execution["status"] == lifecycle.REQUESTED:
+            self.store.transition(execution_id, lifecycle.ADMITTED)
+            self.store.update_task_status(task_id, lifecycle.ADMITTED)
         self.worker_manager.run_execution(execution, definition=definition)
         row = self.store.get_execution(execution_id)
         self.store.update_task_status(task_id, row["status"], reason=row.get("failure_reason"))

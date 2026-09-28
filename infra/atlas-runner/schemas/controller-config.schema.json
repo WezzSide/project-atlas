@@ -5,33 +5,80 @@
   "description": "AS-RUNNER-FABRIC-001 controller runtime configuration contract. CONFIG_ACCEPTED != AUTHORITY. additionalProperties: false.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["github"],
+  "required": [
+    "github"
+  ],
   "properties": {
     "github": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["owner", "repo"],
+      "required": [
+        "owner",
+        "repo"
+      ],
       "properties": {
-        "owner": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
-        "repo": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
-        "api_url": { "type": "string", "pattern": "^https://" }
+        "owner": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+        },
+        "repo": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+        },
+        "api_url": {
+          "type": "string",
+          "pattern": "^https://"
+        }
       }
     },
     "worker": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "cpus": { "type": "number", "minimum": 0.1 },
-        "memory_mb": { "type": "integer", "minimum": 128 },
-        "pids": { "type": "integer", "minimum": 16 },
-        "timeout_seconds": { "type": "integer", "minimum": 60 },
-        "storage_mb": { "type": "integer", "minimum": 1024 },
-        "image": { "type": "string", "minLength": 1, "maxLength": 256 },
-        "network": { "type": "string", "enum": ["bridge", "none"] },
+        "cpus": {
+          "type": "number",
+          "minimum": 0.1
+        },
+        "memory_mb": {
+          "type": "integer",
+          "minimum": 128
+        },
+        "pids": {
+          "type": "integer",
+          "minimum": 16
+        },
+        "timeout_seconds": {
+          "type": "integer",
+          "minimum": 60
+        },
+        "storage_mb": {
+          "type": "integer",
+          "minimum": 1024
+        },
+        "image": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "network": {
+          "type": "string",
+          "enum": [
+            "bridge",
+            "none"
+          ]
+        },
         "env": {
           "type": "object",
-          "additionalProperties": { "type": "string" },
-          "propertyNames": { "pattern": "^[A-Z_][A-Z0-9_]*$" }
+          "additionalProperties": {
+            "type": "string"
+          },
+          "propertyNames": {
+            "pattern": "^[A-Z_][A-Z0-9_]*$"
+          }
         }
       }
     },
@@ -39,30 +86,76 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "state_dir": { "type": "string", "pattern": "^/" },
-        "jobs_dir": { "type": "string", "pattern": "^/" },
-        "log_dir": { "type": "string", "pattern": "^/" }
+        "state_dir": {
+          "type": "string",
+          "pattern": "^/"
+        },
+        "jobs_dir": {
+          "type": "string",
+          "pattern": "^/"
+        },
+        "log_dir": {
+          "type": "string",
+          "pattern": "^/"
+        }
       }
     },
     "retention": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "evidence_days": { "type": "integer", "minimum": 1 },
-        "workspace_hours": { "type": "integer", "minimum": 1 }
+        "evidence_days": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "workspace_hours": {
+          "type": "integer",
+          "minimum": 1
+        }
       }
     },
-    "poll_interval_seconds": { "type": "number", "minimum": 1 },
-    "max_concurrent_jobs": { "type": "integer", "minimum": 1 },
+    "poll_interval_seconds": {
+      "type": "number",
+      "minimum": 1
+    },
+    "max_concurrent_jobs": {
+      "type": "integer",
+      "minimum": 1
+    },
     "labels": {
       "type": "array",
-      "items": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" }
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+      }
     },
-    "min_free_memory_mb": { "type": "integer", "minimum": 0 },
-    "min_free_disk_mb": { "type": "integer", "minimum": 0 },
+    "min_free_memory_mb": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "min_free_disk_mb": {
+      "type": "integer",
+      "minimum": 0
+    },
     "allow_secret_env": {
       "type": "array",
-      "items": { "type": "string", "pattern": "^[A-Z_][A-Z0-9_]*$" }
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Z_][A-Z0-9_]*$"
+      }
+    },
+    "transport_grant_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "description": "Grant authorizing the fabric to admit GitHub-queued transport jobs."
+    },
+    "queued_transport_enabled": {
+      "type": "boolean",
+      "default": false,
+      "description": "Explicit production enablement of the GitHub queued transport path. Fail-closed default; requires transport_grant_id to resolve to a valid grant."
     }
   }
 }

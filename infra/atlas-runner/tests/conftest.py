@@ -238,6 +238,8 @@ def make_config(tmp_path: Path, **overrides) -> ControllerConfig:
         "max_concurrent_jobs": 1,
         "min_free_memory_mb": 1,
         "min_free_disk_mb": 1,
+        "transport_grant_id": "grant-transport",
+        "queued_transport_enabled": True,
     }
     kwargs.update(overrides)
     return ControllerConfig(**kwargs)
@@ -263,6 +265,17 @@ def store(workspace):
 @pytest.fixture
 def fake_docker(workspace):
     return FakeDocker(workspace / "jobs")
+
+
+@pytest.fixture
+def transport_grants(workspace, config):
+    """Grant registry with the config's transport grant issued."""
+    from controller.grants import GrantStore
+
+    grants = GrantStore(workspace / "state" / "test.db")
+    grants.issue(config.transport_grant_id, budget=1000)
+    yield grants
+    grants.close()
 
 
 @pytest.fixture

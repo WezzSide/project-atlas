@@ -13,6 +13,7 @@ import sqlite3
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 
 from controller import lifecycle
@@ -40,6 +41,7 @@ CREATE TABLE IF NOT EXISTS executions (
     task_id TEXT NOT NULL,
     github_run_id INTEGER,
     github_run_attempt INTEGER,
+    github_job_id INTEGER,
     worker_name TEXT,
     runner_name TEXT,
     status TEXT NOT NULL,
@@ -53,9 +55,18 @@ CREATE TABLE IF NOT EXISTS executions (
     finished_at REAL,
     lease_owner TEXT,
     lease_expires REAL,
-    evidence_path TEXT
+    evidence_path TEXT,
+    verifier_verdict TEXT,
+    reconciled INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS grant_refunds (
+    grant_id TEXT NOT NULL,
+    execution_id TEXT NOT NULL,
+    refunded_at REAL NOT NULL,
+    PRIMARY KEY (grant_id, execution_id)
 );
 CREATE INDEX IF NOT EXISTS idx_executions_status ON executions(status);
+
 CREATE INDEX IF NOT EXISTS idx_executions_task ON executions(task_id);
 
 CREATE TABLE IF NOT EXISTS audit_log (
@@ -75,6 +86,19 @@ CREATE TABLE IF NOT EXISTS heartbeats (
 """
 
 
+def _migrate_columns(conn) -> None:
+    """Idempotent column additions for databases created before a column existed."""
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(executions)")}
+    additions = {
+        "github_job_id": "INTEGER",
+        "verifier_verdict": "TEXT",
+        "reconciled": "INTEGER NOT NULL DEFAULT 0",
+    }
+    for name, ddl in additions.items():
+        if name not in cols:
+            conn.execute(f"ALTER TABLE executions ADD COLUMN {name} {ddl}")
+
+
 class StateError(RuntimeError):
     """Raised on state-store violations (conflicts, bad transitions)."""
 
@@ -85,6 +109,10 @@ class TransitionError(StateError):
 
 class TaskConflictError(StateError):
     """Same task_id with a conflicting immutable definition."""
+
+
+class ExecutionConflictError(StateError):
+    """Supplied execution id is already bound to another execution."""
 
 
 def canonical_json(value: object) -> str:
@@ -119,6 +147,7 @@ class StateStore:
     def _migrate(self) -> None:
         with self._conn:
             self._conn.executescript(_SCHEMA)
+            _migrate_columns(self._conn)
             self._conn.execute(
                 "INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', ?)",
                 (str(SCHEMA_VERSION),),
@@ -199,6 +228,123 @@ class StateStore:
             )
         return "admitted", lifecycle.REQUESTED
 
+    def admit_atlas_task(
+        self,
+        *,
+        grants,
+        task_id: str,
+        definition: dict,
+        fault_hook: Callable[[str], None] | None = None,
+    ) -> tuple[str, str]:
+        """Atomically consume authority and persist the task plus execution.
+
+        The grant registry must share this SQLite database. Fault hooks exist
+        solely for deterministic transaction rollback tests.
+        """
+        from controller.grants import GrantConsumedError, GrantStore
+        from controller.schemas import validate_atlas_task_binding
+
+        if not isinstance(grants, GrantStore) or grants.db_path.resolve() != self.db_path.resolve():
+            raise StateError("Atlas admission requires a shared grant/state database")
+        schema_errors = validate_atlas_task_binding(definition)
+        if schema_errors:
+            raise StateError("invalid Atlas task binding: " + "; ".join(schema_errors))
+        grant_id = definition.get("authority_reference")
+        execution_id = definition.get("execution_id")
+        if not isinstance(execution_id, str) or not execution_id:
+            raise StateError("Atlas admission requires the supplied execution_id")
+        digest = definition_hash(definition)
+        now = time.time()
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                existing = self._conn.execute(
+                    "SELECT definition_hash, status FROM tasks WHERE task_id = ?", (task_id,)
+                ).fetchone()
+                if existing is not None:
+                    if existing["definition_hash"] != digest:
+                        raise TaskConflictError(
+                            f"task_id {task_id!r} already exists with a conflicting definition"
+                        )
+                    execution = self._conn.execute(
+                        "SELECT execution_id FROM executions WHERE task_id = ?", (task_id,)
+                    ).fetchone()
+                    if execution is None or execution["execution_id"] != execution_id:
+                        raise StateError("existing Atlas task has no matching execution")
+                    self._conn.commit()
+                    outcome = (
+                        "existing_terminal"
+                        if lifecycle.is_terminal(existing["status"])
+                        or existing["status"] == "REJECTED"
+                        else "existing_active"
+                    )
+                    return outcome, execution_id
+
+                row = self._conn.execute(
+                    "SELECT * FROM grants WHERE grant_id = ?", (grant_id,)
+                ).fetchone()
+                GrantStore.validate_row(
+                    row,
+                    grant_id=grant_id,
+                    task_id=task_id,
+                    repository=definition.get("repository"),
+                    base_revision=definition.get("base_revision"),
+                    executor_type=definition.get("executor_type"),
+                    action_type="command" if "command" in definition["execution"] else "prompt",
+                    execution_hash=definition_hash(definition["execution"]),
+                    now=now,
+                    require_complete_bindings=True,
+                )
+                if fault_hook:
+                    fault_hook("after_grant_validation")
+                updated = self._conn.execute(
+                    "UPDATE grants SET consumed = consumed + 1, updated_at = ?"
+                    " WHERE grant_id = ? AND status = 'active' AND consumed < budget"
+                    " AND (expires_at IS NULL OR expires_at > ?)",
+                    (now, grant_id, now),
+                )
+                if updated.rowcount != 1:
+                    raise GrantConsumedError("grant changed or expired during admission")
+                if fault_hook:
+                    fault_hook("after_grant_reservation")
+
+                self._conn.execute(
+                    "INSERT INTO tasks(task_id, definition_hash, definition_json, status,"
+                    " created_at, updated_at) VALUES (?,?,?,?,?,?)",
+                    (task_id, digest, canonical_json(definition), lifecycle.REQUESTED, now, now),
+                )
+                self._conn.execute(
+                    "INSERT INTO audit_log(ts, task_id, event, detail_json) VALUES (?,?,?,?)",
+                    (now, task_id, "task_submitted", canonical_json({"definition_hash": digest})),
+                )
+                if fault_hook:
+                    fault_hook("after_task_persistence")
+
+                if self._conn.execute(
+                    "SELECT 1 FROM executions WHERE execution_id = ?", (execution_id,)
+                ).fetchone():
+                    raise ExecutionConflictError(
+                        f"execution_id {execution_id!r} is already in use"
+                    )
+                if fault_hook:
+                    fault_hook("before_execution_creation")
+                self._conn.execute(
+                    "INSERT INTO executions(execution_id, task_id, status, definition_hash,"
+                    " created_at, updated_at) VALUES (?,?,?,?,?,?)",
+                    (execution_id, task_id, lifecycle.REQUESTED, digest, now, now),
+                )
+                self._conn.execute(
+                    "INSERT INTO audit_log(ts, task_id, execution_id, event) VALUES (?,?,?,?)",
+                    (now, task_id, execution_id, "execution_created"),
+                )
+                if fault_hook:
+                    fault_hook("after_execution_creation")
+                self._conn.commit()
+                return "admitted", execution_id
+            except Exception:
+                self._conn.rollback()
+                raise
+
     def get_task(self, task_id: str) -> dict | None:
         row = self._conn.execute(
             "SELECT * FROM tasks WHERE task_id = ?", (task_id,)
@@ -218,22 +364,34 @@ class StateStore:
         *,
         task_id: str,
         definition_hash: str,
+        execution_id: str | None = None,
         github_run_id: int | None = None,
         github_run_attempt: int | None = None,
+        github_job_id: int | None = None,
         worker_name: str | None = None,
     ) -> str:
-        execution_id = f"ex-{uuid.uuid4().hex[:16]}"
+        execution_id = execution_id or f"ex-{uuid.uuid4().hex[:16]}"
         now = time.time()
         with self._conn:
+            existing = self._conn.execute(
+                "SELECT task_id, definition_hash FROM executions WHERE execution_id = ?",
+                (execution_id,),
+            ).fetchone()
+            if existing is not None:
+                raise ExecutionConflictError(
+                    f"execution_id {execution_id!r} is already in use"
+                )
             self._conn.execute(
                 "INSERT INTO executions(execution_id, task_id, github_run_id,"
-                " github_run_attempt, worker_name, status, definition_hash, created_at, updated_at)"
-                " VALUES (?,?,?,?,?,?,?,?,?)",
+                " github_run_attempt, github_job_id, worker_name, status, definition_hash,"
+                " created_at, updated_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?)",
                 (
                     execution_id,
                     task_id,
                     github_run_id,
                     github_run_attempt,
+                    github_job_id,
                     worker_name,
                     lifecycle.REQUESTED,
                     definition_hash,
@@ -253,13 +411,161 @@ class StateStore:
         ).fetchone()
         return dict(row) if row else None
 
-    def find_execution_by_run(self, run_id: int, run_attempt: int) -> dict | None:
+    def find_execution_by_job(
+        self, run_id: int, run_attempt: int, job_id: int
+    ) -> dict | None:
+        """Dedupe identity for queued GitHub jobs: (run, attempt, job).
+
+        Distinct jobs within one run/attempt have distinct identities; a rerun
+        attempt is a separate identity by design.
+        """
         row = self._conn.execute(
             "SELECT * FROM executions WHERE github_run_id = ? AND github_run_attempt = ?"
-            " ORDER BY created_at DESC LIMIT 1",
-            (run_id, run_attempt),
+            " AND github_job_id = ? ORDER BY created_at DESC LIMIT 1",
+            (run_id, run_attempt, job_id),
         ).fetchone()
         return dict(row) if row else None
+
+    def record_verifier_verdict(self, execution_id: str, verdict: str) -> None:
+        if verdict not in {"PENDING", "VERIFIED", "REJECTED", "UNESTABLISHED"}:
+            raise ValueError(f"unknown verifier verdict {verdict!r}")
+        with self._lock, self._conn:
+            self._conn.execute(
+                "UPDATE executions SET verifier_verdict = ?, updated_at = ?"
+                " WHERE execution_id = ?",
+                (verdict, time.time(), execution_id),
+            )
+
+    def record_reconciled(self, execution_id: str) -> None:
+        with self._lock, self._conn:
+            self._conn.execute(
+                "UPDATE executions SET reconciled = 1, updated_at = ? WHERE execution_id = ?",
+                (time.time(), execution_id),
+            )
+
+    def refund_grant_once(
+        self, grant_id: str, execution_id: str, *, now: float | None = None
+    ) -> bool:
+        """Idempotent compensation: refund one unit of grant budget exactly once
+        per (grant, execution). Returns True if THIS call performed the refund.
+        Safe under repeated invocation, restart, and concurrent recovery.
+        Requires the grants table in this shared database."""
+        now = time.time() if now is None else now
+        with self._lock, self._conn:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                cur = self._conn.execute(
+                    "INSERT OR IGNORE INTO grant_refunds(grant_id, execution_id, refunded_at)"
+                    " VALUES (?,?,?)",
+                    (grant_id, execution_id, now),
+                )
+                if cur.rowcount == 0:
+                    self._conn.commit()
+                    return False
+                self._conn.execute(
+                    "UPDATE grants SET consumed = MAX(0, consumed - 1), updated_at = ?"
+                    " WHERE grant_id = ?",
+                    (now, grant_id),
+                )
+                self._conn.commit()
+                return True
+            except Exception:
+                self._conn.rollback()
+                raise
+
+    def fail_admitted_start(
+        self,
+        *,
+        task_id: str,
+        execution_id: str,
+        reason: str,
+        now: float | None = None,
+    ) -> None:
+        """P1-2: a committed admission whose execution could not start.
+
+        Exactly-once refund against the task's authority grant (if any),
+        task -> REJECTED, execution -> FAILED with the reason recorded. If the
+        refund itself fails, the execution is marked refund_pending so
+        reconciliation can retry; the state is never silently lost.
+        """
+        now = time.time() if now is None else now
+        with self._lock, self._conn:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                execution = self._conn.execute(
+                    "SELECT status, task_id FROM executions WHERE execution_id = ?",
+                    (execution_id,),
+                ).fetchone()
+                if execution is None:
+                    self._conn.commit()
+                    return
+                # Never touch an execution that already started.
+                if execution["status"] not in {lifecycle.REQUESTED, lifecycle.ADMITTED}:
+                    self._conn.commit()
+                    return
+                task = self._conn.execute(
+                    "SELECT definition_json FROM tasks WHERE task_id = ?",
+                    (execution["task_id"],),
+                ).fetchone()
+                import json as _json
+
+                definition = _json.loads(task["definition_json"]) if task else {}
+                grant_id = definition.get("authority_reference")
+                refund_state = "not_applicable"
+                if grant_id:
+                    cur = self._conn.execute(
+                        "INSERT OR IGNORE INTO grant_refunds(grant_id, execution_id, refunded_at)"
+                        " VALUES (?,?,?)",
+                        (grant_id, execution_id, now),
+                    )
+                    if cur.rowcount == 1:
+                        self._conn.execute(
+                            "UPDATE grants SET consumed = MAX(0, consumed - 1), updated_at = ?"
+                            " WHERE grant_id = ?",
+                            (now, grant_id),
+                        )
+                        refund_state = "refunded"
+                    else:
+                        refund_state = "already_refunded"
+                marker = reason if refund_state != "refund_failed" else reason + ":refund_pending"
+                self._conn.execute(
+                    "UPDATE executions SET status = ?, terminal_status = 'failed',"
+                    " failure_reason = ?, updated_at = ?, finished_at = ?"
+                    " WHERE execution_id = ? AND status IN (?, ?)",
+                    (lifecycle.FAILED, marker, now, now, execution_id,
+                     lifecycle.REQUESTED, lifecycle.ADMITTED),
+                )
+                self._conn.execute(
+                    "UPDATE tasks SET status = 'REJECTED', reason = ?, updated_at = ?"
+                    " WHERE task_id = ? AND status NOT IN ('COMPLETE', 'FAILED',"
+                    " 'TIMED_OUT', 'CLEANUP_REQUIRED', 'BLOCKED', 'REJECTED')",
+                    (marker, now, execution["task_id"]),
+                )
+                self._conn.execute(
+                    "INSERT INTO audit_log(ts, task_id, execution_id, event, detail_json)"
+                    " VALUES (?,?,?,?,?)",
+                    (now, execution["task_id"], execution_id, "start_failed_compensated",
+                     _json.dumps({"reason": marker, "refund": refund_state})),
+                )
+                self._conn.commit()
+            except Exception as exc:
+                self._conn.rollback()
+                # Compensation failure: durable retryable state, not silent loss.
+                try:
+                    self._conn.execute(
+                        "UPDATE executions SET failure_reason = ?, updated_at = ?"
+                        " WHERE execution_id = ?",
+                        (f"{reason}:refund_pending:{str(exc)[:120]}", now, execution_id),
+                    )
+                finally:
+                    raise
+
+    def is_terminal_task_status(self, status: str) -> bool:
+        return status == "REJECTED" or lifecycle.is_terminal(status)
+
+    def all_executions(self) -> list[dict]:
+        rows = self._conn.execute("SELECT * FROM executions ORDER BY created_at").fetchall()
+        return [dict(r) for r in rows]
 
     def active_executions(self) -> list[dict]:
         rows = self._conn.execute(
@@ -345,6 +651,7 @@ class StateStore:
             "lease_owner",
             "lease_expires",
             "evidence_path",
+            "cleanup_status",
         }
         unknown = set(fields) - allowed
         if unknown:
