@@ -64,8 +64,9 @@ def test_verifier_selects_one_complete_string_label_set() -> None:
     runner_name, labels = select_verifier_runner(
         {
             "jobs": [
-                {"runner_name": "GitHub Actions 123", "labels": ["ubuntu-latest"]},
+                {"id": 1, "runner_name": "GitHub Actions 123", "labels": ["ubuntu-latest"]},
                 {
+                    "id": 2,
                     "runner_name": "atlas-runner-1",
                     "labels": ["self-hosted", "linux", "x64", "atlas", "executor"],
                 },
@@ -114,8 +115,8 @@ def test_verifier_rejects_ambiguous_complete_runner_matches() -> None:
         select_verifier_runner(
             {
                 "jobs": [
-                    {"runner_name": "atlas-runner-1", "labels": labels},
-                    {"runner_name": "atlas-runner-2", "labels": labels},
+                    {"id": 1, "runner_name": "atlas-runner-1", "labels": labels},
+                    {"id": 2, "runner_name": "atlas-runner-2", "labels": labels},
                 ]
             }
         )
@@ -127,7 +128,35 @@ def _job(index: int, *, qualifying: bool = False) -> dict[str, object]:
         if qualifying
         else ["ubuntu-latest"]
     )
-    return {"id": index, "runner_name": f"runner-{index}", "labels": labels}
+    return {"id": index + 1, "runner_name": f"runner-{index}", "labels": labels}
+
+
+def test_verifier_rejects_duplicate_job_id_42_with_conflicting_labels() -> None:
+    labels = sorted(REQUIRED_VERIFIER_LABELS)
+    with pytest.raises(ValueError, match="duplicate job ID 42"):
+        select_verifier_runner(
+            {
+                "jobs": [
+                    {"id": 42, "runner_name": "verifier-host", "labels": labels},
+                    {"id": 42, "runner_name": "ordinary-host", "labels": ["ubuntu-latest"]},
+                ]
+            }
+        )
+
+
+@pytest.mark.parametrize("job_id", [None, True, False, 0, -1, 42.0, "42"])
+def test_verifier_rejects_missing_or_malformed_job_ids(job_id: object) -> None:
+    job = {"runner_name": "atlas-runner", "labels": sorted(REQUIRED_VERIFIER_LABELS)}
+    if job_id is not None:
+        job["id"] = job_id
+    with pytest.raises(ValueError, match="job IDs must be positive integers"):
+        select_verifier_runner({"jobs": [job]})
+
+
+def test_verifier_rejects_identical_duplicate_job_ids() -> None:
+    duplicate = _job(42, qualifying=True)
+    with pytest.raises(ValueError, match="duplicate job ID"):
+        select_verifier_runner({"jobs": [duplicate, duplicate.copy()]})
 
 
 def _page_fetcher(
@@ -179,6 +208,21 @@ def test_verifier_selects_unique_runner_found_only_on_second_page() -> None:
     assert calls == [(1, JOBS_PAGE_SIZE), (2, JOBS_PAGE_SIZE)]
     assert runner_name == "runner-100"
     assert set(labels) == REQUIRED_VERIFIER_LABELS
+
+
+def test_verifier_fetch_rejects_duplicate_job_id_across_pages() -> None:
+    first_page = [_job(index) for index in range(100)]
+    first_page[0] = {**first_page[0], "id": 1000}
+    with pytest.raises(ValueError, match="duplicate job ID 1000"):
+        fetch_complete_jobs(
+            _page_fetcher(
+                {
+                    1: {"total_count": 101, "jobs": first_page},
+                    2: {"total_count": 101, "jobs": [_job(100, qualifying=True) | {"id": 1000}]},
+                },
+                [],
+            )
+        )
 
 
 def test_verifier_rejects_zero_qualifying_jobs_at_page_boundary() -> None:

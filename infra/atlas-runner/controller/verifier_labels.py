@@ -11,6 +11,20 @@ REQUIRED_VERIFIER_LABELS = frozenset(
 JOBS_PAGE_SIZE = 100
 
 
+def _validate_unique_job_ids(jobs: list[Any]) -> None:
+    """Require every Actions job record to have one unambiguous integer ID."""
+    seen: set[int] = set()
+    for job in jobs:
+        if not isinstance(job, dict):
+            raise ValueError("jobs API entries must be objects")
+        job_id = job.get("id")
+        if type(job_id) is not int or job_id <= 0:
+            raise ValueError("jobs API job IDs must be positive integers")
+        if job_id in seen:
+            raise ValueError(f"jobs API contains duplicate job ID {job_id}")
+        seen.add(job_id)
+
+
 def fetch_complete_jobs(
     fetch_page: Callable[[int, int], Any],
 ) -> dict[str, Any]:
@@ -66,6 +80,7 @@ def fetch_complete_jobs(
         raise ValueError(
             f"jobs API retrieved {len(all_jobs)} jobs; expected {expected_total}"
         )
+    _validate_unique_job_ids(all_jobs)
     return {"total_count": expected_total, "jobs": all_jobs}
 
 
@@ -82,12 +97,10 @@ def select_verifier_runner(jobs_payload: Any) -> tuple[str, tuple[str, ...]]:
     jobs = jobs_payload.get("jobs")
     if not isinstance(jobs, list):
         raise ValueError("jobs API payload must contain a jobs list")
+    _validate_unique_job_ids(jobs)
 
     candidates: list[tuple[str, tuple[str, ...]]] = []
     for job in jobs:
-        if not isinstance(job, dict):
-            raise ValueError("jobs API entries must be objects")
-
         labels = job.get("labels")
         if not isinstance(labels, list) or any(
             not isinstance(label, str) for label in labels
