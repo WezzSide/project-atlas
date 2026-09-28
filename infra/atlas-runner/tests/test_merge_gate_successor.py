@@ -169,7 +169,7 @@ def test_8_blocking_evidence_exactly_at_decided_at_denies():
         ]
     )
     d = evaluate(authority(), s)
-    assert d.verdict == "DENY" and "NEWER_BLOCKING_EVIDENCE:review:7" in reasons(d)
+    assert d.verdict == "DENY" and "BLOCKING_REVIEW:7@" in reasons(d)
     s = snapshot()
     s["comments"].append(
         {

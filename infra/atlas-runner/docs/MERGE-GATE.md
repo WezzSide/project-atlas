@@ -16,7 +16,9 @@ immediately before any merge mutation. It never merges. Required invariant:
 | that record names HEAD+TREE and its **canonical record lines** say `IV_VERDICT=PASS`, `BLOCKING_P0=0`, `BLOCKING_P1=0` (see *Inert Markdown contexts* below: only visible source lines are eligible; duplicate/contradictory or malformed record lines never count) | `IV_NOT_BOUND_TO_CANDIDATE` / `IV_NOT_PASS` |
 | `required_checks` present, non-empty, well-formed | `NO_REQUIRED_CHECKS` / `MALFORMED_REQUIRED_CHECKS` |
 | malformed timestamps / unknown review states / collector failures | `MALFORMED_EVIDENCE` / `EVIDENCE_COLLECTION_FAILED` (DENY, never crash-to-allow) |
-| no blocking evidence (P0/P1>0, IV FAIL, REJECTED, CHANGES_REQUESTED, security) whose **effective, edit-aware** timestamp (`updated_at`) is at or after (`>=`) the authority decision | `NEWER_BLOCKING_EVIDENCE` |
+| no blocking evidence (P0/P1>0, IV FAIL, REJECTED, security) in issue comments **or review-thread comments** whose **effective, edit-aware** timestamp (`updated_at`) is at or after (`>=`) the authority decision | `NEWER_BLOCKING_EVIDENCE` |
+| no blocking review (`CHANGES_REQUESTED`, or a blocking marker in a review body) at **any** time — reviews expose no `updated_at`, so their bodies cannot be proven unedited and are never merely "older" | `BLOCKING_REVIEW` |
+| the bound comment body satisfies the canonical-body grammar (below) | `IV_BODY_NOT_CANONICAL` |
 | every required CI run's newest exact-head run chosen by validated timezone-aware timestamps (malformed → DENY) | `CI_NOT_TERMINAL_SUCCESS` / `MALFORMED_EVIDENCE` |
 | authority bound to this PR, not consumed, snapshot newer than the decision | `PR_MISMATCH` / `AUTHORITY_ALREADY_CONSUMED` / `SNAPSHOT_OLDER_THAN_AUTHORITY` |
 
@@ -35,7 +37,24 @@ python -m controller.merge_gate --pr 1026 --authority authority.json --receipt r
 `tests/test_merge_gate_authenticity.py` proves IV source authenticity (bound id/author/hash/updated_at, allowlist), edit freshness (post-authority edits invalidate), canonical record context (fence/indented/HTML-comment/code-span/URL/quoted tokens never count, CRLF bodies included) and temporal CI ordering. `tests/test_merge_gate_successor.py` closes the fail-open surfaces found by the independent IV of the first revision (canonical verdict parsing, mandatory `required_checks`, same-second boundary, `--paginate --slurp` collection, SHA case normalization, fail-closed malformed evidence). `tests/test_merge_gate.py` replays the #1025 race deterministically (blocking verdict after
 admission, before merge) and covers drift, stale CI, unbound IV, consumed authority and the
 read-only collector. Merging this hardening change itself requires separate authority.
-## Inert Markdown contexts (invariant `INERT_MARKDOWN_CONTEXT_CAN_NEVER_ESTABLISH_POSITIVE_IV`)
+## Canonical-body grammar (invariant `INERT_MARKDOWN_CONTEXT_CAN_NEVER_ESTABLISH_POSITIVE_IV`)
+
+The primary guarantee is **structural, not semantic**: the gate never tries to decide what GitHub would render.
+A comment is admissible as positive IV evidence only if its body satisfies `body_is_canonical`:
+
+- none of the characters `<` `[` `]` `~` `$` `\` and no backtick run of length ≥ 2 anywhere in the body;
+- no non-blank line indented ≥ 4 columns (tab stops of 4) and no line starting a blockquote (`>` at ≤ 3 indent).
+
+Every CommonMark/GitHub construct that can hide text needs one of those: raw HTML blocks and inline HTML, comments,
+declarations, CDATA, autolinks (`<`); links, images, reference definitions, titles and alt text (`[` `]`); fenced code
+(``` ``` ``` / `~~~`); multi-backtick code spans; math (`$`); backslash escapes that re-pair code spans; indented code
+(≥ 4 columns, also inside list items); blockquotes. With them absent the only remaining span construct is the
+single-backtick code span, which `_strip_code_spans` handles exactly, and every other construct (headings, emphasis,
+list items, thematic breaks, tables, entities) renders its text visibly. A non-canonical body yields
+`parse_iv_record → NON_CANONICAL` and `IV_BODY_NOT_CANONICAL` (DENY) — regardless of what the scanner below would see.
+Verifier lanes therefore write records as plain Markdown; single-backtick SHAs (`HEAD `…``) remain fine.
+
+## Inert Markdown context scanner (defence in depth)
 
 Positive record lines are taken only from the **visible** part of the bound comment. A bounded, line-based
 CommonMark *block* scanner (`_strip_block_contexts`, a state machine — not a renderer and not a regex over the
@@ -66,7 +85,7 @@ stripped construct cannot become a whole-line record. Stripping only ever remove
 markers are searched in the raw body, so a blocker hidden in a fence or comment still blocks. The rules err towards
 false DENY (e.g. table cells, `<kbd>`, a paragraph after a blank line inside a list item) and never towards ALLOW.
 Only `\n` separates record lines (form feed, vertical tab, U+2028/2029, NEL are not line breaks here).
-Adversarial corpus: `tests/test_merge_gate_authenticity.py` tests 22–24, 25–30, 31–42, 45–48.
+Adversarial corpus: `tests/test_merge_gate_authenticity.py` tests 22–24, 25–30, 31–42, 45–51.
 
 ## Authority model for positive IV evidence (invariant `UNTRUSTED_ACTOR_CANNOT_UNILATERALLY_ESTABLISH_POSITIVE_IV`)
 

@@ -90,6 +90,17 @@ HTML_TAG_LINE_RE = re.compile(
 # shown. The whole paragraph starting with one is stripped (conservative).
 LINK_REF_DEF_RE = re.compile(r"^ {0,3}\[[^\]]*\]:")
 UNTIL_BLANK = "\0BLANK"
+# --- Canonical-body admissibility grammar (positive evidence only) --------------------------------
+# The context scanner above is defence in depth. The *primary* guarantee that no inert Markdown
+# context can hide a record is structural: a body is admissible as positive IV evidence only if it
+# contains none of the characters that CommonMark/GitHub need to hide text: '<' (raw HTML, comments,
+# autolinks, inline tags/attributes), '[' / ']' (links, images, reference definitions, titles, alt),
+# '~' and backtick runs >= 2 (fences, multi-backtick spans), '$' (math), backslash (escapes that
+# re-pair code spans), no line indented >= 4 columns (indented code, also inside list items), no
+# blockquote line. With those absent, the only remaining span construct is the single-backtick
+# code span, which _strip_code_spans handles exactly. Anything else -> IV_BODY_NOT_CANONICAL (DENY).
+CANONICAL_FORBIDDEN_RE = re.compile(r"[<\[\]~$\\]|``")
+BLOCKQUOTE_LINE_RE = re.compile(r"^ {0,3}>")
 # Stripped contexts are replaced by a visible placeholder, never by bare whitespace, so text that
 # shared a line with a code span / fence / comment cannot become a whole-line record.
 STRIPPED = "[stripped]"
@@ -281,13 +292,31 @@ def _strip_non_record_context(body: str, *, inline_code: bool = True) -> str:
     return _strip_code_spans(text) if inline_code else text
 
 
+def body_is_canonical(body: str) -> str | None:
+    """Return None when the body satisfies the canonical-body grammar, else a short reason."""
+    text = (body or "").replace("\r\n", "\n").replace("\r", "\n")
+    m = CANONICAL_FORBIDDEN_RE.search(text)
+    if m:
+        return f"forbidden token {m.group(0)!r}"
+    for n, line in enumerate(text.split("\n"), 1):
+        if line.strip() and _indent_columns(line) >= 4:
+            return f"line {n} indented >= 4 columns"
+        if BLOCKQUOTE_LINE_RE.match(line):
+            return f"line {n} is a blockquote"
+    return None
+
+
 def parse_iv_record(body: str) -> dict[str, Any]:
     """Deterministic structured parse of an IV record.
 
-    Returns {"verdict": PASS|FAIL|MISSING|AMBIGUOUS|MALFORMED, "p0": int|None, "p1": int|None}.
-    Only whole canonical lines count; duplicates with differing values => AMBIGUOUS; a key with a
-    value outside its domain => MALFORMED. Never raises.
+    Returns {"verdict": PASS|FAIL|MISSING|AMBIGUOUS|MALFORMED|NON_CANONICAL, "p0": int|None,
+    "p1": int|None}. A body outside the canonical-body grammar (see body_is_canonical) is
+    NON_CANONICAL before any line is read, so no inert Markdown context can ever yield PASS. Only
+    whole canonical lines count; duplicates with differing values => AMBIGUOUS; a key with a value
+    outside its domain => MALFORMED. Never raises for str input.
     """
+    if body_is_canonical(body) is not None:
+        return {"verdict": "NON_CANONICAL", "p0": None, "p1": None}
     found: dict[str, set[str]] = {k: set() for k in RECORD_KEYS}
     for line in _strip_non_record_context(body).split("\n"):
         m = RECORD_LINE_RE.match(line)
@@ -352,6 +381,7 @@ def _evaluate(authority: dict[str, Any], snapshot: dict[str, Any]) -> Decision:
     snapshot:  {"observed_at", "pr": {"number","state","head","tree","base","merged"},
                 "check_runs": [{"name","head_sha","status","conclusion","id","completed_at"}],
                 "comments": [{"id","created_at","updated_at","author","body"}],
+                "review_comments": [{"id","created_at","updated_at","author","body"}],
                 "reviews": [{"id","submitted_at","author","state","body"}]}
     """
     reasons: list[str] = []
@@ -424,27 +454,56 @@ def _evaluate(authority: dict[str, Any], snapshot: dict[str, Any]) -> Decision:
                 "body": c.get("body") or "",
             }
         )
+    # review-thread (inline) comments are a second edit-aware channel; never eligible as bound
+    # positive evidence, but any blocker in them counts
+    for c in snapshot.get("review_comments") or []:
+        created = _ts(c["created_at"])
+        updated = _ts(c["updated_at"]) if c.get("updated_at") else created
+        if updated < created:
+            raise MalformedEvidence(f"review comment {c.get('id')} updated_at precedes created_at")
+        events.append(
+            {
+                "kind": "review_comment",
+                "id": c.get("id"),
+                "at": (c.get("updated_at") or c["created_at"]),
+                "created_at": c["created_at"],
+                "updated_at": c.get("updated_at") or c["created_at"],
+                "author": c.get("author"),
+                "body": c.get("body") or "",
+            }
+        )
+    # Reviews carry no updated_at, so their bodies cannot be proven unedited: a blocking review is
+    # blocking regardless of its submission time (time-independent), never merely "older".
+    standing_blocking: list[dict[str, Any]] = []
     for rv in snapshot.get("reviews") or []:
         state = str(rv.get("state") or "").upper()
         if state not in {"APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED", "PENDING"}:
             raise MalformedEvidence(f"review {rv.get('id')} has unknown state {state!r}")
         body = (rv.get("body") or "") + (" REJECTED" if state == "CHANGES_REQUESTED" else "")
-        events.append(
-            {
-                "kind": "review",
-                "id": rv.get("id"),
-                "at": rv["submitted_at"],
-                "created_at": rv["submitted_at"],
-                "updated_at": rv["submitted_at"],
-                "author": rv.get("author"),
-                "body": body,
-            }
-        )
+        ev = {
+            "kind": "review",
+            "id": rv.get("id"),
+            "at": rv["submitted_at"],
+            "created_at": rv["submitted_at"],
+            "updated_at": rv["submitted_at"],
+            "author": rv.get("author"),
+            "body": body,
+        }
+        events.append(ev)
+        if _is_blocking(body):
+            standing_blocking.append(ev)
     events.sort(key=lambda e: _ts(e["at"]))
 
-    newer_blocking = [e for e in events if _ts(e["at"]) >= decided_at and _is_blocking(e["body"])]
+    newer_blocking = [
+        e
+        for e in events
+        if e["kind"] != "review" and _ts(e["at"]) >= decided_at and _is_blocking(e["body"])
+    ]
     for e in newer_blocking:
         reasons.append(f"NEWER_BLOCKING_EVIDENCE:{e['kind']}:{e['id']}@{e['at']}")
+    for e in standing_blocking:
+        reasons.append(f"BLOCKING_REVIEW:{e['id']}@{e['at']}")
+    newer_blocking = newer_blocking + standing_blocking
 
     # Positive IV evidence must be the exact record the authority was bound to: id + author +
     # body hash + updated_at. Free-form PR text never establishes PASS.
@@ -480,6 +539,9 @@ def _evaluate(authority: dict[str, Any], snapshot: dict[str, Any]) -> Decision:
                 reasons.append(f"IV_EDITED:{latest_iv['id']}@{latest_iv['updated_at']}")
             if _ts(latest_iv["updated_at"]) >= decided_at:
                 reasons.append(f"IV_EDITED_AFTER_AUTHORITY:{latest_iv['id']}")
+            why = body_is_canonical(body)
+            if why is not None:
+                reasons.append(f"IV_BODY_NOT_CANONICAL:{latest_iv['id']}:{why}")
             # binding SHAs are conventionally written in backticks, so keep inline code here
             visible = _strip_non_record_context(body, inline_code=False)
             shas = {x.lower() for x in SHA_RE.findall(visible)}
@@ -588,6 +650,7 @@ def collect_snapshot(
         runs.extend(page["workflow_runs"])
     comments = _gh_paginated(f"repos/{repo}/issues/{pr}/comments?per_page=100", runner)
     reviews = _gh_paginated(f"repos/{repo}/pulls/{pr}/reviews?per_page=100", runner)
+    review_comments = _gh_paginated(f"repos/{repo}/pulls/{pr}/comments?per_page=100", runner)
     return {
         "observed_at": _dt.datetime.now(_dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "pr": {
@@ -615,7 +678,7 @@ def collect_snapshot(
                 "id": c["id"],
                 "created_at": c["created_at"],
                 "updated_at": c.get("updated_at") or c["created_at"],
-                "author": c["user"]["login"],
+                "author": (c.get("user") or {}).get("login"),
                 "body": c.get("body") or "",
             }
             for c in comments
@@ -624,11 +687,21 @@ def collect_snapshot(
             {
                 "id": r["id"],
                 "submitted_at": r.get("submitted_at") or r.get("created_at"),
-                "author": r["user"]["login"],
+                "author": (r.get("user") or {}).get("login"),
                 "state": r.get("state"),
                 "body": r.get("body") or "",
             }
             for r in reviews
+        ],
+        "review_comments": [
+            {
+                "id": c["id"],
+                "created_at": c["created_at"],
+                "updated_at": c.get("updated_at") or c["created_at"],
+                "author": (c.get("user") or {}).get("login"),
+                "body": c.get("body") or "",
+            }
+            for c in review_comments
         ],
     }
 

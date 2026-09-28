@@ -4,8 +4,16 @@ temporal CI ordering (owner directive 2026-09-28, blocking findings 1-3 + robust
 from __future__ import annotations
 
 import copy
+import json
 
-from controller.merge_gate import _body_sha256, evaluate, parse_iv_record
+from controller.merge_gate import (
+    RECORD_LINE_RE,
+    _body_sha256,
+    _strip_non_record_context,
+    body_is_canonical,
+    evaluate,
+    parse_iv_record,
+)
 
 HEAD = "dc9b083d32dbd5f4e524b95e89e3d0357d38bf1e"
 TREE = "1e54af5bd618a5f7b618a611682f8c8c29e97094"
@@ -165,21 +173,21 @@ def test_06_pre_authority_comment_edited_post_authority_denies():
 # 7. IV_VERDICT=PASS inside fenced code only => MISSING / DENY
 def test_07_pass_inside_code_fence_only_is_missing():
     body = iv("```\nIV_VERDICT=PASS\n```")
-    assert parse_iv_record(body)["verdict"] == "MISSING"
+    assert parse_iv_record(body)["verdict"] in {"MISSING", "NON_CANONICAL"}
     d = evaluate(authority(body), snapshot([comment(body)]))
-    assert d.verdict == "DENY" and "verdict=MISSING" in R(d)
+    assert d.verdict == "DENY" and "verdict=NON_CANONICAL" in R(d)
     body = iv("~~~text\nIV_VERDICT=PASS\n~~~")
-    assert parse_iv_record(body)["verdict"] == "MISSING"
+    assert parse_iv_record(body)["verdict"] in {"MISSING", "NON_CANONICAL"}
 
 
 # 8. IV_VERDICT=PASS inside HTML comment only => MISSING / DENY
 def test_08_pass_inside_html_comment_only_is_missing():
     body = iv("<!-- IV_VERDICT=PASS -->")
-    assert parse_iv_record(body)["verdict"] == "MISSING"
+    assert parse_iv_record(body)["verdict"] in {"MISSING", "NON_CANONICAL"}
     d = evaluate(authority(body), snapshot([comment(body)]))
-    assert d.verdict == "DENY" and "verdict=MISSING" in R(d)
+    assert d.verdict == "DENY" and "verdict=NON_CANONICAL" in R(d)
     body = iv("<!--\nIV_VERDICT=PASS\n-->")
-    assert parse_iv_record(body)["verdict"] == "MISSING"
+    assert parse_iv_record(body)["verdict"] in {"MISSING", "NON_CANONICAL"}
 
 
 # 9. PASS token inside URL / example / quoted / inline-code text => MISSING
@@ -193,7 +201,7 @@ def test_09_pass_in_url_example_quoted_code_is_missing():
         "IV_VERDICT=PASS-ish",
     ):
         body = iv(line)
-        assert parse_iv_record(body)["verdict"] == "MISSING", line
+        assert parse_iv_record(body)["verdict"] in {"MISSING", "NON_CANONICAL"}, line
         d = evaluate(authority(body), snapshot([comment(body)]))
         assert d.verdict == "DENY", line
 
@@ -208,9 +216,14 @@ def test_10_canonical_record_outside_excluded_contexts_allows():
     ):
         body = iv(line, extra="```\nIV_VERDICT=FAIL\n```\n<!-- IV_VERDICT=FAIL -->")
         rec = parse_iv_record(body)
-        assert rec == {"verdict": "PASS", "p0": 0, "p1": 0}, line
+        assert rec["verdict"] == "NON_CANONICAL", line
         d = evaluate(authority(body), snapshot([comment(body)]))
-        assert d.verdict == "ALLOW", (line, d.reasons)
+        # the scanner ignores the hidden FAILs, but such a body is not canonical: typed DENY
+        assert d.verdict == "DENY" and d.reasons[0] == (
+            "IV_BODY_NOT_CANONICAL:1:forbidden token '``'"
+        ), (line, d.reasons)
+        plain = iv(line)
+        assert evaluate(authority(plain), snapshot([comment(plain)])).verdict == "ALLOW", line
 
 
 # 11. contradictory canonical PASS/FAIL => DENY
@@ -311,7 +324,7 @@ def test_18_existing_invariants_hold_with_binding():
             {"id": 7, "submitted_at": T0, "author": "r", "state": "CHANGES_REQUESTED", "body": ""}
         ]
     )
-    assert "NEWER_BLOCKING_EVIDENCE:review:7" in R(evaluate(authority(), s))
+    assert "BLOCKING_REVIEW:7@" in R(evaluate(authority(), s))
     a, sn = authority(), snapshot()
     a2, sn2 = copy.deepcopy(a), copy.deepcopy(sn)
     assert evaluate(a, sn).to_dict() == evaluate(a2, sn2).to_dict()
@@ -325,18 +338,18 @@ def test_18_existing_invariants_hold_with_binding():
 # 19-21. verifier P2s on 906dbaae closed: blockquote, unterminated fence, malformed authority sha
 def test_19_blockquote_is_quote_context_not_record():
     body = iv("> IV_VERDICT=PASS")
-    assert parse_iv_record(body)["verdict"] == "MISSING"
+    assert parse_iv_record(body)["verdict"] in {"MISSING", "NON_CANONICAL"}
     assert evaluate(authority(body), snapshot([comment(body)])).verdict == "DENY"
 
 
 def test_20_unterminated_fence_excludes_rest_of_body():
     body = iv("```\nIV_VERDICT=PASS")  # fence never closed
-    assert parse_iv_record(body)["verdict"] == "MISSING"
+    assert parse_iv_record(body)["verdict"] in {"MISSING", "NON_CANONICAL"}
     assert evaluate(authority(body), snapshot([comment(body)])).verdict == "DENY"
     body = iv(
         "IV_VERDICT=PASS", extra="```text\nIV_VERDICT=FAIL"
-    )  # canonical line before the open fence
-    assert parse_iv_record(body)["verdict"] == "PASS"
+    )  # canonical line before the open fence: still not an admissible body
+    assert parse_iv_record(body)["verdict"] == "NON_CANONICAL"
 
 
 def test_21_malformed_authority_sha_denies_even_if_snapshot_matches():
@@ -357,13 +370,13 @@ def test_22_indented_code_and_pre_code_blocks_are_not_record_context():
         iv("<pre>\nIV_VERDICT=PASS\n</pre>"),
         iv("<code>\nIV_VERDICT=PASS"),  # unterminated block
     ):
-        assert parse_iv_record(body)["verdict"] == "MISSING", body
+        assert parse_iv_record(body)["verdict"] in {"MISSING", "NON_CANONICAL"}, body
         assert evaluate(authority(body), snapshot([comment(body)])).verdict == "DENY", body
 
 
 def test_23_unterminated_html_comment_hides_rest_of_body():
     body = iv("<!--\nIV_VERDICT=PASS")
-    assert parse_iv_record(body)["verdict"] == "MISSING"
+    assert parse_iv_record(body)["verdict"] in {"MISSING", "NON_CANONICAL"}
     assert evaluate(authority(body), snapshot([comment(body)])).verdict == "DENY"
 
 
@@ -378,7 +391,7 @@ def test_24_record_values_are_case_exact():
 # CommonMark code spans of any backtick-run length, no whitespace-only context replacement
 def test_25_crlf_bodies_are_normalised_before_context_stripping():
     hidden = "x\r\n\r\n    IV_VERDICT=PASS\r\n    BLOCKING_P0=0\r\n    BLOCKING_P1=0\r\n"
-    assert parse_iv_record(hidden)["verdict"] == "MISSING"
+    assert parse_iv_record(hidden)["verdict"] in {"MISSING", "NON_CANONICAL"}
     assert evaluate(authority(hidden), snapshot([comment(hidden)])).verdict == "DENY"
     plain = iv().replace("\n", "\r\n")  # canonical record with CRLF endings still parses
     assert parse_iv_record(plain) == {"verdict": "PASS", "p0": 0, "p1": 0}
@@ -388,24 +401,23 @@ def test_25_crlf_bodies_are_normalised_before_context_stripping():
 def test_26_indented_code_at_body_start_heading_or_whitespace_line_is_not_record():
     rec = "    IV_VERDICT=PASS\n    BLOCKING_P0=0\n    BLOCKING_P1=0\n"
     for body in (rec, "# Report\n" + rec, "intro\n# Report\n" + rec, "intro\n \t \n" + rec):
-        assert parse_iv_record(body)["verdict"] == "MISSING", body
+        assert parse_iv_record(body)["verdict"] in {"MISSING", "NON_CANONICAL"}, body
         assert evaluate(authority(body), snapshot([comment(body)])).verdict == "DENY", body
 
 
 def test_27_indented_continuation_lines_remain_visible_text():
     # a 4-space line directly under a paragraph/list item is a continuation, not a code block
     for body in (iv().replace("IV_VERDICT=PASS", "    IV_VERDICT=PASS"), iv("  IV_VERDICT=PASS")):
-        assert parse_iv_record(body)["verdict"] == "PASS", body
-        assert evaluate(authority(body), snapshot([comment(body)])).verdict == "ALLOW", body
+        _visible(body, body)  # 4-column continuation is visible but not canonical -> typed DENY
 
 
 def test_28_code_spans_of_any_backtick_run_length_are_not_record():
     for span in ("``IV_VERDICT=PASS``", "`` `IV_VERDICT=PASS` ``", "```IV_VERDICT=PASS```"):
         body = iv(span)
-        assert parse_iv_record(body)["verdict"] == "MISSING", span
+        assert parse_iv_record(body)["verdict"] in {"MISSING", "NON_CANONICAL"}, span
         assert evaluate(authority(body), snapshot([comment(body)])).verdict == "DENY", span
     multiline = iv("`note\nIV_VERDICT=PASS\nend`")  # a code span may span soft line breaks
-    assert parse_iv_record(multiline)["verdict"] == "MISSING"
+    assert parse_iv_record(multiline)["verdict"] in {"MISSING", "NON_CANONICAL"}
 
 
 def test_29_code_span_cannot_cross_blank_line_so_record_after_it_is_visible():
@@ -417,7 +429,7 @@ def test_29_code_span_cannot_cross_blank_line_so_record_after_it_is_visible():
 def test_30_stripped_context_sharing_a_line_with_record_text_is_not_whole_line_record():
     for line in ("`x` IV_VERDICT=PASS", "``` `x` ``` IV_VERDICT=PASS", "<!-- c -->IV_VERDICT=PASS"):
         body = iv(line)
-        assert parse_iv_record(body)["verdict"] == "MISSING", line
+        assert parse_iv_record(body)["verdict"] in {"MISSING", "NON_CANONICAL"}, line
         assert evaluate(authority(body), snapshot([comment(body)])).verdict == "DENY", line
 
 
@@ -430,13 +442,28 @@ BOUND = f"HEAD `{HEAD}` TREE `{TREE}`\n"
 
 
 def _inert(body: str, label: str) -> None:
-    assert parse_iv_record(body)["verdict"] == "MISSING", (label, body)
+    """A record inside inert context is never PASS: the grammar rejects the body (NON_CANONICAL);
+    the scanner alone (defence in depth) sees MISSING."""
+    assert parse_iv_record(body)["verdict"] in {"MISSING", "NON_CANONICAL"}, (label, body)
+    stripped = _strip_non_record_context(body)
+    assert not any(
+        RECORD_LINE_RE.match(ln) and "IV_VERDICT" in ln for ln in stripped.split("\n")
+    ), (label, stripped)
     assert evaluate(authority(body), snapshot([comment(body)])).verdict == "DENY", label
 
 
 def _visible(body: str, label: str) -> None:
-    assert parse_iv_record(body) == {"verdict": "PASS", "p0": 0, "p1": 0}, (label, body)
-    assert evaluate(authority(body), snapshot([comment(body)])).verdict == "ALLOW", label
+    """The scanner sees the record (parse PASS); evaluate ALLOWs only when the body also satisfies
+    the canonical-body grammar, otherwise it is a typed IV_BODY_NOT_CANONICAL DENY."""
+    d = evaluate(authority(body), snapshot([comment(body)]))
+    if body_is_canonical(body) is None:
+        assert parse_iv_record(body) == {"verdict": "PASS", "p0": 0, "p1": 0}, (label, body)
+        assert d.verdict == "ALLOW", (label, d.reasons)
+    else:
+        assert parse_iv_record(body)["verdict"] == "NON_CANONICAL", (label, body)
+        assert d.verdict == "DENY" and any(
+            r.startswith("IV_BODY_NOT_CANONICAL") for r in d.reasons
+        ), (label, d.reasons)
 
 
 def test_31_indented_code_after_every_block_boundary_is_inert():
@@ -566,8 +593,8 @@ def test_40_record_text_adjacent_to_stripped_constructs_is_not_whole_line():
 def test_41_hidden_blockers_still_block_and_visible_record_still_binds():
     # stripping is one-directional: it can only remove positive evidence, never a blocker
     body = iv(extra="```\nIV_VERDICT=FAIL\n```\n<!-- BLOCKING_P0=1 -->\n\n    REJECTED\n")
-    assert parse_iv_record(body) == {"verdict": "PASS", "p0": 0, "p1": 0}
-    assert evaluate(authority(body), snapshot([comment(body)])).verdict == "ALLOW"
+    _visible(body, "hidden FAILs ignored by the scanner; body not canonical")
+    body = iv()
     later = comment("<!-- SECURITY_BLOCKER -->", cid=9, created="2026-09-28T10:00:01Z")
     d = evaluate(authority(body), snapshot([comment(body), later]))
     assert d.verdict == "DENY" and d.reasons[0].startswith("NEWER_BLOCKING_EVIDENCE:comment:9")
@@ -576,10 +603,10 @@ def test_41_hidden_blockers_still_block_and_visible_record_still_binds():
 def test_42_sha_binding_reads_only_visible_text():
     hidden = f"```\nHEAD {HEAD} TREE {TREE}\n```\n" + REC
     d = evaluate(authority(hidden), snapshot([comment(hidden)]))
-    assert d.verdict == "DENY" and d.reasons[0].startswith("IV_NOT_BOUND_TO_CANDIDATE")
+    assert d.verdict == "DENY" and any(r.startswith("IV_NOT_BOUND_TO_CANDIDATE") for r in d.reasons)
+    assert any(r.startswith("IV_BODY_NOT_CANONICAL") for r in d.reasons)
     for form in (
         f"HEAD `{HEAD}` TREE `{TREE}`",
-        f"HEAD ``{HEAD}`` TREE ``{TREE}``",
         f"{HEAD} {TREE}",
     ):
         body = form + "\n" + REC
@@ -666,3 +693,161 @@ def test_48_visible_forms_unchanged_by_scanner_extensions():
     _visible(BOUND + "<!-- note -->\n\n" + REC, "after closed comment + blank")
     _visible(BOUND + "Intro paragraph.\n\n" + REC, "plain paragraph then record")
     _visible(BOUND + "- **IV_VERDICT=PASS**\n- BLOCKING_P0=0\n- BLOCKING_P1=0\n", "bold list")
+
+
+# 49-54. v8 (6447d01f) verifier findings closed structurally: canonical-body admissibility
+# grammar for positive evidence, review-thread comment channel, time-independent review blockers.
+def _not_canonical(body: str, label: str) -> None:
+    assert body_is_canonical(body) is not None, label
+    d = evaluate(authority(body), snapshot([comment(body)]))
+    assert d.verdict == "DENY" and any(r.startswith("IV_BODY_NOT_CANONICAL") for r in d.reasons), (
+        label,
+        d.reasons,
+    )
+
+
+def test_49_canonical_body_grammar_rejects_every_text_hiding_token():
+    for label, extra in (
+        ("raw html", "<b>x</b>"),
+        ("comment", "<!-- x -->"),
+        ("autolink", "<https://example.test>"),
+        ("link", "[t](/u)"),
+        ("image", "![t](/u)"),
+        ("ref def", "[r]: /u"),
+        ("bare bracket", "see [1]"),
+        ("tilde", "~~~"),
+        ("double backtick", "``x``"),
+        ("triple backtick", "```"),
+        ("math", "$x$"),
+        ("backslash", "a \\` b"),
+        ("indented 4", "    code"),
+        ("tab indent", "\tcode"),
+        ("blockquote", "> quote"),
+    ):
+        _not_canonical(iv(extra=extra), label)
+    assert body_is_canonical(iv()) is None
+    assert evaluate(authority(iv()), snapshot([comment(iv())])).verdict == "ALLOW"
+
+
+def test_50_realistic_canonical_iv_body_allows():
+    body = (
+        f"# FRESH INDEPENDENT IV\n\nHEAD `{HEAD}` TREE `{TREE}` base `{BASE}`\n\n"
+        "- governance matrix 15/15 PASS\n- own tests: 222 passed\n\n"
+        "IV_VERDICT=PASS\nBLOCKING_P0=0\nBLOCKING_P1=0\n\nMERGE_AUTHORIZATION = NOT_GRANTED\n"
+    )
+    assert body_is_canonical(body) is None
+    assert parse_iv_record(body) == {"verdict": "PASS", "p0": 0, "p1": 0}
+    assert evaluate(authority(body), snapshot([comment(body)])).verdict == "ALLOW"
+
+
+def test_51_v8_verifier_p1_classes_are_all_non_canonical():
+    ind2 = "".join("  " + ln + "\n" for ln in REC.splitlines())
+    for label, body in (
+        ("list tilde fence", "- ~~~\n" + ind2 + "  ~~~\n"),
+        ("list cdata", "- <![CDATA[\n" + ind2 + "  ]]>\n"),
+        ("list pi", "- <?\n" + ind2 + "  ?>\n"),
+        ("reopen comment same line", "<!-- x --> <!--\n" + REC + "\n-->\n"),
+        ("reopen script same line", "<script>x</script> <script>\n" + REC + "</script>\n"),
+        ("inline pi multi-line", "x <?\n" + REC + "\n?>\n"),
+        ("open tag attributes", "<a\n" + REC + "\nx=1>\n"),
+        ("link title multi-line", '[t](/u "\n' + REC + '")\n'),
+        ("image alt multi-line", "![\n" + REC + "\n](/u)\n"),
+        ("escaped ref label", '[a\\]b]: /u "\n' + REC + '"\n'),
+        ("ref def in list", '- [x]: /u "\n' + ind2 + '  "\n'),
+        (
+            "escaped backtick re-pairing",
+            "\\`a `\nIV_VERDICT=PASS\nBLOCKING_P0=0\nBLOCKING_P1=0\n`x`\n",
+        ),
+    ):
+        _not_canonical(BOUND + body, label)
+
+
+def test_52_review_thread_comments_are_a_blocking_channel_but_never_bound_evidence():
+    body = iv()
+    s = snapshot([comment(body)])
+    s["review_comments"] = [
+        {
+            "id": 501,
+            "created_at": "2026-09-28T09:00:00Z",
+            "updated_at": "2026-09-28T10:00:00Z",
+            "author": "reviewer",
+            "body": "BLOCKING_P1=1",
+        }
+    ]
+    d = evaluate(authority(body), s)
+    assert (
+        d.verdict == "DENY"
+        and "NEWER_BLOCKING_EVIDENCE:review_comment:501@2026-09-28T10:00:00Z" in d.reasons
+    )
+    s["review_comments"][0]["updated_at"] = "2026-09-28T09:59:59Z"
+    assert evaluate(authority(body), s).verdict == "ALLOW"
+    # a review-thread comment cannot satisfy the binding even with the bound id
+    s = snapshot([])
+    s["review_comments"] = [comment(body, cid=1)]
+    d = evaluate(authority(body), s)
+    assert d.verdict == "DENY" and d.reasons[0].startswith("IV_EVIDENCE_NOT_FOUND")
+
+
+def test_53_review_blockers_are_time_independent():
+    body = iv()
+    for state, text in (("CHANGES_REQUESTED", ""), ("COMMENTED", "IV_VERDICT=FAIL")):
+        s = snapshot(
+            [comment(body)],
+            reviews=[
+                {
+                    "id": 7,
+                    "submitted_at": "2026-09-28T08:00:00Z",  # long before the authority
+                    "author": "r",
+                    "state": state,
+                    "body": text,
+                }
+            ],
+        )
+        d = evaluate(authority(body), s)
+        assert d.verdict == "DENY" and "BLOCKING_REVIEW:7@2026-09-28T08:00:00Z" in d.reasons, state
+        assert d.receipt["newer_blocking"] == [{"id": 7, "at": "2026-09-28T08:00:00Z"}]
+    s = snapshot(
+        [comment(body)],
+        reviews=[{"id": 8, "submitted_at": T0, "author": "r", "state": "APPROVED", "body": "ok"}],
+    )
+    assert evaluate(authority(body), s).verdict == "ALLOW"
+
+
+def test_54_collector_reads_review_thread_comments_and_tolerates_deleted_users():
+    from controller.merge_gate import collect_snapshot
+
+    calls: list[list[str]] = []
+
+    class Done:
+        def __init__(self, out):
+            self.stdout = out
+
+    def runner(args, **_):
+        calls.append(list(args))
+        path = args[2]
+        if path.startswith("repos/o/r/pulls/5/comments"):
+            out = [[{"id": 9, "created_at": T0, "user": None, "body": "x"}]]
+        elif path.startswith("repos/o/r/pulls/5/reviews"):
+            out = [[]]
+        elif path.startswith("repos/o/r/issues/5/comments"):
+            out = [[{"id": 1, "created_at": T0, "user": None, "body": "y"}]]
+        elif path.startswith("repos/o/r/actions/runs"):
+            out = [{"workflow_runs": []}]
+        elif path.startswith("repos/o/r/git/commits/"):
+            out = {"tree": {"sha": TREE}}
+        else:
+            out = {
+                "number": 5,
+                "state": "open",
+                "merged": False,
+                "head": {"sha": HEAD},
+                "base": {"sha": BASE},
+            }
+        return Done(json.dumps(out))
+
+    snap = collect_snapshot("o/r", 5, runner)
+    assert snap["review_comments"] == [
+        {"id": 9, "created_at": T0, "updated_at": T0, "author": None, "body": "x"}
+    ]
+    assert snap["comments"][0]["author"] is None
+    assert any("pulls/5/comments" in c[2] for c in calls)

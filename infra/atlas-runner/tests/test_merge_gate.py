@@ -150,7 +150,7 @@ def test_blocking_review_changes_requested_after_authority_denies():
         ]
     )
     d = evaluate(authority(), s)
-    assert d.verdict == "DENY" and any("NEWER_BLOCKING_EVIDENCE:review:77" in r for r in d.reasons)
+    assert d.verdict == "DENY" and any("BLOCKING_REVIEW:77" in r for r in d.reasons)
 
 
 def test_head_or_tree_drift_denies():
