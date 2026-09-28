@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 
-from controller.merge_gate import collect_snapshot, evaluate
+from controller.merge_gate import _body_sha256, collect_snapshot, evaluate
 
 HEAD = "dc9b083d32dbd5f4e524b95e89e3d0357d38bf1e"
 TREE = "1e54af5bd618a5f7b618a611682f8c8c29e97094"
@@ -13,14 +13,26 @@ BASE = "28d4519cd9beb174d23ecca8715554417104e8d3"
 T0 = "2026-09-28T10:00:00Z"
 
 
+IV_AT = "2026-09-28T09:45:59Z"
+
+
 def iv(verdict_line: str, p0: int = 0, p1: int = 0, extra: str = "") -> str:
     return (
-        f"FRESH INDEPENDENT IV\nHEAD `{HEAD}` TREE `{TREE}` base `{BASE}`\n"
-        f"BLOCKING_P0={p0}; BLOCKING_P1={p1}\n{verdict_line}\n{extra}"
+        f"FRESH INDEPENDENT IV\nHEAD {HEAD} TREE {TREE} base {BASE}\n"
+        f"BLOCKING_P0={p0}\nBLOCKING_P1={p1}\n{verdict_line}\n{extra}"
     )
 
 
-def authority(**over):
+def binding(body, iv_id=1, author="iv", at=IV_AT):
+    return {
+        "iv_evidence_id": iv_id,
+        "iv_author": author,
+        "iv_updated_at": at,
+        "iv_body_sha256": _body_sha256(body),
+    }
+
+
+def authority(iv_body: str = iv("IV_VERDICT=PASS"), **over):
     a = {
         "pr": 1025,
         "head": HEAD,
@@ -28,6 +40,7 @@ def authority(**over):
         "base": BASE,
         "decided_at": T0,
         "required_checks": ["ci", "atlas-runner-ci"],
+        "iv_binding": binding(iv_body),
         "consumed": False,
     }
     a.update(over)
@@ -59,7 +72,7 @@ def snapshot(iv_body: str = iv("IV_VERDICT=PASS"), **over):
         },
         "check_runs": [run("ci"), run("atlas-runner-ci")],
         "comments": [
-            {"id": 1, "created_at": "2026-09-28T09:45:59Z", "author": "iv", "body": iv_body}
+            {"id": 1, "created_at": IV_AT, "updated_at": IV_AT, "author": "iv", "body": iv_body}
         ],
         "reviews": [],
     }
@@ -74,7 +87,7 @@ def reasons(d):
 # 1. IV_VERDICT=FAIL plus incidental PASS text => DENY
 def test_1_verdict_fail_with_incidental_pass_text_denies():
     d = evaluate(
-        authority(),
+        authority(iv("IV_VERDICT=FAIL", extra="IV matrix: item 1 PASS; all checks PASS")),
         snapshot(iv("IV_VERDICT=FAIL", extra="IV matrix: item 1 PASS; all checks PASS")),
     )
     assert d.verdict == "DENY" and "IV_NOT_PASS" in reasons(d) and "verdict=FAIL" in reasons(d)
@@ -87,7 +100,10 @@ def test_2_quoted_pass_token_in_prose_does_not_establish_pass():
         "the line `IV_VERDICT=PASS` is required",
         "'IV_VERDICT=PASS'",
     ):
-        d = evaluate(authority(), snapshot(iv("(no verdict line)", extra=quoted)))
+        d = evaluate(
+            authority(iv("(no verdict line)", extra=quoted)),
+            snapshot(iv("(no verdict line)", extra=quoted)),
+        )
         assert d.verdict == "DENY" and "verdict=MISSING" in reasons(d), quoted
     # heading says FAIL, matrix lines say PASS, no canonical token at all -> DENY (was ALLOW before)
     d = evaluate(
@@ -105,17 +121,23 @@ def test_2_quoted_pass_token_in_prose_does_not_establish_pass():
 # 3. exact canonical IV_VERDICT=PASS with P0=0/P1=0 => eligible
 def test_3_canonical_pass_is_eligible():
     for line in ("IV_VERDICT=PASS", "**IV_VERDICT=PASS**", "IV_VERDICT = PASS"):
-        d = evaluate(authority(), snapshot(iv(line)))
+        d = evaluate(authority(iv(line)), snapshot(iv(line)))
         assert d.verdict == "ALLOW", (line, d.reasons)
 
 
 # 4. contradictory PASS/FAIL evidence => DENY
 def test_4_contradictory_verdicts_deny():
-    d = evaluate(authority(), snapshot(iv("IV_VERDICT=PASS", extra="\nIV_VERDICT=FAIL")))
+    d = evaluate(
+        authority(iv("IV_VERDICT=PASS", extra="\nIV_VERDICT=FAIL")),
+        snapshot(iv("IV_VERDICT=PASS", extra="\nIV_VERDICT=FAIL")),
+    )
     assert d.verdict == "DENY" and "verdict=AMBIGUOUS" in reasons(d)
-    d = evaluate(authority(), snapshot(iv("IV_VERDICT=PASS", p1=1)))
+    d = evaluate(authority(iv("IV_VERDICT=PASS", p1=1)), snapshot(iv("IV_VERDICT=PASS", p1=1)))
     assert d.verdict == "DENY" and "P1=1" in reasons(d)
-    d = evaluate(authority(), snapshot(iv("IV_VERDICT=PASS\nIV_VERDICT=WITHDRAWN")))
+    d = evaluate(
+        authority(iv("IV_VERDICT=PASS\nIV_VERDICT=WITHDRAWN")),
+        snapshot(iv("IV_VERDICT=PASS\nIV_VERDICT=WITHDRAWN")),
+    )
     assert d.verdict == "DENY"
 
 
@@ -247,6 +269,7 @@ def test_11_paginated_comments_over_100_are_collected_completely():
                 {
                     "id": i,
                     "created_at": "2026-09-28T09:45:59Z",
+                    "updated_at": "2026-09-28T09:45:59Z",
                     "user": {"login": "iv"},
                     "body": pass_body,
                 }
@@ -260,8 +283,9 @@ def test_11_paginated_comments_over_100_are_collected_completely():
     s = collect_snapshot("WezzSide/project-atlas", 1025, runner=fake)
     assert len(s["comments"]) == 130 and s["comments"][-1]["id"] == 129
     s["observed_at"] = "2026-09-28T10:05:30Z"
-    d1 = evaluate(authority(), s)
-    d2 = evaluate(authority(), s)
+    a = authority(iv_binding=binding(pass_body, iv_id=129))
+    d1 = evaluate(a, s)
+    d2 = evaluate(a, s)
     assert d1.verdict == "ALLOW" and d1.to_dict() == d2.to_dict()
 
 
@@ -299,12 +323,12 @@ def test_12_malformed_evidence_denies_never_crashes():
 
 
 def test_sha_case_normalized_without_weakening_binding():
+    body = iv("IV_VERDICT=PASS").replace(HEAD, HEAD.upper())
     d = evaluate(
-        authority(head=HEAD.upper(), tree=TREE.upper()),
-        snapshot(iv("IV_VERDICT=PASS").replace(HEAD, HEAD.upper())),
+        authority(head=HEAD.upper(), tree=TREE.upper(), iv_binding=binding(body)), snapshot(body)
     )
     assert d.verdict == "ALLOW", d.reasons
-    assert d.receipt["authority"]["head"] == HEAD  # normalized lowercase in the receipt
+    assert d.receipt["authority"]["head"] == HEAD  # normalized lowercase
     bad = authority(head="9c06069c")  # short sha is not a binding
     assert "HEAD_DRIFT" in reasons(evaluate(bad, snapshot()))
 

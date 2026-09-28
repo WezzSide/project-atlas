@@ -5,20 +5,32 @@ from __future__ import annotations
 import copy
 import json
 
-from controller.merge_gate import collect_snapshot, evaluate
+from controller.merge_gate import _body_sha256, collect_snapshot, evaluate
 
 HEAD = "dc9b083d32dbd5f4e524b95e89e3d0357d38bf1e"
 TREE = "1e54af5bd618a5f7b618a611682f8c8c29e97094"
 BASE = "28d4519cd9beb174d23ecca8715554417104e8d3"
 PASS_IV = (
     f"FRESH INDEPENDENT IV — PASS\nHEAD `{HEAD}` TREE `{TREE}` base `{BASE}`\n"
-    "Findings: P0=0, P1=0. BLOCKING_P0=0; BLOCKING_P1=0; IV_VERDICT=PASS."
+    "Findings: P0=0, P1=0.\nBLOCKING_P0=0\nBLOCKING_P1=0\nIV_VERDICT=PASS"
 )
+IV_ID = 5867468677
+IV_AUTHOR = "atlasrunnerapp[bot]"
+IV_AT = "2026-09-28T09:45:59Z"
 FAIL_IV = (
     "FRESH INDEPENDENT IV — exact canonical successor\n"
     f"Identity: base `{BASE}`, HEAD `{HEAD}`, TREE `{TREE}`.\n"
     "**IV verdict: FAIL — BLOCKING_P0=0, BLOCKING_P1=1.**\nP1: jobs pagination not fail-closed."
 )
+
+
+def binding(body=PASS_IV, iv_id=IV_ID, author=IV_AUTHOR, at=IV_AT):
+    return {
+        "iv_evidence_id": iv_id,
+        "iv_author": author,
+        "iv_updated_at": at,
+        "iv_body_sha256": _body_sha256(body),
+    }
 
 
 def authority(**over):
@@ -29,6 +41,7 @@ def authority(**over):
         "base": BASE,
         "decided_at": "2026-09-28T10:00:00Z",
         "required_checks": ["ci", "atlas-runner-ci"],
+        "iv_binding": binding(),
         "consumed": False,
     }
     a.update(over)
@@ -66,9 +79,10 @@ def snapshot(**over):
         ],
         "comments": [
             {
-                "id": 5867468677,
-                "created_at": "2026-09-28T09:45:59Z",
-                "author": "atlasrunnerapp[bot]",
+                "id": IV_ID,
+                "created_at": IV_AT,
+                "updated_at": IV_AT,
+                "author": IV_AUTHOR,
                 "body": PASS_IV,
             }
         ],
@@ -102,19 +116,25 @@ def test_race_blocking_iv_after_admission_before_merge_denies():
     d = evaluate(authority(), s)
     assert d.verdict == "DENY"
     assert any(r.startswith("NEWER_BLOCKING_EVIDENCE:comment:5867783462") for r in d.reasons)
-    assert any(r.startswith("IV_NOT_PASS:5867783462") for r in d.reasons)
+    # the bound PASS record itself is still intact; the DENY comes from the newer blocker
     assert d.receipt["newer_blocking"] == [{"id": 5867783462, "at": "2026-09-28T10:05:00Z"}]
 
 
 def test_blocking_evidence_before_authority_is_superseded_by_later_pass():
-    """Old FAIL, then authority decided after a fresh PASS -> ALLOW (history not re-litigated)."""
+    """Old FAIL, then authority decided after a fresh bound PASS -> ALLOW (not re-litigated)."""
     s = snapshot(
         comments=[
             {"id": 1, "created_at": "2026-09-28T08:00:00Z", "author": "iv", "body": FAIL_IV},
-            {"id": 2, "created_at": "2026-09-28T09:45:59Z", "author": "iv", "body": PASS_IV},
+            {
+                "id": 2,
+                "created_at": "2026-09-28T09:45:59Z",
+                "updated_at": "2026-09-28T09:45:59Z",
+                "author": IV_AUTHOR,
+                "body": PASS_IV,
+            },
         ]
     )
-    assert evaluate(authority(), s).verdict == "ALLOW"
+    assert evaluate(authority(iv_binding=binding(iv_id=2)), s).verdict == "ALLOW"
 
 
 def test_blocking_review_changes_requested_after_authority_denies():
@@ -182,10 +202,21 @@ def test_ci_must_be_terminal_success_and_exact_head():
 def test_iv_must_be_bound_to_candidate_and_pass():
     stale_iv = PASS_IV.replace(HEAD, "82ec1c0aa163a7a3c4bfa747cc1a9a24eddabf2d")
     s = snapshot(
-        comments=[{"id": 5, "created_at": "2026-09-28T09:45:59Z", "author": "iv", "body": stale_iv}]
+        comments=[
+            {
+                "id": 5,
+                "created_at": "2026-09-28T09:45:59Z",
+                "updated_at": "2026-09-28T09:45:59Z",
+                "author": IV_AUTHOR,
+                "body": stale_iv,
+            }
+        ]
     )
-    assert any(r.startswith("IV_NOT_BOUND_TO_CANDIDATE") for r in evaluate(authority(), s).reasons)
-    assert "IV_MISSING" in evaluate(authority(), snapshot(comments=[])).reasons
+    d = evaluate(authority(iv_binding=binding(body=stale_iv, iv_id=5)), s)
+    assert any(r.startswith("IV_NOT_BOUND_TO_CANDIDATE") for r in d.reasons)
+    assert (
+        "IV_EVIDENCE_NOT_FOUND:5867468677" in evaluate(authority(), snapshot(comments=[])).reasons
+    )
 
 
 def test_consumed_authority_pr_state_and_stale_snapshot_deny():
@@ -260,6 +291,7 @@ def test_collect_snapshot_shape_with_fake_gh():
                             {
                                 "id": 9,
                                 "created_at": "2026-09-28T09:45:59Z",
+                                "updated_at": "2026-09-28T09:45:59Z",
                                 "user": {"login": "iv"},
                                 "body": PASS_IV,
                             }
@@ -281,6 +313,10 @@ def test_collect_snapshot_shape_with_fake_gh():
         "base": BASE,
     }
     assert s["check_runs"][0]["name"] == "ci" and s["comments"][0]["author"] == "iv"
+    assert s["comments"][0]["updated_at"] == "2026-09-28T09:45:59Z"
     assert all(c[0] == "gh" and c[1] == "api" for c in calls), "read-only gh api calls only"
-    d = evaluate(authority(required_checks=["ci"]), {**s, "observed_at": "2026-09-28T10:05:30Z"})
+    d = evaluate(
+        authority(required_checks=["ci"], iv_binding=binding(iv_id=9, author="iv")),
+        {**s, "observed_at": "2026-09-28T10:05:30Z"},
+    )
     assert d.verdict == "ALLOW", d.reasons

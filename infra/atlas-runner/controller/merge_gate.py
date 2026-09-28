@@ -8,10 +8,13 @@ module enforces, at the merge instant, is:
   * candidate HEAD and TREE are exactly the ones the merge authority was bound to;
   * base is exact (or the authority explicitly rebinds to a named new base);
   * every required CI run is terminal SUCCESS and bound to the exact HEAD;
-  * the latest IV record is terminal, bound to the exact HEAD/TREE, verdict PASS with
-    BLOCKING_P0=0 and BLOCKING_P1=0;
-  * no blocking evidence (P0/P1 > 0, IV FAIL/REJECTED, security marker) exists that is
-    newer than the authority decision -- regardless of author;
+  * the positive IV record is the exact one the authority was bound to (comment id, author,
+    body sha256, updated_at — optionally restricted to a trusted verifier allowlist), unedited
+    since binding, bound to the exact HEAD/TREE, and its canonical record fields say
+    IV_VERDICT=PASS with BLOCKING_P0=0 and BLOCKING_P1=0 (fenced code, HTML comments, inline
+    code, quotes and URLs never count);
+  * no blocking evidence (P0/P1 > 0, IV FAIL/REJECTED, security marker) exists whose effective
+    (edit-aware) timestamp is at or after the authority decision -- regardless of author;
   * the authority itself is bound to the current candidate and not consumed.
 
 Any violation => DENY. The decision is a receipt carrying timestamps and evidence ids,
@@ -20,12 +23,16 @@ so the merge log can later prove which evidence was current at the mutation inst
 Pure evaluation: `evaluate(authority, snapshot)` takes plain dicts (no network), so the
 race can be tested deterministically. `collect_snapshot()` builds the same shape from
 `gh` for operational use (`python -m controller.merge_gate --pr N --authority a.json`).
+Authority file fields: pr, head, tree, base, decided_at, required_checks,
+iv_binding{iv_evidence_id, iv_author, iv_updated_at, iv_body_sha256}, optional
+trusted_iv_authors, optional rebind_base, consumed.
 """
 
 from __future__ import annotations
 
 import dataclasses
 import datetime as _dt
+import hashlib
 import json
 import re
 import subprocess
@@ -42,9 +49,16 @@ BLOCKING_MARKERS = (
     re.compile(r"\bSECURITY[_ ]BLOCKER\b", re.I),
     re.compile(r"\bMERGE_AUTHORITY_INVALIDATED\b"),
 )
-# Canonical machine-readable verdict token. Quoted or code-spanned occurrences ("IV_VERDICT=PASS",
-# `IV_VERDICT=PASS`) are prose/examples and never establish a verdict; bold (**...**) is allowed.
-VERDICT_RE = re.compile(r"(?<![`'\"\w])\**IV_VERDICT\s*=\s*\**([A-Za-z_]+)\**(?![`'\"\w])")
+# Canonical IV record fields are whole lines of the form KEY=VALUE (optionally **bold** or a list
+# item). Fenced code blocks, inline code spans and HTML comments are stripped BEFORE parsing, so
+# examples, quotes and hidden markup can never establish a verdict. No fuzzy fallback exists.
+RECORD_KEYS = ("IV_VERDICT", "BLOCKING_P0", "BLOCKING_P1")
+RECORD_LINE_RE = re.compile(
+    r"^\s*(?:[-*>]\s*)?\*{0,2}(IV_VERDICT|BLOCKING_P0|BLOCKING_P1)\s*=\s*([A-Za-z0-9_]+)\*{0,2}\s*[.;]?\s*$"
+)
+FENCE_RE = re.compile(r"```.*?```|~~~.*?~~~", re.S)
+HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.S)
+INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
 P0_RE = re.compile(r"BLOCKING_P0\s*=\s*(\d+)", re.I)
 P1_RE = re.compile(r"BLOCKING_P1\s*=\s*(\d+)", re.I)
 SHA_RE = re.compile(r"\b[0-9a-fA-F]{40}\b")
@@ -67,17 +81,6 @@ def _ts(value: Any) -> _dt.datetime:
     return parsed
 
 
-def _classify_verdict(body: str) -> str:
-    """Return PASS, FAIL, AMBIGUOUS or MISSING from canonical IV_VERDICT lines only."""
-    found = {m.group(1).upper() for m in VERDICT_RE.finditer(body or "")}
-    if not found:
-        return "MISSING"
-    if len(found) > 1:
-        return "AMBIGUOUS"
-    verdict = found.pop()
-    return verdict if verdict in {"PASS", "FAIL"} else "AMBIGUOUS"
-
-
 @dataclasses.dataclass(frozen=True)
 class Decision:
     verdict: str  # "ALLOW" | "DENY"
@@ -86,6 +89,46 @@ class Decision:
 
     def to_dict(self) -> dict[str, Any]:
         return {"verdict": self.verdict, "reasons": list(self.reasons), "receipt": self.receipt}
+
+
+def _strip_non_record_context(body: str, *, inline_code: bool = True) -> str:
+    """Remove fenced code, HTML comments and (by default) inline code spans."""
+    text = FENCE_RE.sub(" ", body or "")
+    text = HTML_COMMENT_RE.sub(" ", text)
+    return INLINE_CODE_RE.sub(" ", text) if inline_code else text
+
+
+def parse_iv_record(body: str) -> dict[str, Any]:
+    """Deterministic structured parse of an IV record.
+
+    Returns {"verdict": PASS|FAIL|MISSING|AMBIGUOUS|MALFORMED, "p0": int|None, "p1": int|None}.
+    Only whole canonical lines count; duplicates with differing values => AMBIGUOUS; a key with a
+    value outside its domain => MALFORMED. Never raises.
+    """
+    found: dict[str, set[str]] = {k: set() for k in RECORD_KEYS}
+    for line in _strip_non_record_context(body).splitlines():
+        m = RECORD_LINE_RE.match(line)
+        if m:
+            found[m.group(1)].add(m.group(2).upper())
+    out: dict[str, Any] = {"verdict": "MISSING", "p0": None, "p1": None}
+    vals = found["IV_VERDICT"]
+    if len(vals) > 1:
+        out["verdict"] = "AMBIGUOUS"
+    elif len(vals) == 1:
+        v = next(iter(vals))
+        out["verdict"] = v if v in {"PASS", "FAIL"} else "MALFORMED"
+    for key, slot in (("BLOCKING_P0", "p0"), ("BLOCKING_P1", "p1")):
+        vs = found[key]
+        if len(vs) == 1 and next(iter(vs)).isdigit():
+            out[slot] = int(next(iter(vs)))
+        elif vs:
+            out["verdict"] = "MALFORMED" if out["verdict"] == "PASS" else out["verdict"]
+            out[slot] = None
+    return out
+
+
+def _body_sha256(body: str) -> str:
+    return hashlib.sha256((body or "").encode("utf-8")).hexdigest()
 
 
 def _sha(value: Any) -> str | None:
@@ -97,11 +140,6 @@ def _sha(value: Any) -> str | None:
 
 def _is_blocking(body: str) -> bool:
     return any(m.search(body or "") for m in BLOCKING_MARKERS)
-
-
-def _is_iv_record(body: str) -> bool:
-    b = body or ""
-    return ("INDEPENDENT IV" in b.upper()) or bool(P0_RE.search(b) and P1_RE.search(b))
 
 
 def evaluate(authority: dict[str, Any], snapshot: dict[str, Any]) -> Decision:
@@ -125,10 +163,12 @@ def _evaluate(authority: dict[str, Any], snapshot: dict[str, Any]) -> Decision:
     """Decide ALLOW/DENY for one merge mutation.
 
     authority: {"pr", "head", "tree", "base", "decided_at", "required_checks": [names],
+                "iv_binding": {"iv_evidence_id", "iv_author", "iv_updated_at", "iv_body_sha256"},
+                "trusted_iv_authors": optional non-empty allowlist,
                 "rebind_base": optional new base sha, "consumed": bool}
     snapshot:  {"observed_at", "pr": {"number","state","head","tree","base","merged"},
                 "check_runs": [{"name","head_sha","status","conclusion","id","completed_at"}],
-                "comments": [{"id","created_at","author","body"}],
+                "comments": [{"id","created_at","updated_at","author","body"}],
                 "reviews": [{"id","submitted_at","author","state","body"}]}
     """
     reasons: list[str] = []
@@ -169,7 +209,7 @@ def _evaluate(authority: dict[str, Any], snapshot: dict[str, Any]) -> Decision:
         if not runs:
             reasons.append(f"CI_MISSING:{name}")
             continue
-        newest = max(runs, key=lambda r: str(r.get("completed_at") or r.get("created_at") or ""))
+        newest = max(runs, key=lambda r: _ts(r.get("completed_at") or r.get("created_at")))
         if (
             newest.get("status") != "completed"
             or str(newest.get("conclusion", "")).lower() not in TERMINAL_OK
@@ -182,11 +222,17 @@ def _evaluate(authority: dict[str, Any], snapshot: dict[str, Any]) -> Decision:
     # evidence stream: comments + reviews, ordered by time
     events: list[dict[str, Any]] = []
     for c in snapshot.get("comments") or []:
+        created = _ts(c["created_at"])
+        updated = _ts(c["updated_at"]) if c.get("updated_at") else created
+        if updated < created:
+            raise MalformedEvidence(f"comment {c.get('id')} updated_at precedes created_at")
         events.append(
             {
                 "kind": "comment",
                 "id": c.get("id"),
-                "at": c["created_at"],
+                "at": (c.get("updated_at") or c["created_at"]),  # effective (edit-aware)
+                "created_at": c["created_at"],
+                "updated_at": c.get("updated_at") or c["created_at"],
                 "author": c.get("author"),
                 "body": c.get("body") or "",
             }
@@ -201,6 +247,8 @@ def _evaluate(authority: dict[str, Any], snapshot: dict[str, Any]) -> Decision:
                 "kind": "review",
                 "id": rv.get("id"),
                 "at": rv["submitted_at"],
+                "created_at": rv["submitted_at"],
+                "updated_at": rv["submitted_at"],
                 "author": rv.get("author"),
                 "body": body,
             }
@@ -211,21 +259,58 @@ def _evaluate(authority: dict[str, Any], snapshot: dict[str, Any]) -> Decision:
     for e in newer_blocking:
         reasons.append(f"NEWER_BLOCKING_EVIDENCE:{e['kind']}:{e['id']}@{e['at']}")
 
-    iv_records = [e for e in events if _is_iv_record(e["body"])]
-    latest_iv = iv_records[-1] if iv_records else None
-    if latest_iv is None:
-        reasons.append("IV_MISSING")
+    # Positive IV evidence must be the exact record the authority was bound to: id + author +
+    # body hash + updated_at. Free-form PR text never establishes PASS.
+    binding = authority.get("iv_binding")
+    latest_iv: dict[str, Any] | None = None
+    if not isinstance(binding, dict) or not all(
+        binding.get(k) for k in ("iv_evidence_id", "iv_author", "iv_updated_at", "iv_body_sha256")
+    ):
+        reasons.append("IV_BINDING_MISSING")
     else:
-        body = latest_iv["body"]
-        shas = {x.lower() for x in SHA_RE.findall(body)}
-        if a_head not in shas or a_tree not in shas:
-            reasons.append(f"IV_NOT_BOUND_TO_CANDIDATE:{latest_iv['id']}")
-        p0_m, p1_m = P0_RE.search(body), P1_RE.search(body)
-        p0 = int(p0_m.group(1)) if p0_m else None
-        p1 = int(p1_m.group(1)) if p1_m else None
-        verdict = _classify_verdict(body)
-        if verdict != "PASS" or p0 is None or p1 is None or p0 or p1 or _is_blocking(body):
-            reasons.append(f"IV_NOT_PASS:{latest_iv['id']}:verdict={verdict}:P0={p0}:P1={p1}")
+        trusted = authority.get("trusted_iv_authors")
+        if trusted is not None and (
+            not isinstance(trusted, list) or not trusted or binding["iv_author"] not in trusted
+        ):
+            reasons.append("IV_AUTHOR_UNTRUSTED")
+        if _ts(binding["iv_updated_at"]) >= decided_at:
+            reasons.append("IV_BINDING_NOT_BEFORE_AUTHORITY")
+        bound = [
+            e
+            for e in events
+            if e["kind"] == "comment" and str(e["id"]) == str(binding["iv_evidence_id"])
+        ]
+        if len(bound) != 1:
+            reasons.append(f"IV_EVIDENCE_NOT_FOUND:{binding['iv_evidence_id']}")
+        else:
+            latest_iv = bound[0]
+            body = latest_iv["body"]
+            if latest_iv["author"] != binding["iv_author"]:
+                reasons.append(f"IV_AUTHOR_MISMATCH:{latest_iv['author']}")
+            if _body_sha256(body) != str(binding["iv_body_sha256"]).lower():
+                reasons.append(f"IV_BODY_HASH_MISMATCH:{latest_iv['id']}")
+            if _ts(latest_iv["updated_at"]) != _ts(binding["iv_updated_at"]):
+                reasons.append(f"IV_EDITED:{latest_iv['id']}@{latest_iv['updated_at']}")
+            if _ts(latest_iv["updated_at"]) >= decided_at:
+                reasons.append(f"IV_EDITED_AFTER_AUTHORITY:{latest_iv['id']}")
+            # binding SHAs are conventionally written in backticks, so keep inline code here
+            visible = _strip_non_record_context(body, inline_code=False)
+            shas = {x.lower() for x in SHA_RE.findall(visible)}
+            if a_head not in shas or a_tree not in shas:
+                reasons.append(f"IV_NOT_BOUND_TO_CANDIDATE:{latest_iv['id']}")
+            rec = parse_iv_record(body)
+            if (
+                rec["verdict"] != "PASS"
+                or rec["p0"] is None
+                or rec["p1"] is None
+                or rec["p0"]
+                or rec["p1"]
+                or _is_blocking(_strip_non_record_context(body))
+            ):
+                reasons.append(
+                    f"IV_NOT_PASS:{latest_iv['id']}:verdict={rec['verdict']}:"
+                    f"P0={rec['p0']}:P1={rec['p1']}"
+                )
 
     receipt = {
         "schema": "atlas-merge-gate-receipt/v1",
@@ -240,9 +325,21 @@ def _evaluate(authority: dict[str, Any], snapshot: dict[str, Any]) -> Decision:
         "observed_at": snapshot["observed_at"],
         "observed": {k: pr.get(k) for k in ("head", "tree", "base", "state", "merged")},
         "required_ci": ci_ids,
+        "iv_binding": None
+        if not isinstance(binding, dict)
+        else {
+            k: binding.get(k)
+            for k in ("iv_evidence_id", "iv_author", "iv_updated_at", "iv_body_sha256")
+        },
         "latest_iv": None
         if latest_iv is None
-        else {"id": latest_iv["id"], "at": latest_iv["at"], "author": latest_iv["author"]},
+        else {
+            "id": latest_iv["id"],
+            "at": latest_iv["at"],
+            "updated_at": latest_iv["updated_at"],
+            "author": latest_iv["author"],
+            "body_sha256": _body_sha256(latest_iv["body"]),
+        },
         "newest_evidence": None
         if not events
         else {"id": events[-1]["id"], "at": events[-1]["at"], "kind": events[-1]["kind"]},
@@ -330,6 +427,7 @@ def collect_snapshot(
             {
                 "id": c["id"],
                 "created_at": c["created_at"],
+                "updated_at": c.get("updated_at") or c["created_at"],
                 "author": c["user"]["login"],
                 "body": c.get("body") or "",
             }
@@ -360,7 +458,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--authority",
         required=True,
-        help="JSON file: pr, head, tree, base, decided_at, required_checks",
+        help="JSON file: pr, head, tree, base, decided_at, required_checks, iv_binding",
     )
     ap.add_argument("--receipt", help="write decision receipt JSON here")
     a = ap.parse_args(argv)
