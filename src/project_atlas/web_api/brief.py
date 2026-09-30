@@ -16,7 +16,10 @@ from typing import Any
 from atlas_contracts.identity import safe_relative_component
 from project_atlas.conversation_capture import list_conversation_captures
 from project_atlas.web_api.conflicts import list_project_conflicts
-from project_atlas.web_api.knowledge import list_knowledge_answers
+from project_atlas.web_api.knowledge import (
+    answer_filename_project,
+    list_knowledge_answers,
+)
 
 PACKAGE_ID = "AS-CODER-ALPHA-WEB-001"
 TRUTH_PACKAGE_ID = "AS-CODER-ALPHA-TRUTH-UX-001"
@@ -116,6 +119,8 @@ def _lens_rows(vault: Path, project_id: str) -> dict[str, dict[str, Any]]:
     rows: dict[str, dict[str, Any]] = {}
     for answer in list_knowledge_answers(vault):
         if answer.get("subject") != project_id:
+            continue
+        if answer_filename_project(str(answer.get("path") or "")) != project_id:
             continue
         field = answer.get("field")
         if not isinstance(field, str):
@@ -333,4 +338,9 @@ def filter_knowledge_by_project(
     if project_id is None:
         return rows
     project_id = _safe_project_id(project_id)
-    return [row for row in rows if row.get("subject") == project_id]
+    return [
+        row
+        for row in rows
+        if row.get("subject") == project_id
+        and answer_filename_project(str(row.get("path") or "")) == project_id
+    ]

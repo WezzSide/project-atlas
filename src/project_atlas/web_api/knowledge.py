@@ -15,7 +15,11 @@ import json
 from pathlib import Path
 from typing import Any, TypedDict
 
+from project_atlas.secrets import scan_text
+
 ANSWERS_RELATIVE = Path("generated") / "answers"
+_LENS_PREFIXES = ("overview-", "state-", "changed-", "decisions-", "unknown-")
+_REDACTED_VALUE = "[redacted: secret-shaped value]"
 
 
 class KnowledgeAnswerSummary(TypedDict):
@@ -53,8 +57,31 @@ def _value_text(payload: dict[str, Any]) -> str | None:
     """Bounded display/match text from value when it is a plain string."""
     value = payload.get("value")
     if isinstance(value, str) and value.strip():
-        return value
+        return _REDACTED_VALUE if scan_text(value) else value
     return None
+
+
+def answer_filename_project(path: str | None) -> str | None:
+    """Project token bound in ``ans-<lens>-<project_id>.json``.
+
+    AS-WEB-BRIEF-F1: subject spoofing must not attach a victim filename to
+    another project's brief/knowledge inventory.
+    """
+    name = Path(str(path or "")).name
+    if not name.startswith("ans-") or not name.endswith(".json"):
+        return None
+    stem = name[len("ans-") : -len(".json")]
+    for prefix in _LENS_PREFIXES:
+        if stem.startswith(prefix):
+            token = stem[len(prefix) :]
+            return token or None
+    return None
+
+
+def _safe_display(value: str | None) -> str | None:
+    if not value:
+        return value
+    return _REDACTED_VALUE if scan_text(value) else value
 
 
 def list_knowledge_answers(vault: Path) -> list[KnowledgeAnswerSummary]:
@@ -78,8 +105,8 @@ def list_knowledge_answers(vault: Path) -> list[KnowledgeAnswerSummary]:
                 "path": f"generated/answers/{entry.name}",
                 "subject": _optional_str(payload, "subject"),
                 "field": _optional_str(payload, "field"),
-                "title": _optional_str(payload, "title", "question"),
-                "summary": _optional_str(payload, "summary", "notes"),
+                "title": _safe_display(_optional_str(payload, "title", "question")),
+                "summary": _safe_display(_optional_str(payload, "summary", "notes")),
                 "value_text": _value_text(payload),
                 "has_value": payload.get("value") is not None,
             }

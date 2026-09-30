@@ -69,9 +69,9 @@ def _vault(tmp_path: Path) -> Path:
         },
     )
     _write(
-        vault / "generated" / "answers" / "ans-other-nebula.json",
+        vault / "generated" / "answers" / "ans-overview-nebula.json",
         {
-            "answer_id": "ans-other-nebula",
+            "answer_id": "ans-overview-nebula",
             "subject": "nebula",
             "field": "overview",
             "title": "Overview",
@@ -171,6 +171,46 @@ def test_filter_knowledge_by_project(tmp_path: Path) -> None:
     assert len(filtered) == 1
     assert filtered[0]["subject"] == "project-atlas"
     assert filter_knowledge_by_project(all_rows, "nebula")[0]["subject"] == "nebula"
+
+
+def test_brief_and_knowledge_ignore_subject_spoofed_filename(tmp_path: Path) -> None:
+    vault = _vault(tmp_path)
+    _write(
+        vault / "generated" / "answers" / "ans-state-victim.json",
+        {
+            "answer_id": "ans-state-victim",
+            "subject": "project-atlas",
+            "field": "project_state",
+            "summary": "VICTIM-ONLY-STATE-HELIX-991",
+            "value": "postgresql-16 detail",
+        },
+    )
+    brief = read_project_brief(vault, "project-atlas")
+    state = brief["lens_sections"].get("state")
+    assert state is None or state.get("summary") != "VICTIM-ONLY-STATE-HELIX-991"
+    rows = open_app_service(vault).knowledge("project-atlas")
+    assert all(row.get("path") != "generated/answers/ans-state-victim.json" for row in rows)
+
+
+def test_brief_and_knowledge_redact_secret_shaped_values(tmp_path: Path) -> None:
+    vault = _vault(tmp_path)
+    secret = "aws_secret_access_key=AKIAAAAAAAAAAAAAAAAA"
+    _write(
+        vault / "generated" / "answers" / "ans-overview-project-atlas.json",
+        {
+            "answer_id": "ans-overview-project-atlas",
+            "subject": "project-atlas",
+            "field": "overview",
+            "title": "Overview",
+            "summary": secret,
+            "value": secret,
+        },
+    )
+    brief = read_project_brief(vault, "project-atlas")
+    overview = brief["lens_sections"]["overview"]
+    assert secret not in json.dumps(overview)
+    rows = open_app_service(vault).knowledge("project-atlas")
+    assert all(secret not in json.dumps(row) for row in rows)
 
 
 def test_app_service_brief_read_only(tmp_path: Path) -> None:
