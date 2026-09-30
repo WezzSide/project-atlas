@@ -15,6 +15,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import secrets
 import sys
 from dataclasses import dataclass, field
@@ -108,6 +109,9 @@ PRIVILEGED_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
 )
 
 _SESSION_TOKEN_BYTES: Final[int] = 32
+# receipt_id is interpolated into generated/ops/authz/{receipt_id}.json;
+# require a bare safe token so it can never steer a write outside that dir.
+_ID_RE = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
 
 
 class AuthzError(PermissionError):
@@ -352,12 +356,15 @@ def write_authz_audit_receipt(
 ) -> dict[str, Any]:
     """Persist a reconstructable capability audit receipt (not authority)."""
     require_compatibility_anchor()
+    rid = receipt_id.strip()
+    if not _ID_RE.fullmatch(rid):
+        raise AuthzError("authz-receipt-id-invalid")
     op = operator or default_operator()
     payload: dict[str, Any] = {
         "schema_version": 1,
         "package_id": PACKAGE_ID,
         "compat_snapshot_id": SNAPSHOT_ID,
-        "receipt_id": receipt_id,
+        "receipt_id": rid,
         "operator_id": op.operator_id,
         "capabilities": sorted(op.capabilities),
         "all_capabilities": sorted(ALL_CAPABILITIES),
@@ -365,7 +372,7 @@ def write_authz_audit_receipt(
         "authority": False,
         "generated": {"by": "project-atlas"},
     }
-    path = vault / "generated" / "ops" / "authz" / f"{receipt_id}.json"
+    path = vault / "generated" / "ops" / "authz" / f"{rid}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(
