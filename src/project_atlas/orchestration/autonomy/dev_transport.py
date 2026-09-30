@@ -12,6 +12,14 @@ Semantics every backend must provide:
     record is an idempotent no-op;
   * a role may claim only from the channels its role owns; the VERIFICATION channel additionally
     refuses the executor's own identity (IMPLEMENTER != VERIFIER).
+
+TRUST BOUNDARY (explicit non-guarantee): seals are unkeyed content digests. They detect
+corruption, tampering-in-flight and cross-record confusion; they do NOT authenticate the
+publisher. Anyone who can publish to a channel can mint a well-formed sealed record. Publisher
+authentication is the transport's responsibility (e.g. the authenticated GitHub actor / the fabric
+adapter that derives verdicts from independent GitHub evidence) and must be enforced by the
+deployment mapping. The planner therefore binds every record to what it issued (request seal,
+assigned verifier, execution id, current work item) but cannot, alone, prove who published it.
 """
 
 from __future__ import annotations
@@ -99,6 +107,9 @@ class InMemoryTransport:
         self._queues: dict[Channel, deque[str]] = defaultdict(deque)
         self._seen: set[tuple[Channel, str]] = set()
         self.claims: list[tuple[Channel, str, str]] = []  # (channel, seal, claimer identity)
+        self.rejected: list[
+            tuple[Channel, str]
+        ] = []  # undecodable/tampered wires, kept as evidence
 
     def publish(self, record: Record) -> bool:
         channel = CHANNEL_FOR_KIND[record.KIND]
@@ -115,7 +126,12 @@ class InMemoryTransport:
             raise TransportError(f"role {role.value} may not claim from {channel.value}")
         q = self._queues[channel]
         for idx, wire in enumerate(q):
-            rec = decode(wire)
+            try:
+                rec = decode(wire)
+            except ContractError:
+                del q[idx]  # a poisoned wire must not block the channel: reject it exactly once
+                self.rejected.append((channel, wire))
+                raise
             if channel is Channel.VERIFICATION:
                 assert isinstance(rec, VerificationRequest)
                 if same_identity(identity, rec.executor_identity):

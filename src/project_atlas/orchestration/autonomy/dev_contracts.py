@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import posixpath
 import re
+import unicodedata
 from enum import StrEnum
 from typing import Any, ClassVar
 
@@ -43,7 +44,7 @@ def same_identity(a: str, b: str) -> bool:
     return a.strip().casefold() == b.strip().casefold()
 
 
-def _identity(v: str) -> str:
+def validate_identity(v: str) -> str:
     if not _IDENT.fullmatch(v):
         raise ValueError("identity must be canonical (no whitespace/control, [A-Za-z0-9._:@/-])")
     return v
@@ -51,7 +52,8 @@ def _identity(v: str) -> str:
 
 def norm_path(p: str) -> str | None:
     """Canonical repo-relative posix path, or None when it is absolute/escaping/ill-formed."""
-    if not p or "\\" in p or "\x00" in p or p.startswith("/"):
+    p = unicodedata.normalize("NFC", p)
+    if not p or "\\" in p or "\x00" in p or p.startswith("/") or any(c in p for c in "*?[]"):
         return None
     parts = p.split("/")
     if ".." in parts:
@@ -164,6 +166,14 @@ class WorkItem(_Sealed):
     def _base(cls, v: str) -> str:
         return _sha(v, "base_revision")
 
+    @field_validator("allowed_paths", "forbidden_paths")
+    @classmethod
+    def _scope(cls, v: tuple[str, ...]) -> tuple[str, ...]:
+        for entry in v:
+            if norm_path(entry.rstrip("/")) is None:
+                raise ValueError(f"malformed scope entry {entry!r} (no globs/absolute/escapes)")
+        return v
+
     @model_validator(mode="after")
     def _attempt_within_ceiling(self) -> WorkItem:
         if self.attempt > self.max_attempts:
@@ -195,7 +205,7 @@ class ResultRecord(_Sealed):
     @field_validator("executor_identity")
     @classmethod
     def _who(cls, v: str) -> str:
-        return _identity(v)
+        return validate_identity(v)
 
 
 class VerificationRequest(_Sealed):
@@ -223,7 +233,7 @@ class VerificationRequest(_Sealed):
     @field_validator("executor_identity", "verifier_identity")
     @classmethod
     def _who(cls, v: str) -> str:
-        return _identity(v)
+        return validate_identity(v)
 
 
 class Finding(BaseModel):
@@ -255,7 +265,7 @@ class VerdictRecord(_Sealed):
     @field_validator("verifier_identity")
     @classmethod
     def _who(cls, v: str) -> str:
-        return _identity(v)
+        return validate_identity(v)
 
 
 def _err(exc: ValidationError) -> ContractError:
@@ -378,10 +388,13 @@ def _matches(path: str, prefixes: tuple[str, ...]) -> bool:
     n = norm_path(path)
     if n is None:
         return False
+    n = n.casefold()  # the repo is developed on case-insensitive filesystems too
     for p in prefixes:
         q = norm_path(p.rstrip("/"))
-        if q is not None and (n == q or n.startswith(q + "/")):
-            return True
+        if q is not None:
+            q = q.casefold()
+            if n == q or n.startswith(q + "/"):
+                return True
     return False
 
 

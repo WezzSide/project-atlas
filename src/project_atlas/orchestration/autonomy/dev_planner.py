@@ -29,6 +29,7 @@ from project_atlas.orchestration.autonomy.dev_contracts import (
     make_work,
     materialize_repair,
     same_identity,
+    validate_identity,
 )
 from project_atlas.orchestration.autonomy.dev_queue import QueueItem, Selection, select_next
 from project_atlas.orchestration.autonomy.dev_transport import Channel, DevTransport
@@ -70,6 +71,12 @@ class Planner:
     ) -> None:
         if not verifier_identities:
             raise PlannerError("at least one verifier identity is required")
+        try:
+            validate_identity(identity)
+            for v in verifier_identities:
+                validate_identity(v)
+        except ValueError as exc:
+            raise PlannerError(f"non-canonical identity: {exc}") from exc
         self.transport = transport
         self.identity = identity
         self.verifiers = verifier_identities
@@ -90,8 +97,8 @@ class Planner:
         sel = self.select([item])
         if sel.selected is None:
             raise PlannerError(f"task not admissible: {sel.skipped}")
-        if item.task_id in self.lineages:
-            raise PlannerError("lineage already dispatched")
+        if item.task_id in self.lineages or item.task_id in self._by_task:
+            raise PlannerError("lineage/task id already in use")
         work = make_work(
             task_id=item.task_id,
             execution_id=f"{item.task_id}-E1",
@@ -112,18 +119,21 @@ class Planner:
     def pump(self) -> int:
         """Consume every available result and verdict once; returns records processed."""
         n = 0
-        while rec := self.transport.claim(
-            Channel.RESULT, role=Role.PLANNER, identity=self.identity
+        for channel, handler in (
+            (Channel.RESULT, self._on_result),
+            (Channel.VERDICT, self._on_verdict),
         ):
-            assert isinstance(rec, ResultRecord)
-            self._guarded("RESULT", rec.seal, self._on_result, rec)
-            n += 1
-        while rec := self.transport.claim(
-            Channel.VERDICT, role=Role.PLANNER, identity=self.identity
-        ):
-            assert isinstance(rec, VerdictRecord)
-            self._guarded("VERDICT", rec.seal, self._on_verdict, rec)
-            n += 1
+            while True:
+                try:
+                    rec = self.transport.claim(channel, role=Role.PLANNER, identity=self.identity)
+                except ContractError as exc:  # poisoned wire: rejected by the transport, once
+                    self.quarantined.append((channel.value, "UNDECODABLE", str(exc)))
+                    n += 1
+                    continue
+                if rec is None:
+                    break
+                self._guarded(channel.value, rec.seal, handler, rec)
+                n += 1
         return n
 
     def _guarded(self, channel: str, seal: str, fn: Callable[[Any], None], rec: Any) -> None:
@@ -168,8 +178,10 @@ class Planner:
         res = st.result
         if res is None or st.phase is not Phase.VERIFYING:
             raise PlannerError("verdict without an outstanding verification")
+        if ver.task_id != st.work.task_id:
+            raise PlannerError("verdict is for a superseded work item of this lineage")
         req = self.issued.get(ver.task_id)
-        if req is None or ver.request_seal != req.seal:
+        if req is None or ver.request_seal != req.seal or req.result_seal != res.seal:
             raise PlannerError("verdict does not answer the issued verification request")
         if ver.verifier_identity != req.verifier_identity or same_identity(
             ver.verifier_identity, res.executor_identity
@@ -188,6 +200,9 @@ class Planner:
         if decision.action == "REPAIR":
             assert decision.repair_work is not None
             rw = decision.repair_work
+            if rw.task_id in self._by_task:
+                self._terminal(st, Phase.BLOCKED, "REPAIR_TASK_ID_COLLISION")
+                return
             self.transport.publish(rw)
             self._works[rw.task_id] = rw
             self._by_task[rw.task_id] = st.lineage_root
