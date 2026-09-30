@@ -96,7 +96,8 @@
             "enum": [
               "missing_atlas_project_marker",
               "missing_or_invalid_project_uuid",
-              "outside_allowed_root_prefixes"
+              "outside_allowed_root_prefixes",
+              "secret_findings"
             ]
           }
         }
