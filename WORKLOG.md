@@ -5,6 +5,27 @@ exact commands run, exact results, deviations, and remaining risks.
 
 ---
 
+## AS-L3-ARM-ID-PATH-001 — confine enable_bounded_l3 arm_id
+
+Base: `b87b4a226f4aa8b2f669edf112aa3476454f754f` / tree `46d1989b026a2f15920ec5e1c78a106799bd1249`.
+
+`enable_bounded_l3` interpolated unsanitized `arm_id` into
+`generated/ops/scheduler/{arm_id}-arm.json`. `policy_id` was already
+`_ID_RE`-gated; `run_bounded_l3_loop` and `scheduler_live._require_arm_id`
+already refuse traversal tokens. Enable did not.
+
+With `generated/ops/scheduler` present, `arm_id=../../../../outside-l3/forged`
+read a forged arm JSON outside the vault and persisted `enabled=True` /
+`l3_bounded_autonomy=True`. Dispatch CLI still fail-closed; enablement did not.
+
+Fix: apply `_ID_RE` to `arm_id` before the path is built. Regression in
+`tests/unit/test_as_l3_arm_id_path_001.py`.
+
+Does not merge, wake OPT, or enable L4/L5.
+`MERGE_AUTHORIZATION = NOT_GRANTED`.
+
+---
+
 ## D-193 — Atlas 3.0 foundation convergence
 
 **Date:** 2026-08-25
