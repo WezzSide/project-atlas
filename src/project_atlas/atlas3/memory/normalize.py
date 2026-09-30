@@ -49,6 +49,21 @@ def normalize_turns(
     for index, turn in enumerate(turns):
         if not isinstance(turn, dict):
             raise Atlas3Error("NORMALIZE_INVALID", "turn is not an object")
+        if project_id is not None:
+            explicit = turn.get("project_id")
+            if explicit is not None and str(explicit) != project_id:
+                raise Atlas3Error(
+                    "PROJECT_MISMATCH",
+                    f"turn project_id {explicit!r} != requested {project_id!r}",
+                )
+            meta = turn.get("provider_metadata")
+            if isinstance(meta, dict):
+                forged = meta.get("project_id") or meta.get("bound_project_id")
+                if forged is not None and str(forged) != project_id:
+                    raise Atlas3Error(
+                        "PROJECT_MISMATCH",
+                        "provider_metadata cannot override governed project routing",
+                    )
         raw_role = str(turn.get("role") or "assistant").strip().lower()
         role = ROLE_ALIASES.get(raw_role, raw_role)
         raw_text = str(turn.get("text") or turn.get("content") or "")
