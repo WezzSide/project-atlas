@@ -698,3 +698,14 @@ def test_poisoned_result_flood_does_not_starve_the_verdict_channel():
     assert f.left[Channel.VERDICT] == 0
     with pytest.raises(PlannerError):
         Planner(f, identity="vps3-plan", verifier_identities="abc")
+
+
+def test_planner_copies_verifiers_and_rejects_non_string_identities():
+    t = InMemoryTransport()
+    vs = ["v1", "v2"]
+    p = Planner(t, identity="plan", verifier_identities=tuple(vs))
+    vs.append("plan")
+    assert p.verifiers == ("v1", "v2")
+    for bad in ([1], ("v1", 1)):
+        with pytest.raises(PlannerError):
+            Planner(t, identity="plan", verifier_identities=bad)

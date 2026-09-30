@@ -77,6 +77,10 @@ class Planner:
     ) -> None:
         if not verifier_identities or not isinstance(verifier_identities, tuple | list):
             raise PlannerError("at least one verifier identity is required (as a tuple)")
+        if not isinstance(identity, str) or not all(
+            isinstance(v, str) for v in verifier_identities
+        ):
+            raise PlannerError("identities must be strings")
         try:
             validate_identity(identity)
             for v in verifier_identities:
@@ -90,7 +94,7 @@ class Planner:
             raise PlannerError("the planner may not be one of its own verifiers")
         self.transport = transport
         self.identity = identity
-        self.verifiers = verifier_identities
+        self.verifiers = tuple(verifier_identities)  # own copy: later mutation cannot bypass checks
         self.lineages: dict[str, LineageState] = {}
         self._by_task: dict[str, str] = {}  # task_id -> lineage_root
         self._works: dict[str, WorkItem] = {}
