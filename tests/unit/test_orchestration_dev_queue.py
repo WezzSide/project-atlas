@@ -126,3 +126,85 @@ def test_recompute_after_state_change_is_pure_recall():
 def test_invalid_queues_fail_closed(bad):
     with pytest.raises(QueueError):
         select_next(bad)
+
+
+# ---- IV #1032 repairs: type safety + previously unpinned behaviour -------------------------
+
+
+@pytest.mark.parametrize(
+    "kw",
+    [
+        {"severity": True},
+        {"severity": 1.5},
+        {"max_attempts": True},
+        {"attempts": 1.5},
+        {"category": 99},
+        {"depends_on": "b"},
+        {"requires_owner": "SECRET"},
+        {"bounded": 1},
+    ],
+)
+def test_malformed_field_types_fail_closed(kw):
+    with pytest.raises(QueueError):
+        select_next([item("a", **kw), item("b")])
+
+
+def test_non_str_task_id_fails_closed():
+    with pytest.raises(QueueError):
+        select_next([QueueItem(task_id=1, title="x", category=Category.RELIABILITY)])  # type: ignore[arg-type]
+
+
+def test_completed_wins_over_blocked_and_unlocks_dependents():
+    items = [item("a", severity=2), item("b", depends_on=("a",))]
+    sel = select_next(items, completed={"a"}, blocked={"a": "X"})
+    assert sel.selected is not None and sel.selected.task_id == "b"
+    assert ("a", "ALREADY_COMPLETED") in sel.skipped
+
+
+def test_attempt_ceiling_boundary_and_custom_max():
+    ok = select_next([item("a", attempts=2, max_attempts=3)])
+    assert ok.selected is not None
+    assert select_next([item("a", attempts=3, max_attempts=3)]).selected is None
+    assert select_next([item("a", attempts=1, max_attempts=1)]).selected is None
+    assert select_next([item("a", attempts=1, max_attempts=2)]).selected is not None
+
+
+def test_empty_lane_is_never_a_blocked_lane_and_empty_queue_is_none():
+    assert select_next([item("a")], blocked_lanes={""}).selected is not None
+    assert select_next([]).selected is None
+
+
+def test_select_next_is_input_order_independent_and_non_mutating():
+    import random
+
+    base = [
+        item("a", severity=1, roadmap_value=2),
+        item("b", severity=1, roadmap_value=2),
+        item("c", severity=1, category=Category.ROADMAP),
+        item("d", severity=3, depends_on=("a",)),
+        item("e", severity=0),
+    ]
+    blocked = {"e": "HOST_DOWN"}
+    want = select_next(base, blocked=blocked)
+    for seed in range(50):
+        shuffled = base[:]
+        random.Random(seed).shuffle(shuffled)
+        assert select_next(iter(shuffled), blocked=blocked) == want
+    assert blocked == {"e": "HOST_DOWN"}
+
+
+def test_roadmap_value_sign_and_multi_dependency_reason_are_pinned():
+    sel = select_next([item("a", roadmap_value=1), item("b", roadmap_value=5)])
+    assert sel.selected is not None and sel.selected.task_id == "b"
+    multi = select_next(
+        [item("x"), item("y"), item("z", depends_on=("y", "x"))],
+        blocked={"x": "B", "y": "B"},
+    )
+    assert ("z", "DEPENDENCY_UNSATISFIED:x,y") in multi.skipped
+
+
+def test_owner_and_irreversible_reasons_when_sole_failure():
+    a = select_next([item("a", requires_owner=(OwnerInput.SECRET,))])
+    assert a.skipped == (("a", "OWNER_INPUT_REQUIRED:SECRET"),)
+    b = select_next([item("b", reversible=False)])
+    assert b.skipped == (("b", "IRREVERSIBLE"),)
