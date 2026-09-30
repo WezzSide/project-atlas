@@ -9,6 +9,7 @@ INBOX_LISTING != INBOX_MUTATION != COMMAND_EXECUTION.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 from pathlib import Path
@@ -44,14 +45,22 @@ class KnowledgeInboxError(ValueError):
 
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(
-        json.dumps(payload, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-        newline="\n",
-    )
-    tmp.replace(path)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        tmp.replace(path)
+    except OSError as exc:
+        raise KnowledgeInboxError(
+            f"unwritable-inbox-receipt:{type(exc).__name__}:{path}"
+        ) from exc
+    finally:
+        with contextlib.suppress(OSError):
+            tmp.unlink(missing_ok=True)
 
 
 def build_knowledge_inbox_receipt(
