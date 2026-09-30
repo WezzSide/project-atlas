@@ -20,8 +20,10 @@ REJECTED verdict. `EXECUTOR_SUCCESS != VERIFIED` — an executor claiming
 - Canonical record: `/var/lib/atlas-runner/jobs/<execution_id>/evidence.json`
   on the VPS-02 host, written by the controller (not by the job).
 - In-job evidence fragment: `$ATLAS_EVIDENCE_DIR/fragment.json` inside the
-  worker workspace, written by `smoke-workload.sh` / the entrypoint; the
-  controller merges it into the canonical record.
+  worker workspace, written by workload steps and finalized by the entrypoint;
+  runner shutdown metadata is merged without deleting an existing richer
+  fragment. The controller then merges fragment provenance into the canonical
+  record.
 - CI-accessible copy: workflow artifacts uploaded by the executor jobs
   (e.g. `atlas-smoke-evidence`), consumed by the verifier.
 - Retention: `evidence_days = 30` (`[retention]` config).
@@ -54,6 +56,18 @@ REJECTED verdict. `EXECUTOR_SUCCESS != VERIFIED` — an executor claiming
 | `cleanup_status` | enum | `ok` \| `failed` \| `unknown` — deregistration/destruction outcome. |
 | `controller_version` | string | Controller release identity. |
 | `source_revision` | string | Revision of the deployed controller tree. |
+
+### Revision provenance semantics
+
+- `base_revision` and `result_revision` in `evidence.json` are provenance
+  fields, never authority.
+- `base_revision` may come from task definition or fragment; if both are
+  present they must match exactly, otherwise evidence generation fails closed.
+- `result_revision` may come from task definition or fragment; if both are
+  present they must match exactly, otherwise evidence generation fails closed.
+- `result_revision` may legitimately remain `null` when no commit was produced.
+- The entrypoint fallback fragment never fabricates `base_revision`,
+  `result_revision`, test outcomes, or artifact digests.
 
 ## Verification contract (`atlas-runner-verify.yml`)
 
