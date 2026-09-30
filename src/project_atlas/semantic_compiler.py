@@ -113,6 +113,12 @@ def compile_project_record(
     )
 
 
+def _inert_span(value: object) -> str:
+    """Render an untrusted token as a single-line code span (AS-CORE-002-F1)."""
+    text = str(value).replace("`", "'").replace("\n", " ").replace("\r", "")
+    return f"`{text}`"
+
+
 def render_project_record(record: ProjectRecord, entries: list[dict[str, Any]]) -> str:
     """Render a deterministic project note with a protected human region."""
     payload = record.model_dump(
@@ -141,9 +147,11 @@ def render_project_record(record: ProjectRecord, entries: list[dict[str, Any]]) 
         "",
     ]
     for entry in sorted(entries, key=lambda item: str(item.get("path", "")).lower()):
+        # AS-CORE-002-F1: untrusted path/source must not form a Markdown link.
+        # A filename like ``a](b.md`` spoofs display text vs target.
         lines.append(
-            f"- [{entry['path']}]({entry['source']}) — `{entry['classification']}` — "
-            f"`{entry['sha256']}`"
+            f"- {_inert_span(entry.get('path'))} ({_inert_span(entry.get('source'))}) — "
+            f"{_inert_span(entry.get('classification'))} — {_inert_span(entry.get('sha256'))}"
         )
     lines.extend(["", "<!-- atlas:generated:end -->", ""])
     return "\n".join(lines)
