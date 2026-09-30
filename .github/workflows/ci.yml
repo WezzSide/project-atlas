@@ -46,7 +46,12 @@ jobs:
         run: python -m ruff check .
 
       - name: Mypy
-        if: matrix.suite == 'full'
+        # Windows-native mypy gate (was full-suite/ubuntu only): typing must
+        # hold on the win32 target too, not merely on whichever platform
+        # happened to be checked. Deliberately excludes the 'compat'
+        # (ubuntu, 3.13) leg -- that job exists for pytest compatibility,
+        # not a second Linux mypy run.
+        if: matrix.suite == 'full' || matrix.suite == 'windows'
         run: python -m mypy src
 
       - name: Pytest with coverage
