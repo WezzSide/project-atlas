@@ -59,10 +59,19 @@ def extract_items(
     """Heuristic extraction. LLM-assisted extraction is not invoked here."""
     if not isinstance(envelopes, list):
         raise Atlas3Error("EXTRACT_INVALID", "envelopes must be a list")
+    scoped: set[str] = set()
     items: list[dict[str, Any]] = []
     for envelope in envelopes:
         if not isinstance(envelope, dict):
             raise Atlas3Error("EXTRACT_INVALID", "envelope is not an object")
+        explicit = envelope.get("project_id")
+        if explicit is not None and str(explicit).strip():
+            scoped.add(str(explicit))
+        if len(scoped) > 1:
+            raise Atlas3Error(
+                "PROJECT_MISMATCH",
+                f"mixed-project extract batch: {sorted(scoped)}",
+            )
         text = str(envelope.get("content_reference") or "").strip()
         if not text:
             continue

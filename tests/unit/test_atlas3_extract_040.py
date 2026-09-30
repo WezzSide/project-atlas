@@ -98,6 +98,60 @@ def test_secret_shaped_text_fails_closed() -> None:
     assert exc.value.code == "SECRET_CONTENT"
 
 
+def test_mixed_project_envelopes_fail_closed() -> None:
+    with pytest.raises(Atlas3Error) as exc:
+        extract_items(
+            [
+                {
+                    "role": "assistant",
+                    "content_reference": "harbor uses postgres 15",
+                    "provider": "chatgpt",
+                    "conversation_id": "c1",
+                    "message_id": "m1",
+                    "content_hash": "sha256:a",
+                    "project_id": "harbor-api",
+                },
+                {
+                    "role": "assistant",
+                    "content_reference": "other uses postgres 16",
+                    "provider": "chatgpt",
+                    "conversation_id": "c1",
+                    "message_id": "m2",
+                    "content_hash": "sha256:b",
+                    "project_id": "other-api",
+                },
+            ]
+        )
+    assert exc.value.code == "PROJECT_MISMATCH"
+
+
+def test_same_project_envelopes_still_extract() -> None:
+    items = extract_items(
+        [
+            {
+                "role": "assistant",
+                "content_reference": "harbor uses postgres 15",
+                "provider": "chatgpt",
+                "conversation_id": "c1",
+                "message_id": "m1",
+                "content_hash": "sha256:a",
+                "project_id": "harbor-api",
+            },
+            {
+                "role": "assistant",
+                "content_reference": "harbor planned postgres 16 later",
+                "provider": "chatgpt",
+                "conversation_id": "c1",
+                "message_id": "m2",
+                "content_hash": "sha256:b",
+                "project_id": "harbor-api",
+            },
+        ]
+    )
+    assert len(items) == 2
+    assert {item["project_id"] for item in items} == {"harbor-api"}
+
+
 def test_module_does_not_touch_2x_bridges() -> None:
     root = Path(__file__).resolve().parents[2]
     source = (root / "src/project_atlas/atlas3/memory/extract.py").read_text(encoding="utf-8")
