@@ -74,6 +74,49 @@ def test_declared_decided_by_requires_owner_origin(tmp_path: Path) -> None:
     assert report["model_is_owner"] is False
 
 
+def test_foreign_edge_project_fails_closed(tmp_path: Path) -> None:
+    vault = _vault(tmp_path)
+    _write_declared(
+        vault,
+        {
+            "project_id": "harbor-api",
+            "edges": [
+                {
+                    "from_id": "decision-pg15",
+                    "to_id": "owner",
+                    "evidence_refs": ["doc:owner.md#pg15"],
+                    "owner_origin": _owner_origin(),
+                    "project_id": "other-api",
+                }
+            ],
+        },
+    )
+    with pytest.raises(Atlas3Error) as exc:
+        compile_decided_by(vault, "harbor-api")
+    assert exc.value.code == "CROSS_PROJECT"
+
+
+def test_unlabeled_edge_still_compiles(tmp_path: Path) -> None:
+    vault = _vault(tmp_path)
+    _write_declared(
+        vault,
+        {
+            "project_id": "harbor-api",
+            "edges": [
+                {
+                    "from_id": "decision-pg15",
+                    "to_id": "owner",
+                    "evidence_refs": ["doc:owner.md#pg15"],
+                    "owner_origin": _owner_origin(),
+                }
+            ],
+        },
+    )
+    report = compile_decided_by(vault, "harbor-api")
+    assert report["status"] == "derived"
+    assert report["edges"][0]["project_id"] == "harbor-api"
+
+
 def test_model_claim_fails_closed(tmp_path: Path) -> None:
     vault = _vault(tmp_path)
     _write_declared(
