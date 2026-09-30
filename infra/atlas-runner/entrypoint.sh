@@ -5,8 +5,8 @@
 # Logs go to stdout (docker logs) AND to /workspace/worker.log (evidence).
 set -euo pipefail
 
-RUNNER_DIR="/opt/runner"
-WORK_DIR="/workspace"
+RUNNER_DIR="${ATLAS_RUNNER_DIR:-/opt/runner}"
+WORK_DIR="${ATLAS_WORK_DIR:-/workspace}"
 LOG_FILE="${WORK_DIR}/worker.log"
 EVIDENCE_DIR="${ATLAS_EVIDENCE_DIR:-${WORK_DIR}/evidence}"
 mkdir -p "${EVIDENCE_DIR}"
@@ -64,12 +64,28 @@ _Listener_PID=""
 log "Runner.Listener exited with code ${code}; ephemeral deregistration expected"
 
 # Best-effort evidence fragment so the controller can attribute artifacts.
+# Preserve a richer workflow-produced fragment when present; merge
+# runner-exit metadata without deleting existing provenance fields.
 if [ -n "${ATLAS_TASK_ID:-}" ]; then
-    jq -n \
-        --arg task_id "${ATLAS_TASK_ID}" \
-        --argjson exit_code "${code}" \
-        '{task_id: $task_id, runner_exit_code: $exit_code, artifacts: []}' \
-        > "${EVIDENCE_DIR}/fragment.json" 2>/dev/null || true
+    fragment_path="${EVIDENCE_DIR}/fragment.json"
+    fragment_tmp="$(mktemp "${EVIDENCE_DIR}/.fragment.XXXXXX")"
+    if [ -s "${fragment_path}" ] && jq -e 'type == "object"' "${fragment_path}" >/dev/null 2>&1; then
+        jq \
+            --arg task_id "${ATLAS_TASK_ID}" \
+            --argjson exit_code "${code}" \
+            '.task_id = (.task_id // $task_id) | .runner_exit_code = $exit_code' \
+            "${fragment_path}" > "${fragment_tmp}" 2>/dev/null || true
+    else
+        jq -n \
+            --arg task_id "${ATLAS_TASK_ID}" \
+            --argjson exit_code "${code}" \
+            '{task_id: $task_id, runner_exit_code: $exit_code, artifacts: []}' \
+            > "${fragment_tmp}" 2>/dev/null || true
+    fi
+    if [ -s "${fragment_tmp}" ]; then
+        mv -f "${fragment_tmp}" "${fragment_path}" 2>/dev/null || true
+    fi
+    rm -f "${fragment_tmp}" 2>/dev/null || true
 fi
 
 exit "${code}"

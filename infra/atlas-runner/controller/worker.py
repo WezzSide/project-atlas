@@ -331,6 +331,16 @@ class WorkerManager:
         from controller import CONTROLLER_VERSION
 
         fragment = self._read_evidence_fragment(workspace)
+        base_revision = self._resolve_revision(
+            "base_revision",
+            definition_value=definition.get("base_revision"),
+            fragment_value=fragment.get("base_revision"),
+        )
+        result_revision = self._resolve_revision(
+            "result_revision",
+            definition_value=definition.get("result_revision"),
+            fragment_value=fragment.get("result_revision"),
+        )
         artifact_names = list(fragment.get("artifacts", []))
         artifact_hashes = evidence.collect_artifact_hashes(workspace, artifact_names)
         image_digest = self.docker.image_digest(self.config.worker.image)
@@ -347,8 +357,8 @@ class WorkerManager:
             runner_labels=list(self.config.labels),
             runner_image_digest=image_digest,
             repository=f"{self.config.github.owner}/{self.config.github.repo}",
-            base_revision=definition.get("base_revision"),
-            result_revision=fragment.get("result_revision", definition.get("result_revision")),
+            base_revision=base_revision,
+            result_revision=result_revision,
             started_at=started_iso,
             finished_at=finished_iso,
             terminal_status=terminal_status,
@@ -368,6 +378,30 @@ class WorkerManager:
             return data if isinstance(data, dict) else {}
         except (OSError, json.JSONDecodeError):
             return {}
+
+    @staticmethod
+    def _resolve_revision(
+        field: str,
+        *,
+        definition_value: str | None,
+        fragment_value: str | None,
+    ) -> str | None:
+        """Resolve revision provenance with explicit conflict semantics.
+
+        Task definition and evidence fragment are both provenance signals.
+        Conflicts fail closed; unknown stays unknown.
+        """
+        if (
+            definition_value is not None
+            and fragment_value is not None
+            and definition_value != fragment_value
+        ):
+            raise WorkerFailure(f"evidence_{field}_conflict")
+        if definition_value is not None:
+            return definition_value
+        if fragment_value is not None:
+            return fragment_value
+        return None
 
     def _write_evidence_checked(self, doc: dict, execution_id: str) -> Path | None:
         """Write evidence; a validation failure must fail closed to FAILED."""
