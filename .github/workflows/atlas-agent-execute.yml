@@ -68,14 +68,30 @@ jobs:
           ref: ${{ inputs.base_branch }}
           fetch-depth: 0
 
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: pyproject.toml
+      # EXECUTOR_PY312_BOOTSTRAP: Python >= 3.12 is a guarantee of the
+      # digest-pinned worker image (infra/atlas-runner/Dockerfile), not a
+      # job-time download (actions/setup-python has no Debian 12 build). Verify
+      # the contract and fail BEFORE any agent execution; never fall back to an
+      # older interpreter.
+      - name: Verify executor Python toolchain (fail closed)
+        run: |
+          set -euo pipefail
+          command -v python3 >/dev/null || { echo "python3 missing from executor image" >&2; exit 3; }
+          python3 -c 'import sys; assert sys.version_info >= (3, 12), "Python >=3.12 required, found " + sys.version'
+          python3 -m pip --version
+          python3 -m venv --help >/dev/null
+          {
+            echo "### Executor Python toolchain"
+            echo "python: $(python3 -c 'import sys; print(sys.version.split()[0])')"
+            echo "pip: $(python3 -m pip --version)"
+          } >> "${GITHUB_STEP_SUMMARY}"
 
-      - name: Install package with dev dependencies
-        run: pip install -e ".[dev]"
+      - name: Create isolated venv and install package with dev dependencies
+        run: |
+          set -euo pipefail
+          python3 -m venv "${RUNNER_TEMP}/atlas-venv"
+          echo "${RUNNER_TEMP}/atlas-venv/bin" >> "${GITHUB_PATH}"
+          "${RUNNER_TEMP}/atlas-venv/bin/python" -m pip install --quiet -e ".[dev]"
 
       - name: Create dedicated agent branch
         env:

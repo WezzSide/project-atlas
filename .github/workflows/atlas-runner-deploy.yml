@@ -209,8 +209,11 @@ jobs:
           else
             FINAL_STATE="DEPLOY_ROLLED_BACK"
           fi
-          python - "$REVISION" "$DEPLOY_CONCLUSION" "$HEALTH_CONCLUSION" "$FINAL_STATE" <<'PY'
-          import json, sys
+          # Worker-image provenance (EXECUTOR_PY312_DEPLOYMENT_CLOSURE): the deploy tool
+          # logs the image it built/selected for this revision; correlate it in the receipt.
+          WORKER_IMAGE_LINE="$(grep -h '^\[deploy\] worker-image ' "${RUNNER_TEMP}/atlas-deploy.log" 2>/dev/null | tail -n 1 || true)"
+          python - "$REVISION" "$DEPLOY_CONCLUSION" "$HEALTH_CONCLUSION" "$FINAL_STATE" "${WORKER_IMAGE_LINE}" <<'PY'
+          import json, re, sys
           receipt = {
               "schema_version": 1,
               "receipt": "atlas-runner-deployment",
@@ -220,6 +223,9 @@ jobs:
                   "postcheck_step": sys.argv[3],
               },
               "final_state": sys.argv[4],
+              "worker_image": dict(
+                  re.findall(r"(\w+)=(\S+)", sys.argv[5])
+              ) or None,
               "note": "workflow result and activation/health reconciliation are both preserved; "
                       "a transport refusal is not a health verdict and a later manual inspection "
                       "does not rewrite this receipt",

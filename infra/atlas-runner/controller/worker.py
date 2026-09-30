@@ -21,6 +21,7 @@ from controller.config import ControllerConfig
 from controller.dockerctl import DockerCtl, worker_container_name
 from controller.github import AuthError, GitHubClient, GitHubError, TokenProvider, redact_secrets
 from controller.state import StateStore
+from controller.worker_image import WorkerImageMismatch
 
 
 class WorkerFailure(RuntimeError):
@@ -164,6 +165,7 @@ class WorkerManager:
                 **task_env,
             }
             try:
+                self._assert_bound_worker_image()
                 self.docker.run_worker(
                     name=worker_name,
                     image=self.config.worker.image,
@@ -447,6 +449,17 @@ class WorkerManager:
                 self.docker.rm(worker_name)
         except Exception:
             pass
+
+    def _assert_bound_worker_image(self) -> None:
+        """Fail closed unless the host image is the one this release was bound to."""
+        expected = self.config.worker.image_id
+        if expected is None:
+            return
+        actual = self.docker.image_id(self.config.worker.image)
+        if actual != expected:
+            raise WorkerImageMismatch(
+                f"worker image {self.config.worker.image} is {actual}, release binds {expected}"
+            )
 
     @staticmethod
     def _safe_rm(path: str) -> None:

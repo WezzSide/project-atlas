@@ -3,12 +3,18 @@
 # EXECUTOR_SUCCESS != VERIFIED. This image is NOT actions/runner-images and
 # must not grow into one; keep it minimal and reproducible.
 #
-# Base digest resolved 2026-09-26 via Docker Hub API:
-#   GET https://hub.docker.com/v2/repositories/library/debian/tags/bookworm-slim
-#   amd64 -> sha256:f3034a6ec3c1205360777c4aae76234998866ad18806ae62b63a3f84ccad782b
+# Python contract (EXECUTOR_PY312_BOOTSTRAP): the repository under execution
+# requires Python >= 3.12 (pyproject.toml). actions/setup-python cannot provide
+# it on Debian 12 self-hosted runners, so the interpreter is part of the
+# immutable, digest-pinned base image instead of a job-time download. The
+# build fails if the interpreter is older than 3.12.
+#
+# Base digest resolved 2026-09-30 via Docker Hub API:
+#   GET https://hub.docker.com/v2/repositories/library/python/tags/3.12-slim-bookworm
+#   amd64 -> sha256:1aaa65a85fda306ffb8b910824d4e93bdce61e212c7e87168123ea3073b41a1a
 # Verify before bumping:
-#   docker buildx imagetools inspect debian:bookworm-slim
-FROM debian:bookworm-slim@sha256:f3034a6ec3c1205360777c4aae76234998866ad18806ae62b63a3f84ccad782b
+#   docker buildx imagetools inspect python:3.12-slim-bookworm
+FROM python:3.12-slim-bookworm@sha256:1aaa65a85fda306ffb8b910824d4e93bdce61e212c7e87168123ea3073b41a1a
 
 # Pinned actions/runner version. Latest stable verified 2026-09-26 via
 #   GET https://api.github.com/repos/actions/runner/releases/latest -> v2.337.0
@@ -20,19 +26,27 @@ LABEL org.opencontainers.image.title="atlas-runner-worker" \
       org.opencontainers.image.description="Ephemeral GitHub Actions runner executor (AS-RUNNER-FABRIC-001)" \
       org.opencontainers.image.source="https://project-atlas.local/infra/atlas-runner" \
       atlas.runner.version="${RUNNER_VERSION}" \
-      atlas.runner.ephemeral="true"
+      atlas.runner.ephemeral="true" \
+      atlas.runner.python="3.12"
 
-# Toolchain (Debian bookworm pinned versions; the smoke workload must NOT
-# need node). build-essential is included for trivial compile checks only.
+# Toolchain (Debian bookworm packages; the smoke workload must NOT need node).
+# Python is deliberately NOT installed from apt: the base image's
+# /usr/local/bin/python (3.12) is the only interpreter. build-essential is
+# included for trivial compile checks only.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       bash coreutils git curl ca-certificates jq ripgrep tar zip unzip \
-      openssh-client python3 python3-pip python3-pytest python3-pytest-cov nodejs npm build-essential \
+      openssh-client nodejs npm build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# pydantic v2 for atlas_contracts (imported by the controller's test conftest
-# inside worker jobs). Debian ships pydantic v1, so install v2 from PyPI at
-# image build time (build-time only; runtime pip stays PEP 668 protected).
-RUN python3 -m pip install --break-system-packages --quiet "pydantic>=2" "PyYAML>=6"
+# Fail closed at build time if the interpreter contract is not met.
+RUN python3 -c 'import sys; assert sys.version_info >= (3, 12), sys.version' \
+    && python3 -m pip --version \
+    && python3 -m venv --help >/dev/null
+
+# Test/contract tooling for atlas_contracts and the controller's conftest
+# inside worker jobs (build-time only; jobs install the project into a
+# per-job venv).
+RUN python3 -m pip install --no-cache-dir --quiet "pydantic>=2" "PyYAML>=6" "pytest>=8" "pytest-cov>=5"
 
 # Pinned-digest verification step: download the official runner release from
 # the canonical GitHub URL. If RUNNER_SHA256 is set, enforce it (fail closed).
