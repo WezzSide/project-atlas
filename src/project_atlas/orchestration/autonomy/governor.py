@@ -535,6 +535,32 @@ class AutonomousGovernor:
                 code="STALE_ORIGINATION_IDENTITY",
             )
 
+    def _surface_recomputed_owner_gate(self, node: WorkNode) -> OwnerGateKind | None:
+        """Recompute the owner gate from declared mutation paths.
+
+        Stored ``WorkNode.owner_gate`` is recovery evidence, not authority.
+        A hand-written MATERIALIZED origination row (or a directly
+        constructed node) can omit the gate honest ``risk.classify`` +
+        ``owner_gate_for`` would attach. Lease is the grant boundary:
+        if the stored gate is absent and the declared surface is
+        OWNER_HELD, require an owner grant anyway.
+        AS-ORIG-PROJECTION-FORGE-001 / P1-ORIG-PROJECTION-FORGE-001.
+        """
+        from project_atlas.orchestration.origination.materialize import owner_gate_for
+        from project_atlas.orchestration.origination.risk import classify
+
+        classification = classify(
+            proposed_scope=node.mutation_surface.paths,
+            success_criteria=node.acceptance_criteria,
+        )
+        return owner_gate_for(classification)
+
+    def _effective_owner_gate(self, node: WorkNode) -> OwnerGateKind | None:
+        stored = node.owner_gate
+        if stored is not None:
+            return stored
+        return self._surface_recomputed_owner_gate(node)
+
     def lease(
         self,
         package_id: str,
@@ -571,7 +597,8 @@ class AutonomousGovernor:
                 f"unsatisfied dependencies: {', '.join(unsatisfied)}",
                 code="DEPENDENCIES_NOT_SATISFIED",
             )
-        if node.owner_gate is not None and node.owner_gate != OwnerGateKind.A_PROTECTED_MAIN_MERGE:
+        effective_gate = self._effective_owner_gate(node)
+        if effective_gate is not None and effective_gate != OwnerGateKind.A_PROTECTED_MAIN_MERGE:
             # ORCHAUT-010 remediation round 2 (2026-08-28, independent-IV
             # finding): gate A already has its own dedicated, always-enforced
             # downstream check at the MERGED transition (`request_merge`
@@ -586,8 +613,13 @@ class AutonomousGovernor:
             # AS-ORCH-001E's loop is not the only caller of lease() /
             # execute_leased(); run_controlled_pilot() and
             # continue_autonomous() reach this method directly too.
+            #
+            # AS-ORIG-PROJECTION-FORGE-001: a omitted stored gate is not
+            # an O1 grant. Recompute from mutation_surface.paths so a
+            # forged MATERIALIZED projection row cannot lease a security
+            # surface by leaving owner_gate unset.
             try:
-                require_owner(node.owner_gate, owner_grant=owner_grant)
+                require_owner(effective_gate, owner_grant=owner_grant)
             except OwnerGateError as exc:
                 raise GovernorError(str(exc), code="OWNER_GATE_REQUIRED") from exc
         if would_overlap(tuple(self._nodes), node):
