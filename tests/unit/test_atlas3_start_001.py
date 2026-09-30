@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -59,6 +60,28 @@ def test_start_current_refuses_stale_as_truth(tmp_path: Path) -> None:
     assert briefing["stale_presented_as_current"] is False
     assert briefing["sections"]["current_verified_truth"]["status"] == "UNKNOWN"
     assert "stale evidence refused" in briefing["sections"]["current_verified_truth"]["text"]
+
+
+def test_start_unknown_state_lens_is_not_verified_truth(tmp_path: Path) -> None:
+    vault = _vault(tmp_path)
+    answers = vault / "generated" / "answers"
+    answers.mkdir(parents=True)
+    (answers / "ans-state-harbor-api.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "status": "UNKNOWN",
+                "project_id": "harbor-api",
+                "authority": "none",
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    briefing = compile_start(vault, "harbor-api", token_budget=2000)
+    truth = briefing["sections"]["current_verified_truth"]
+    assert truth["status"] == "UNKNOWN"
+    assert "no verified summary" in truth["text"]
 
 
 def test_start_unknown_freshness_fails_closed(tmp_path: Path) -> None:
