@@ -190,6 +190,17 @@ def run_governor_service(
         payload["iv_dispatched"] = controller.state.iv_dispatched
         payload["adv_dispatched"] = controller.state.adv_dispatched
         return payload, EXIT_OK
+    except SdkRuntimeError as exc:
+        return (
+            {
+                "ok": False,
+                "code": exc.code,
+                "detail": str(exc),
+                "merge_authorized": False,
+                "execution_authorized": False,
+            },
+            EXIT_ERROR,
+        )
     finally:
         release_supervisor_lock(root)
 
@@ -211,7 +222,20 @@ def run_governor_service_once(
 def run_supervisor_stop(*, root: Path) -> tuple[dict[str, object], int]:
     from project_atlas.orchestration.sdk.host import request_supervisor_stop
 
-    request_supervisor_stop(root)
+    try:
+        request_supervisor_stop(root)
+    except SdkRuntimeError as exc:
+        return (
+            {
+                "ok": False,
+                "code": exc.code,
+                "detail": str(exc),
+                "stop_requested": False,
+                "merge_authorized": False,
+                "execution_authorized": False,
+            },
+            EXIT_ERROR,
+        )
     return (
         {
             "ok": True,
