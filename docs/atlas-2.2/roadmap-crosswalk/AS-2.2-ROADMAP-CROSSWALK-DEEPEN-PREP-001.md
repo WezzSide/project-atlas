@@ -15,7 +15,7 @@
 
 Deepen the wave-3 roadmap-crosswalk PREP **beyond** the base mapping table and
 fixture stub landed under `docs/atlas-2.2/roadmap-crosswalk/` (PR
-[#206](https://github.com/B0LK13/project-atlas/pull/206)).
+[#206](https://github.com/WezzSide/project-atlas/pull/206)).
 
 This PREP owns a **unique deepen path** under
 `docs/atlas-2.2/roadmap-crosswalk/**` for:

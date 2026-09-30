@@ -27,7 +27,7 @@ PILOT = DORMANT_BLOCKED
 | Authentic estate PILOT | **DORMANT_BLOCKED** |
 | Browser Path A chips observed | **NO** (charter path: `BROWSER_E2E_MISSING`) |
 
-Remedi merge used for tip green: [#251](https://github.com/B0LK13/project-atlas/pull/251) (ruff closeout).
+Remedi merge used for tip green: [#251](https://github.com/WezzSide/project-atlas/pull/251) (ruff closeout).
 
 ## Gate matrix (empirical)
 

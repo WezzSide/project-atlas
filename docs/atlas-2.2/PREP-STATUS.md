@@ -38,7 +38,7 @@ release certification credit.
 |---|---|
 | Landed PREP packages | **22** (wave 1 #159–#172 + wave 2 #179–#199 + wave 3 deepen #208–#210) |
 | Package trees under `docs/atlas-2.2/` | **22** dirs (19 base packages + shared `adr/`, `contracts/`, `fixtures/`, `benchmarks/`, `schemas/`; deepen artifacts live under base package dirs) |
-| README index merges | [#173](https://github.com/B0LK13/project-atlas/pull/173) · [#195](https://github.com/B0LK13/project-atlas/pull/195) · [#198](https://github.com/B0LK13/project-atlas/pull/198) · [#202](https://github.com/B0LK13/project-atlas/pull/202) · [#204](https://github.com/B0LK13/project-atlas/pull/204) |
+| README index merges | [#173](https://github.com/WezzSide/project-atlas/pull/173) · [#195](https://github.com/WezzSide/project-atlas/pull/195) · [#198](https://github.com/WezzSide/project-atlas/pull/198) · [#202](https://github.com/WezzSide/project-atlas/pull/202) · [#204](https://github.com/WezzSide/project-atlas/pull/204) |
 | Runtime modules touched | **0** (`src/project_atlas/` unchanged by PREP lane) |
 | Authentic estate PILOT roots | **0** (all prep fixtures) |
 | Saturation | **REFILLING** — wave-4 deepen #215-#221 landed; conflict-ux/compat/estate deepen in flight |
@@ -68,11 +68,11 @@ their existing package dirs (peer to wave-1 base stubs; no dual-own relocation).
 
 | PR | Package | Role |
 |---|---|---|
-| [#173](https://github.com/B0LK13/project-atlas/pull/173) | H01 restore | Multi-package prep index after parallel merges |
-| [#195](https://github.com/B0LK13/project-atlas/pull/195) | `AS-2.2-README-INDEX-002` | Restore rows for wave-2 packages through #192 |
-| [#198](https://github.com/B0LK13/project-atlas/pull/198) | `AS-2.2-README-INDEX-003` | Add **compat-pin** (#196) and **estate-ops** (#197) rows |
-| [#202](https://github.com/B0LK13/project-atlas/pull/202) | `AS-2.2-README-INDEX-004` | Add **doc-charter** (#199) row; tip index through #199 |
-| [#204](https://github.com/B0LK13/project-atlas/pull/204) | `AS-2.2-README-INDEX-005` | Add **PREP-STATUS** (#203) row |
+| [#173](https://github.com/WezzSide/project-atlas/pull/173) | H01 restore | Multi-package prep index after parallel merges |
+| [#195](https://github.com/WezzSide/project-atlas/pull/195) | `AS-2.2-README-INDEX-002` | Restore rows for wave-2 packages through #192 |
+| [#198](https://github.com/WezzSide/project-atlas/pull/198) | `AS-2.2-README-INDEX-003` | Add **compat-pin** (#196) and **estate-ops** (#197) rows |
+| [#202](https://github.com/WezzSide/project-atlas/pull/202) | `AS-2.2-README-INDEX-004` | Add **doc-charter** (#199) row; tip index through #199 |
+| [#204](https://github.com/WezzSide/project-atlas/pull/204) | `AS-2.2-README-INDEX-005` | Add **PREP-STATUS** (#203) row |
 | *(this PR)* | `AS-2.2-README-INDEX-006` | Add **mem-gov / research / DoD deepen** rows (#208–#210); fix crosswalk PR link |
 
 Entry links and artifact paths: [`README.md`](README.md) (authoritative index).
@@ -87,11 +87,11 @@ RET-HYBRID (#220), and KCI-engine (#221) deepen packages. Demo VERIFIED remains
 
 | PR | Package | Note |
 |---|---|---|
-| [#215](https://github.com/B0LK13/project-atlas/pull/215) | AS-2.2-CTX-DEEPEN-PREP-001 | Context compiler fail-closed deepen |
-| [#217](https://github.com/B0LK13/project-atlas/pull/217)/[#219](https://github.com/B0LK13/project-atlas/pull/219) | AS-2.2-REALITY-LIVE-DEEPEN-PREP-001 | Reality-live deepen + fail-closed tighten |
-| [#218](https://github.com/B0LK13/project-atlas/pull/218) | AS-2.2-TIME-MACHINE-DEEPEN-PREP-001 | Time Machine deepen |
-| [#220](https://github.com/B0LK13/project-atlas/pull/220) | AS-2.2-RET-HYBRID-DEEPEN-PREP-001 | Hybrid retrieval deepen |
-| [#221](https://github.com/B0LK13/project-atlas/pull/221) | AS-2.2-KCI-ENGINE-DEEPEN-PREP-001 | KCI engine deepen |
+| [#215](https://github.com/WezzSide/project-atlas/pull/215) | AS-2.2-CTX-DEEPEN-PREP-001 | Context compiler fail-closed deepen |
+| [#217](https://github.com/WezzSide/project-atlas/pull/217)/[#219](https://github.com/WezzSide/project-atlas/pull/219) | AS-2.2-REALITY-LIVE-DEEPEN-PREP-001 | Reality-live deepen + fail-closed tighten |
+| [#218](https://github.com/WezzSide/project-atlas/pull/218) | AS-2.2-TIME-MACHINE-DEEPEN-PREP-001 | Time Machine deepen |
+| [#220](https://github.com/WezzSide/project-atlas/pull/220) | AS-2.2-RET-HYBRID-DEEPEN-PREP-001 | Hybrid retrieval deepen |
+| [#221](https://github.com/WezzSide/project-atlas/pull/221) | AS-2.2-KCI-ENGINE-DEEPEN-PREP-001 | KCI engine deepen |
 
 
 ### Wave 6 — doc-charter / kf2 / roadmap deepen (#233–#237)
@@ -102,11 +102,11 @@ KF2-FABRIC (#236), and ROADMAP-CROSSWALK (#237) deepen packages. Tip
 
 | PR | Package | Note |
 |---|---|---|
-| [#233](https://github.com/B0LK13/project-atlas/pull/233) | AS-2.2-XPROJ-DEEPEN-PREP-001 | Cross-project fabric deepen |
-| [#234](https://github.com/B0LK13/project-atlas/pull/234) | README-INDEX-010 | Index xproj deepen |
-| [#235](https://github.com/B0LK13/project-atlas/pull/235) | AS-2.2-DOC-CHARTER-DEEPEN-PREP-001 | Doc-charter deepen |
-| [#236](https://github.com/B0LK13/project-atlas/pull/236) | AS-2.2-KF2-FABRIC-DEEPEN-PREP-001 | KF2 fabric deepen |
-| [#237](https://github.com/B0LK13/project-atlas/pull/237) | AS-2.2-ROADMAP-CROSSWALK-DEEPEN-PREP-001 | Roadmap crosswalk deepen |
+| [#233](https://github.com/WezzSide/project-atlas/pull/233) | AS-2.2-XPROJ-DEEPEN-PREP-001 | Cross-project fabric deepen |
+| [#234](https://github.com/WezzSide/project-atlas/pull/234) | README-INDEX-010 | Index xproj deepen |
+| [#235](https://github.com/WezzSide/project-atlas/pull/235) | AS-2.2-DOC-CHARTER-DEEPEN-PREP-001 | Doc-charter deepen |
+| [#236](https://github.com/WezzSide/project-atlas/pull/236) | AS-2.2-KF2-FABRIC-DEEPEN-PREP-001 | KF2 fabric deepen |
+| [#237](https://github.com/WezzSide/project-atlas/pull/237) | AS-2.2-ROADMAP-CROSSWALK-DEEPEN-PREP-001 | Roadmap crosswalk deepen |
 
 
 ### Wave 7 — reality-gap deepen (#240)
@@ -116,8 +116,8 @@ Demo VERIFIED ≠ release unlock; PILOT DORMANT (FOUND=0).
 
 | PR | Package | Note |
 |---|---|---|
-| [#240](https://github.com/B0LK13/project-atlas/pull/240) | AS-2.2-REALITY-GAP-DEEPEN-PREP-001 | Reality-gap deepen (unknown≠healthy) |
-| [#238](https://github.com/B0LK13/project-atlas/pull/238) | README-INDEX-011 | Index wave-6 deepen |
+| [#240](https://github.com/WezzSide/project-atlas/pull/240) | AS-2.2-REALITY-GAP-DEEPEN-PREP-001 | Reality-gap deepen (unknown≠healthy) |
+| [#238](https://github.com/WezzSide/project-atlas/pull/238) | README-INDEX-011 | Index wave-6 deepen |
 
 
 ### Wave 8 — fixture-plan rollup (#242)
@@ -127,7 +127,7 @@ Demo VERIFIED ≠ release unlock; PILOT DORMANT (FOUND=0).
 
 | PR | Package | Note |
 |---|---|---|
-| [#242](https://github.com/B0LK13/project-atlas/pull/242) | AS-2.2-PREP-FIXTURE-ROLLUP-001 | FIXTURE-PLAN + PACKAGE-CONTRACT-STUBS sync |
+| [#242](https://github.com/WezzSide/project-atlas/pull/242) | AS-2.2-PREP-FIXTURE-ROLLUP-001 | FIXTURE-PLAN + PACKAGE-CONTRACT-STUBS sync |
 
 
 ### Wave 9 — ADV pool prep (#243)
@@ -137,8 +137,8 @@ Demo VERIFIED ≠ release unlock; PILOT DORMANT (FOUND=0).
 
 | PR | Package | Note |
 |---|---|---|
-| [#243](https://github.com/B0LK13/project-atlas/pull/243) | AS-2.2-ADV-POOL-001 | ADV matrix + fixture invariants |
-| [#244](https://github.com/B0LK13/project-atlas/pull/244) | README-INDEX-013 | Index fixture rollup #242 |
+| [#243](https://github.com/WezzSide/project-atlas/pull/243) | AS-2.2-ADV-POOL-001 | ADV matrix + fixture invariants |
+| [#244](https://github.com/WezzSide/project-atlas/pull/244) | README-INDEX-013 | Index fixture rollup #242 |
 
 
 ### Wave 10 — crosswalk sync (#246)
@@ -148,7 +148,7 @@ Demo VERIFIED ≠ release unlock; PILOT DORMANT (FOUND=0).
 
 | PR | Package | Note |
 |---|---|---|
-| [#246](https://github.com/B0LK13/project-atlas/pull/246) | AS-2.2-ROADMAP-CROSSWALK-SYNC-001 | Crosswalk tip + integration rows |
+| [#246](https://github.com/WezzSide/project-atlas/pull/246) | AS-2.2-ROADMAP-CROSSWALK-SYNC-001 | Crosswalk tip + integration rows |
 
 
 ### Wave 11 — RET-SEMIDX reserved prep (#248)
@@ -158,42 +158,42 @@ Demo VERIFIED ≠ release unlock; PILOT DORMANT (FOUND=0).
 
 | PR | Package | Note |
 |---|---|---|
-| [#248](https://github.com/B0LK13/project-atlas/pull/248) | AS-2.2-RET-SEMIDX-PREP-001 | Reserved SEMIDX contract prep |
-| [#247](https://github.com/B0LK13/project-atlas/pull/247) | README-INDEX-015 | Index crosswalk sync #246 |
+| [#248](https://github.com/WezzSide/project-atlas/pull/248) | AS-2.2-RET-SEMIDX-PREP-001 | Reserved SEMIDX contract prep |
+| [#247](https://github.com/WezzSide/project-atlas/pull/247) | README-INDEX-015 | Index crosswalk sync #246 |
 
 ## Landed PREP inventory (tip)
 
 | Short | Package | PR | Maturity (draft) |
 |---|---|---|---|
-| RET | `AS-2.2-RET-HYBRID-001` | [#159](https://github.com/B0LK13/project-atlas/pull/159) | DOCUMENTATION_ONLY |
-| CTX | `AS-2.2-CTX-COMPILER-001` | [#161](https://github.com/B0LK13/project-atlas/pull/161) | FIXTURE_ONLY |
-| KCI | `AS-2.2-KCI-ENGINE-PREP-001` | [#160](https://github.com/B0LK13/project-atlas/pull/160) | DOCUMENTATION_ONLY |
-| MEM | `AS-2.2-MEM-GOV-001` | [#169](https://github.com/B0LK13/project-atlas/pull/169) | FIXTURE_ONLY |
-| DoD | `AS-2.2-DOD-COMPILER-001` | [#170](https://github.com/B0LK13/project-atlas/pull/170) | FIXTURE_ONLY |
-| TIME | `AS-2.2-TIME-MACHINE-001` | [#168](https://github.com/B0LK13/project-atlas/pull/168) | FIXTURE_ONLY |
-| REALITY-LIVE | `AS-2.2-REALITY-LIVE-001` | [#167](https://github.com/B0LK13/project-atlas/pull/167) | FIXTURE_ONLY |
-| REALITY-GAP | `AS-2.2-REALITY-GAP-PREP-001` | [#172](https://github.com/B0LK13/project-atlas/pull/172) | FIXTURE_ONLY |
-| RESEARCH | `AS-2.2-RESEARCH-001` | [#171](https://github.com/B0LK13/project-atlas/pull/171) | FIXTURE_ONLY |
-| CONFLICT | `AS-2.2-CONFLICT-UX-PREP-001` | [#181](https://github.com/B0LK13/project-atlas/pull/181) | FIXTURE_ONLY |
-| XPROJ | `AS-2.2-XPROJ-CONTRACT-PREP-001` | [#179](https://github.com/B0LK13/project-atlas/pull/179) | FIXTURE_ONLY |
-| KF2 | `AS-2.2-KF2-FABRIC-PREP-001` | [#186](https://github.com/B0LK13/project-atlas/pull/186) | FIXTURE_ONLY |
-| ASK2 | `AS-2.2-ASK2-DEEPEN-PREP-001` | [#188](https://github.com/B0LK13/project-atlas/pull/188) | FIXTURE_ONLY |
-| INTEL | `AS-2.2-INTEL-SLICE-PREP-001` | [#189](https://github.com/B0LK13/project-atlas/pull/189) | FIXTURE_ONLY |
-| CHATGPT | `AS-2.2-CHATGPT-LIVE-PREP-001` | [#191](https://github.com/B0LK13/project-atlas/pull/191) | FIXTURE_ONLY |
-| TEMPORAL | `AS-2.2-TEMPORAL-UX-PREP-001` | [#192](https://github.com/B0LK13/project-atlas/pull/192) | FIXTURE_ONLY |
-| **COMPAT-PIN** | `AS-2.2-COMPAT-PIN-PREP-001` | [#196](https://github.com/B0LK13/project-atlas/pull/196) | FIXTURE_ONLY |
-| **ESTATE-OPS** | `AS-2.2-ESTATE-OPS-PREP-001` | [#197](https://github.com/B0LK13/project-atlas/pull/197) | FIXTURE_ONLY |
-| **DOC-CHARTER** | `AS-2.2-DOC-CHARTER-PREP-001` | [#199](https://github.com/B0LK13/project-atlas/pull/199) | FIXTURE_ONLY |
-| **MEM-DEEPEN** | `AS-2.2-MEM-GOV-DEEPEN-PREP-001` | [#208](https://github.com/B0LK13/project-atlas/pull/208) | FIXTURE_ONLY |
-| **RESEARCH-DEEPEN** | `AS-2.2-RESEARCH-DEEPEN-PREP-001` | [#209](https://github.com/B0LK13/project-atlas/pull/209) | FIXTURE_ONLY |
-| **XPROJ-DEEPEN** | `AS-2.2-XPROJ-DEEPEN-PREP-001` | [#233](https://github.com/B0LK13/project-atlas/pull/233) | FIXTURE_ONLY |
-| **INTEL-DEEPEN** | `AS-2.2-INTEL-SLICE-DEEPEN-PREP-001` | [#229](https://github.com/B0LK13/project-atlas/pull/229) | FIXTURE_ONLY |
-| **TEMPORAL-DEEPEN** | `AS-2.2-TEMPORAL-UX-DEEPEN-PREP-001` | [#228](https://github.com/B0LK13/project-atlas/pull/228) | FIXTURE_ONLY |
-| **ESTATE-OPS-DEEPEN** | `AS-2.2-ESTATE-OPS-DEEPEN-PREP-001` | [#227](https://github.com/B0LK13/project-atlas/pull/227) | FIXTURE_ONLY |
-| **COMPAT-DEEPEN** | `AS-2.2-COMPAT-PIN-DEEPEN-PREP-001` | [#226](https://github.com/B0LK13/project-atlas/pull/226) | FIXTURE_ONLY |
-| **CHATGPT-LIVE-DEEPEN** | `AS-2.2-CHATGPT-LIVE-DEEPEN-PREP-001` | [#224](https://github.com/B0LK13/project-atlas/pull/224) | FIXTURE_ONLY |
-| **CONFLICT-DEEPEN** | `AS-2.2-CONFLICT-UX-DEEPEN-PREP-001` | [#223](https://github.com/B0LK13/project-atlas/pull/223) | FIXTURE_ONLY |
-| **DOD-DEEPEN** | `AS-2.2-DOD-DEEPEN-PREP-001` | [#210](https://github.com/B0LK13/project-atlas/pull/210) | FIXTURE_ONLY |
+| RET | `AS-2.2-RET-HYBRID-001` | [#159](https://github.com/WezzSide/project-atlas/pull/159) | DOCUMENTATION_ONLY |
+| CTX | `AS-2.2-CTX-COMPILER-001` | [#161](https://github.com/WezzSide/project-atlas/pull/161) | FIXTURE_ONLY |
+| KCI | `AS-2.2-KCI-ENGINE-PREP-001` | [#160](https://github.com/WezzSide/project-atlas/pull/160) | DOCUMENTATION_ONLY |
+| MEM | `AS-2.2-MEM-GOV-001` | [#169](https://github.com/WezzSide/project-atlas/pull/169) | FIXTURE_ONLY |
+| DoD | `AS-2.2-DOD-COMPILER-001` | [#170](https://github.com/WezzSide/project-atlas/pull/170) | FIXTURE_ONLY |
+| TIME | `AS-2.2-TIME-MACHINE-001` | [#168](https://github.com/WezzSide/project-atlas/pull/168) | FIXTURE_ONLY |
+| REALITY-LIVE | `AS-2.2-REALITY-LIVE-001` | [#167](https://github.com/WezzSide/project-atlas/pull/167) | FIXTURE_ONLY |
+| REALITY-GAP | `AS-2.2-REALITY-GAP-PREP-001` | [#172](https://github.com/WezzSide/project-atlas/pull/172) | FIXTURE_ONLY |
+| RESEARCH | `AS-2.2-RESEARCH-001` | [#171](https://github.com/WezzSide/project-atlas/pull/171) | FIXTURE_ONLY |
+| CONFLICT | `AS-2.2-CONFLICT-UX-PREP-001` | [#181](https://github.com/WezzSide/project-atlas/pull/181) | FIXTURE_ONLY |
+| XPROJ | `AS-2.2-XPROJ-CONTRACT-PREP-001` | [#179](https://github.com/WezzSide/project-atlas/pull/179) | FIXTURE_ONLY |
+| KF2 | `AS-2.2-KF2-FABRIC-PREP-001` | [#186](https://github.com/WezzSide/project-atlas/pull/186) | FIXTURE_ONLY |
+| ASK2 | `AS-2.2-ASK2-DEEPEN-PREP-001` | [#188](https://github.com/WezzSide/project-atlas/pull/188) | FIXTURE_ONLY |
+| INTEL | `AS-2.2-INTEL-SLICE-PREP-001` | [#189](https://github.com/WezzSide/project-atlas/pull/189) | FIXTURE_ONLY |
+| CHATGPT | `AS-2.2-CHATGPT-LIVE-PREP-001` | [#191](https://github.com/WezzSide/project-atlas/pull/191) | FIXTURE_ONLY |
+| TEMPORAL | `AS-2.2-TEMPORAL-UX-PREP-001` | [#192](https://github.com/WezzSide/project-atlas/pull/192) | FIXTURE_ONLY |
+| **COMPAT-PIN** | `AS-2.2-COMPAT-PIN-PREP-001` | [#196](https://github.com/WezzSide/project-atlas/pull/196) | FIXTURE_ONLY |
+| **ESTATE-OPS** | `AS-2.2-ESTATE-OPS-PREP-001` | [#197](https://github.com/WezzSide/project-atlas/pull/197) | FIXTURE_ONLY |
+| **DOC-CHARTER** | `AS-2.2-DOC-CHARTER-PREP-001` | [#199](https://github.com/WezzSide/project-atlas/pull/199) | FIXTURE_ONLY |
+| **MEM-DEEPEN** | `AS-2.2-MEM-GOV-DEEPEN-PREP-001` | [#208](https://github.com/WezzSide/project-atlas/pull/208) | FIXTURE_ONLY |
+| **RESEARCH-DEEPEN** | `AS-2.2-RESEARCH-DEEPEN-PREP-001` | [#209](https://github.com/WezzSide/project-atlas/pull/209) | FIXTURE_ONLY |
+| **XPROJ-DEEPEN** | `AS-2.2-XPROJ-DEEPEN-PREP-001` | [#233](https://github.com/WezzSide/project-atlas/pull/233) | FIXTURE_ONLY |
+| **INTEL-DEEPEN** | `AS-2.2-INTEL-SLICE-DEEPEN-PREP-001` | [#229](https://github.com/WezzSide/project-atlas/pull/229) | FIXTURE_ONLY |
+| **TEMPORAL-DEEPEN** | `AS-2.2-TEMPORAL-UX-DEEPEN-PREP-001` | [#228](https://github.com/WezzSide/project-atlas/pull/228) | FIXTURE_ONLY |
+| **ESTATE-OPS-DEEPEN** | `AS-2.2-ESTATE-OPS-DEEPEN-PREP-001` | [#227](https://github.com/WezzSide/project-atlas/pull/227) | FIXTURE_ONLY |
+| **COMPAT-DEEPEN** | `AS-2.2-COMPAT-PIN-DEEPEN-PREP-001` | [#226](https://github.com/WezzSide/project-atlas/pull/226) | FIXTURE_ONLY |
+| **CHATGPT-LIVE-DEEPEN** | `AS-2.2-CHATGPT-LIVE-DEEPEN-PREP-001` | [#224](https://github.com/WezzSide/project-atlas/pull/224) | FIXTURE_ONLY |
+| **CONFLICT-DEEPEN** | `AS-2.2-CONFLICT-UX-DEEPEN-PREP-001` | [#223](https://github.com/WezzSide/project-atlas/pull/223) | FIXTURE_ONLY |
+| **DOD-DEEPEN** | `AS-2.2-DOD-DEEPEN-PREP-001` | [#210](https://github.com/WezzSide/project-atlas/pull/210) | FIXTURE_ONLY |
 
 Maturity classes are **draft audit labels** from
 [`doc-charter/FEATURE-MATURITY-MATRIX.md`](doc-charter/FEATURE-MATURITY-MATRIX.md);
@@ -203,17 +203,17 @@ they are not release certification.
 
 | Package | PR | Scope |
 |---|---|---|
-| **MEM-DEEPEN** | [#208](https://github.com/B0LK13/project-atlas/pull/208) | Fail-closed mem-gov invariants, forbidden-action schema, negative rehearsal under `mem-gov/` |
-| **RESEARCH-DEEPEN** | [#209](https://github.com/B0LK13/project-atlas/pull/209) | Research workspace deepen: invariants, forbidden-action schema, negative fixtures under `research/` |
-| **DOD-DEEPEN** | [#210](https://github.com/B0LK13/project-atlas/pull/210) | DoD compiler deepen: FX-2.2-DOD-004 proof shape, Layer B / LLM / invented-PASS negatives under `dod-compiler/` |
+| **MEM-DEEPEN** | [#208](https://github.com/WezzSide/project-atlas/pull/208) | Fail-closed mem-gov invariants, forbidden-action schema, negative rehearsal under `mem-gov/` |
+| **RESEARCH-DEEPEN** | [#209](https://github.com/WezzSide/project-atlas/pull/209) | Research workspace deepen: invariants, forbidden-action schema, negative fixtures under `research/` |
+| **DOD-DEEPEN** | [#210](https://github.com/WezzSide/project-atlas/pull/210) | DoD compiler deepen: FX-2.2-DOD-004 proof shape, Layer B / LLM / invented-PASS negatives under `dod-compiler/` |
 
 ## Prior tip highlights (#196–#199)
 
 | Package | PR | Scope |
 |---|---|---|
-| **COMPAT-PIN** | [#196](https://github.com/B0LK13/project-atlas/pull/196) | Future `v2.1.0` compat anchor expectations; read-only reference to `AS-2.0-COMPAT-001` pattern |
-| **ESTATE-OPS** | [#197](https://github.com/B0LK13/project-atlas/pull/197) | Mission Control / Workspace / Ops Health estate lens contracts; unknown≠healthy |
-| **DOC-CHARTER** | [#199](https://github.com/B0LK13/project-atlas/pull/199) | Deepened [`CHARTER.md`](CHARTER.md) + maturity matrix draft + charter ADR |
+| **COMPAT-PIN** | [#196](https://github.com/WezzSide/project-atlas/pull/196) | Future `v2.1.0` compat anchor expectations; read-only reference to `AS-2.0-COMPAT-001` pattern |
+| **ESTATE-OPS** | [#197](https://github.com/WezzSide/project-atlas/pull/197) | Mission Control / Workspace / Ops Health estate lens contracts; unknown≠healthy |
+| **DOC-CHARTER** | [#199](https://github.com/WezzSide/project-atlas/pull/199) | Deepened [`CHARTER.md`](CHARTER.md) + maturity matrix draft + charter ADR |
 
 Post-unlock production slots (`AS-2.2-DOC-CHARTER-001`, `AS-2.2-COMPAT-PIN-001`,
 `AS-2.2-ESTATE-OPS-001`, …) remain **BLOCKED** until

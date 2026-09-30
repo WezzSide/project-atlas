@@ -31,6 +31,7 @@ from project_atlas.orchestration.autonomy.models import (
     INITIAL_RETARGET_SOURCE_DIRECTIVE,
     INITIAL_RETARGET_SOURCE_PR,
     INITIAL_RETARGET_TREE,
+    LIVE_REPOSITORY_IDENTITY,
     MAX_FIRST_PARENT_CHECKPOINT_HOPS,
     PIN_RETARGET_PACKAGE_ID,
     AdvancementProof,
@@ -141,6 +142,26 @@ def normalize_repository_identity(remote_url: str) -> str:
     return identity
 
 
+def repository_identities_match(left: str, right: str) -> bool:
+    """True when both names are this repository, including the owner transfer.
+
+    ``CANONICAL_REPOSITORY_IDENTITY`` is the sealed pin (pre-transfer
+    owner). ``LIVE_REPOSITORY_IDENTITY`` is the current GitHub owner.
+    They are the same repo; they are not interchangeable with any other
+    host or owner.
+    """
+    a = left.casefold()
+    b = right.casefold()
+    if a == b:
+        return True
+    equivalent = {
+        CANONICAL_REPOSITORY_IDENTITY,
+        LIVE_REPOSITORY_IDENTITY,
+        "github.com/bolkdev/project-atlas",
+    }
+    return a in equivalent and b in equivalent
+
+
 def seal_anchor(record: TrustedAnchorRecord) -> TrustedAnchorRecord:
     digest = hash_payload(record.unsigned_payload())
     return record.model_copy(update={"record_digest": digest})
@@ -244,7 +265,9 @@ def load_runtime_anchor(
         )
     if (
         expected_repository_identity is not None
-        and record.repository_identity != expected_repository_identity
+        and not repository_identities_match(
+            record.repository_identity, expected_repository_identity
+        )
     ):
         raise TrustError(
             "trusted-anchor repository identity does not match this repository",
@@ -456,11 +479,17 @@ def advance_trusted_anchor(
 ) -> TrustedAnchorRecord:
     """OBSERVE → VERIFY → REOBSERVE → COMPARE → ATOMIC_ADVANCE."""
     if expected_repository_identity is not None:
-        if proof.repository_identity != expected_repository_identity:
+        if not repository_identities_match(
+            proof.repository_identity, expected_repository_identity
+        ):
             raise TrustError("proof repository identity mismatch", code="REPO_IDENTITY_MISMATCH")
-        if current.repository_identity != expected_repository_identity:
+        if not repository_identities_match(
+            current.repository_identity, expected_repository_identity
+        ):
             raise TrustError("current repository identity mismatch", code="REPO_IDENTITY_MISMATCH")
-    if proof.repository_identity != current.repository_identity:
+    if not repository_identities_match(
+        proof.repository_identity, current.repository_identity
+    ):
         raise TrustError(
             "cross-repository anchor reuse is forbidden",
             code="REPO_IDENTITY_MISMATCH",
@@ -843,13 +872,19 @@ def advance_via_checkpoint_recovery(
     exists yet (this function does not create one implicitly).
     """
     if expected_repository_identity is not None:
-        if proof.repository_identity != expected_repository_identity:
+        if not repository_identities_match(
+            proof.repository_identity, expected_repository_identity
+        ):
             raise TrustError("proof repository identity mismatch", code="REPO_IDENTITY_MISMATCH")
-        if current.repository_identity != expected_repository_identity:
+        if not repository_identities_match(
+            current.repository_identity, expected_repository_identity
+        ):
             raise TrustError(
                 "current repository identity mismatch", code="REPO_IDENTITY_MISMATCH"
             )
-    if proof.repository_identity != current.repository_identity:
+    if not repository_identities_match(
+        proof.repository_identity, current.repository_identity
+    ):
         raise TrustError(
             "cross-repository anchor reuse is forbidden",
             code="REPO_IDENTITY_MISMATCH",
@@ -1195,13 +1230,19 @@ def advance_via_bounded_catchup(
     data.
     """
     if expected_repository_identity is not None:
-        if proof.repository_identity != expected_repository_identity:
+        if not repository_identities_match(
+            proof.repository_identity, expected_repository_identity
+        ):
             raise TrustError("proof repository identity mismatch", code="REPO_IDENTITY_MISMATCH")
-        if current.repository_identity != expected_repository_identity:
+        if not repository_identities_match(
+            current.repository_identity, expected_repository_identity
+        ):
             raise TrustError(
                 "current repository identity mismatch", code="REPO_IDENTITY_MISMATCH"
             )
-    if proof.repository_identity != current.repository_identity:
+    if not repository_identities_match(
+        proof.repository_identity, current.repository_identity
+    ):
         raise TrustError(
             "cross-repository anchor reuse is forbidden",
             code="REPO_IDENTITY_MISMATCH",

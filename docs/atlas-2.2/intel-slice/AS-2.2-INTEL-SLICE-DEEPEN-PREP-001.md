@@ -18,7 +18,7 @@
 Deepen the wave-1 estate intelligence slice PREP **beyond** the base
 architecture + fixture sketches already landed under
 `docs/atlas-2.2/intel-slice/` (PR
-[#189](https://github.com/B0LK13/project-atlas/pull/189) / base
+[#189](https://github.com/WezzSide/project-atlas/pull/189) / base
 `AS-2.2-INTEL-SLICE-PREP-001`).
 
 This PREP owns a **unique deepen delta** under `docs/atlas-2.2/intel-slice/**`

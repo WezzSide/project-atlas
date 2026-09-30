@@ -12,7 +12,7 @@ One primary action → preflight → configure → start Core/API → start Web 
 
 ## Prerequisites (before the one action)
 
-1. Git clone of `B0LK13/project-atlas`
+1. Git clone of `WezzSide/project-atlas`
 2. Python **3.12+** on PATH (`py -3.12` or `python`)
 3. Node.js LTS + **npm** on PATH
 4. Ability to write under the repo `.tmp` directory

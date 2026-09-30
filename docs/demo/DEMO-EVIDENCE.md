@@ -5,7 +5,7 @@
 | Tip | `77f450f97c923e7c1e9f6d8e12600dabef38fae0` |
 | Orphan root | `D:\project-atlas-orphans\atlas-2.1-productionization-001\` |
 | Closeout folder | `demo-closeout-023\` |
-| Remedi PR | [#251](https://github.com/B0LK13/project-atlas/pull/251) |
+| Remedi PR | [#251](https://github.com/WezzSide/project-atlas/pull/251) |
 
 ## Honesty
 

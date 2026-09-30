@@ -239,7 +239,7 @@ integration targets._
 ### DOGFOOD-001 — Source-safe genesis marker write (hardening follow-up)
 
 _Found by the first authentic Atlas dogfood run against real
-`B0LK13/project-atlas` content: ID-001 genesis (intended) rewrote the
+`WezzSide/project-atlas` content: ID-001 genesis (intended) rewrote the
 entire `.atlas-project.yaml` marker via `yaml.safe_dump` instead of
 appending the one new field, clobbering unrelated human-authored
 formatting with no CLI-visible disclosure. Not a defect in the genesis

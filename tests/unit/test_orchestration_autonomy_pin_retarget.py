@@ -20,6 +20,7 @@ from project_atlas.orchestration.autonomy.models import (
     INITIAL_RETARGET_CERTIFIED_HEAD,
     INITIAL_RETARGET_MAIN,
     INITIAL_RETARGET_TREE,
+    LIVE_REPOSITORY_IDENTITY,
     AdvancementProof,
     AdvancementReason,
     LiveInventory,
@@ -40,6 +41,7 @@ from project_atlas.orchestration.autonomy.trust import (
     load_runtime_anchor,
     load_shipped_initial_anchor,
     normalize_repository_identity,
+    repository_identities_match,
     require_full_pin,
     seal_anchor,
     verify_anchor_integrity,
@@ -733,8 +735,24 @@ def test_repository_identity_normalization() -> None:
     assert normalize_repository_identity("https://github.com/B0LK13/project-atlas.git") == (
         "github.com/b0lk13/project-atlas"
     )
+    assert normalize_repository_identity("https://github.com/WezzSide/project-atlas.git") == (
+        LIVE_REPOSITORY_IDENTITY
+    )
     with pytest.raises(TrustError):
         normalize_repository_identity("https://github.com/../escape")
+
+
+def test_repository_identities_match_owner_transfer() -> None:
+    assert repository_identities_match(
+        CANONICAL_REPOSITORY_IDENTITY, LIVE_REPOSITORY_IDENTITY
+    )
+    assert repository_identities_match(
+        LIVE_REPOSITORY_IDENTITY,
+        normalize_repository_identity("https://github.com/WezzSide/project-atlas.git"),
+    )
+    assert not repository_identities_match(
+        CANONICAL_REPOSITORY_IDENTITY, "github.com/evil/project-atlas"
+    )
 
 
 def test_shipped_schema_and_no_wall_clock() -> None:

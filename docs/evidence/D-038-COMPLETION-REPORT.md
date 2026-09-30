@@ -1,7 +1,7 @@
 # D-038 Morning / Completion Report
 
 **Directive:** D-PROJECT-ATLAS-CODER-ALPHA-038
-**PR:** https://github.com/B0LK13/project-atlas/pull/338 (merged)
+**PR:** https://github.com/WezzSide/project-atlas/pull/338 (merged)
 
 ```
 CURRENT_MAIN = 8dd8878379806841c80bbc23f82a70b711cc7274

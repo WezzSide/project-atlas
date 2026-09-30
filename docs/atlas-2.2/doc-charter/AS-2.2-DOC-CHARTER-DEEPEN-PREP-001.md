@@ -17,7 +17,7 @@
 
 Deepen the wave-2 doc-charter PREP **beyond** the base charter / maturity-matrix
 stubs already landed under `docs/atlas-2.2/doc-charter/` (PR
-[#199](https://github.com/B0LK13/project-atlas/pull/199)).
+[#199](https://github.com/WezzSide/project-atlas/pull/199)).
 
 This PREP owns a **unique deepen path** under `docs/atlas-2.2/doc-charter/**` for:
 

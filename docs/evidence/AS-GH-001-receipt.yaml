@@ -292,7 +292,7 @@ remediation:
       disposition: cache_worked_without_additional_permission
       evidence: >-
         Inspected the real, already-successful "quality" run
-        (https://github.com/B0LK13/project-atlas/actions/runs/30905727068/job/91980229911).
+        (https://github.com/WezzSide/project-atlas/actions/runs/30905727068/job/91980229911).
         Its "GITHUB_TOKEN Permissions" log group shows only "Contents:
         read" / "Metadata: read"; the setup-python cache step logs
         "Cache hit for: ..." and "Cache restored successfully" with no

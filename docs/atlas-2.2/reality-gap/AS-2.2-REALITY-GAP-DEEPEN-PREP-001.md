@@ -17,7 +17,7 @@
 
 Deepen the reality-gap PREP **beyond** the base inventory / scenario stubs already
 landed under `docs/atlas-2.2/reality-gap/` (PR
-[#172](https://github.com/B0LK13/project-atlas/pull/172)).
+[#172](https://github.com/WezzSide/project-atlas/pull/172)).
 
 This PREP owns a **unique deepen path** under `docs/atlas-2.2/reality-gap/**` for:
 

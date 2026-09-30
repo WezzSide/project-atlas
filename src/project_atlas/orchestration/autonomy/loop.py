@@ -41,6 +41,7 @@ from project_atlas.orchestration.autonomy.models import (
 from project_atlas.orchestration.autonomy.owner_gates import OwnerGateError, require_owner
 from project_atlas.orchestration.autonomy.trust import (
     evaluate_target_moved,
+    repository_identities_match,
     require_full_pin,
 )
 from project_atlas.source_identity import IdentityLockError, ProjectIdentityLock
@@ -284,7 +285,9 @@ class AutonomousLoop:
         can only ever narrow HOW an already-authorized lease executes,
         never WHETHER it is authorized at all.
         """
-        if trusted.repository_identity != expected_repository_identity:
+        if not repository_identities_match(
+            trusted.repository_identity, expected_repository_identity
+        ):
             raise LoopError("cross-project loop reuse is forbidden", code="CROSS_PROJECT")
         self._governor = governor
         self._trusted = trusted
