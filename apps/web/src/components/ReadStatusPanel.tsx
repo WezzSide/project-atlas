@@ -1,3 +1,5 @@
+import { TruthChip } from "./TruthChip";
+import { readPlaneState, truthStateFor } from "../lib/truthState";
 import type { ReadStatus } from "../types";
 
 interface ReadStatusPanelProps {
@@ -15,10 +17,16 @@ export function ReadStatusPanel({ status, compact = false }: ReadStatusPanelProp
       aria-label={isDemo ? "Vault read status (demo stub)" : "Vault read status (live API)"}
     >
       <h2>Vault read status</h2>
+      {/*
+        AX-002: the read plane is stated with the shared chip vocabulary rather
+        than an ad-hoc string, so DEMO can never be styled like LIVE and the
+        label survives loss of colour.
+      */}
       <p className={isDemo ? "banner warn" : "banner"}>
+        <TruthChip state={isDemo ? "demo" : "live"} />{" "}
         {isDemo
-          ? "DEMO STUB — isolated sample data · not live vault · not acceptance"
-          : "LIVE_API — read-only vault projection · UI ≠ canonical"}
+          ? "isolated sample data · not live vault · not acceptance"
+          : "read-only vault projection · UI ≠ canonical"}
       </p>
       <p className="disclaimer">
         UI ≠ canonical · Graph ≠ authority · Unknown ≠ healthy
@@ -27,7 +35,9 @@ export function ReadStatusPanel({ status, compact = false }: ReadStatusPanelProp
       <dl className="grid">
         <div>
           <dt>Data source</dt>
-          <dd>{source}</dd>
+          <dd>
+            <TruthChip state={readPlaneState(source)} detail={source} compact />
+          </dd>
         </div>
         <div>
           <dt>Vault</dt>
@@ -39,8 +49,12 @@ export function ReadStatusPanel({ status, compact = false }: ReadStatusPanelProp
         </div>
         <div>
           <dt>Health rollup</dt>
+          {/*
+            truthStateFor() maps absent/unrecognised evidence to UNKNOWN, so an
+            unreadable rollup can never render as healthy (unknown != healthy).
+          */}
           <dd className={status.health.rollup === "unknown" ? "rollup-unknown" : undefined}>
-            {status.health.rollup}
+            <TruthChip state={truthStateFor(status.health.rollup)} compact />
           </dd>
         </div>
         <div>

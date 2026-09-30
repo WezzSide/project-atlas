@@ -110,3 +110,62 @@
   --atlas-max: 52rem;
   color-scheme: dark;
 }
+
+/**
+ * Truth-state tokens (AX-002).
+ * See docs/design/atlas-experience-system/05-TRUTH-STATE-LANGUAGE.md
+ *
+ * Every value below is contrast-verified against the real theme backgrounds by
+ * scripts/test-truth-state.mjs, which fails if any pair drops under WCAG AA
+ * 4.5:1. Colour never carries state alone — each chip also renders a glyph and
+ * a text label — but the colour must still be readable where it is used.
+ */
+:root {
+  --truth-ok: #15653f;
+  --truth-live: #15653f;
+  --truth-ready: #15653f;
+  --truth-unknown: #8a5300;
+  --truth-unresolved: #9a3412;
+  --truth-contested: #9a3412;
+  --truth-stale: #5b5563;
+  --truth-blocked: #8f2d2d;
+  --truth-owner: #6d3faf;
+  --truth-running: #0f5f8f;
+  --truth-demo: #7a4a00;
+  --truth-fixture: #7a4a00;
+  --truth-failed: #a01b1b;
+}
+
+/* Dark themes: same states, re-lit for a dark ground. */
+[data-theme="signal-rack"],
+[data-theme="terminal-honest"] {
+  --truth-ok: #4ade80;
+  --truth-live: #4ade80;
+  --truth-ready: #4ade80;
+  --truth-unknown: #fbbf24;
+  --truth-unresolved: #fb923c;
+  --truth-contested: #fb923c;
+  --truth-stale: #a8a29e;
+  --truth-blocked: #f87171;
+  --truth-owner: #c4a2f5;
+  --truth-running: #7dd3fc;
+  --truth-demo: #fcd34d;
+  --truth-fixture: #fcd34d;
+  --truth-failed: #f87171;
+}
+
+/**
+ * Density tokens (AX-007).
+ *
+ * A single --atlas-max: 42rem was applied to everything, including operator
+ * tables (Intelligence, Knowledge, Time Machine, Source Health). 42rem is a
+ * prose measure; a conflict list, a T1->T2 diff and a source-health matrix were
+ * all being served a blog column.
+ *
+ * --atlas-max stays as-is so nothing changes by default; a surface opts into
+ * the wide measure with the .shell-data class.
+ */
+:root {
+  --atlas-max-prose: var(--atlas-max);
+  --atlas-max-data: 96rem;
+}

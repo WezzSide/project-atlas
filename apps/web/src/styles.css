@@ -455,3 +455,205 @@ code,
 .truth-demo {
   border-color: var(--atlas-muted);
 }
+
+/* ---------------------------------------------------------------------------
+ * Truth-state chips + live regions (AX-002 / AX-003)
+ * docs/design/atlas-experience-system/05-TRUTH-STATE-LANGUAGE.md
+ * ------------------------------------------------------------------------- */
+
+/*
+ * Visually hidden but present in the accessibility tree. Must not be
+ * display:none — that would remove the live regions entirely and silence the
+ * announcements this class exists to deliver.
+ */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.truth-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35em;
+  padding: 0.1em 0.5em;
+  border: 1px solid currentColor;
+  border-radius: var(--atlas-radius, 0);
+  font-family: var(--atlas-mono);
+  font-size: 0.78rem;
+  line-height: 1.5;
+  white-space: nowrap;
+  color: var(--truth-unknown);
+}
+
+.truth-chip-glyph {
+  font-size: 0.9em;
+}
+
+.truth-chip-label {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.truth-chip-detail {
+  color: inherit;
+  opacity: 0.85;
+  font-weight: 400;
+}
+
+.truth-chip-compact {
+  font-size: 0.7rem;
+  padding: 0 0.35em;
+}
+
+/* State colours. Reinforcement only — the glyph and label carry the meaning. */
+.truth-chip[data-truth-state="ok"] { color: var(--truth-ok); }
+.truth-chip[data-truth-state="live"] { color: var(--truth-live); }
+.truth-chip[data-truth-state="ready"] { color: var(--truth-ready); }
+.truth-chip[data-truth-state="unknown"] { color: var(--truth-unknown); }
+.truth-chip[data-truth-state="unresolved"] { color: var(--truth-unresolved); }
+.truth-chip[data-truth-state="contested"] { color: var(--truth-contested); }
+.truth-chip[data-truth-state="stale"] { color: var(--truth-stale); }
+.truth-chip[data-truth-state="blocked"] { color: var(--truth-blocked); }
+.truth-chip[data-truth-state="owner_required"] { color: var(--truth-owner); }
+.truth-chip[data-truth-state="running"] { color: var(--truth-running); }
+.truth-chip[data-truth-state="demo"] { color: var(--truth-demo); }
+.truth-chip[data-truth-state="fixture"] { color: var(--truth-fixture); }
+.truth-chip[data-truth-state="failed"] { color: var(--truth-failed); }
+
+/* Owner-gated states read as a sealed fact, never as an available action. */
+.truth-chip[data-truth-state="owner_required"] {
+  border-style: double;
+  border-width: 3px;
+}
+
+/* Contested renders both sides; neither is styled as the winner. */
+.truth-pair {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.6rem 0.75rem;
+  border-left: 3px solid var(--truth-contested);
+  background: color-mix(in srgb, var(--atlas-panel) 92%, transparent);
+}
+
+.truth-pair > * {
+  margin: 0;
+}
+
+/* Narrow viewports keep the label — never degrade to a bare colour dot. */
+@media (max-width: 480px) {
+  .truth-chip {
+    font-size: 0.7rem;
+    padding: 0 0.35em;
+  }
+}
+
+/* --- Evidence Desk prototype layout (design-lab E) ----------------------- */
+
+.lens-switcher {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.lens-switcher button {
+  padding: 0.4rem 0.8rem;
+  border: 1px solid var(--atlas-line);
+  background: transparent;
+  color: var(--atlas-ink);
+  font-family: var(--atlas-sans);
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.lens-switcher button[aria-pressed="true"] {
+  border-color: var(--atlas-accent);
+  color: var(--atlas-accent);
+  font-weight: 600;
+}
+
+/* Visible focus is required for keyboard operation, not optional polish. */
+.lens-switcher button:focus-visible {
+  outline: 2px solid var(--atlas-accent);
+  outline-offset: 2px;
+}
+
+.rows {
+  list-style: none;
+  margin: 0.75rem 0 0;
+  padding: 0;
+  display: grid;
+  gap: 0.6rem;
+}
+
+.rows li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding-bottom: 0.6rem;
+  border-bottom: 1px solid var(--atlas-line);
+}
+
+.chip-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+/* --- Density (AX-007) ---------------------------------------------------- */
+
+/*
+ * Opt-in wide measure for table- and comparison-heavy surfaces. Prose keeps the
+ * default --atlas-max measure; only data surfaces widen.
+ */
+.shell-data {
+  max-width: var(--atlas-max-data);
+}
+
+/*
+ * Wide content scrolls inside its own container so the page itself never
+ * scrolls horizontally — verified at 360/480/768/1440px.
+ */
+.table-scroll {
+  overflow-x: auto;
+  max-width: 100%;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* --- Claim reading surface (AX-012) ------------------------------------- */
+
+.claim {
+  margin: 0 0 0.9rem;
+  line-height: 1.65;
+  max-width: var(--atlas-max-prose);
+}
+
+.claim-sources cite {
+  font-style: normal;
+  font-family: var(--atlas-mono);
+  font-size: 0.8rem;
+  color: var(--atlas-muted);
+}
+
+.claim-resolve {
+  display: block;
+  margin-top: 0.3rem;
+  font-size: 0.85rem;
+  color: var(--atlas-muted);
+}
+
+/* An unsourced claim is marked in the text itself, not by colour alone. */
+.claim[data-truth-state="unknown"] .claim-text {
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-decoration-color: var(--truth-unknown);
+  text-underline-offset: 0.25em;
+}

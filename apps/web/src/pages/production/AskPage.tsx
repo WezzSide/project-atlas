@@ -1,7 +1,9 @@
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { ProdShell } from "../../components/ProdShell";
+import { TruthChip } from "../../components/TruthChip";
 import { useLiveAsk } from "../../hooks/useLiveAsk";
+import { ANNOUNCEMENTS, announce } from "../../lib/announce";
 
 /**
  * AS-2.1-ASK-ATLAS-LIVE-001 / AS-2.0-WEB-ASK-001 web lens.
@@ -25,6 +27,24 @@ export default function AskPage() {
     projects.length === 0 &&
     knowledge.length === 0 &&
     healthHits.length === 0;
+
+  // AX-004: the primary input surface must announce its outcome. Ask has three
+  // equally valid results — answered, UNKNOWN, and unavailable — and a
+  // screen-reader user must be able to tell them apart without the visual
+  // banner. UNKNOWN is announced as a result, not as an error.
+  useEffect(() => {
+    if (!urlQuery || loading) {
+      return;
+    }
+    if (error) {
+      announce(ANNOUNCEMENTS.readFailed(error), "assertive");
+    } else if (noMatches) {
+      announce("UNKNOWN — no matching live projections. Unknown is not an error.", "polite");
+    } else {
+      const total = projects.length + knowledge.length + healthHits.length;
+      announce(`Answered. ${total} matching projections.`, "polite");
+    }
+  }, [urlQuery, loading, error, noMatches, projects.length, knowledge.length, healthHits.length]);
 
   function onSubmit(event: FormEvent) {
     event.preventDefault();
@@ -70,30 +90,49 @@ export default function AskPage() {
             <label className="lede" htmlFor="ask-query">
               Query (max 256 characters)
             </label>
+            {/*
+              AX-004: the error is associated with the field via
+              aria-describedby and flagged with aria-invalid, so an assistive
+              technology user meets the failure at the input rather than having
+              to hunt for a banner elsewhere on the page.
+            */}
             <input
               id="ask-query"
               name="q"
               value={draft}
               maxLength={256}
+              aria-describedby="ask-query-hint ask-query-error"
+              aria-invalid={error ? true : undefined}
               onChange={(event) => setDraft(event.target.value)}
               style={{ display: "block", marginTop: "0.5rem", width: "100%", maxWidth: "40rem" }}
             />
+            <p id="ask-query-hint" className="disclaimer">
+              Read-only lexical search. UNKNOWN is a valid answer, not a failure.
+            </p>
+            {/*
+              Present in the DOM whether or not there is an error, so the
+              aria-describedby reference never dangles.
+            */}
+            <p id="ask-query-error" className={error ? "banner warn" : "sr-only"}>
+              {error ? `Ask unavailable: ${error}` : ""}
+            </p>
             <button type="submit" style={{ marginTop: "0.75rem" }}>
               Ask (read-only)
             </button>
           </form>
         </section>
 
-        {error ? <p className="banner warn">Ask unavailable: {error}</p> : null}
         {loading ? <p className="banner">Loading…</p> : null}
         {isDemo ? (
           <p className="banner warn">
-            DEMO STUB isolated — start <code>atlas live api-serve</code> to ask
-            the live vault (not invented answers)
+            <TruthChip state="demo" /> isolated — start{" "}
+            <code>atlas live api-serve</code> to ask the live vault (not invented answers)
           </p>
         ) : null}
         {noMatches ? (
-          <p className="banner warn">UNKNOWN — no matching live projections</p>
+          <p className="banner warn">
+            <TruthChip state="unknown" /> no matching live projections
+          </p>
         ) : null}
 
         {urlQuery ? (
@@ -101,7 +140,9 @@ export default function AskPage() {
             <section className="panel" aria-label="Project matches">
               <h2>Projects</h2>
               {projects.length === 0 ? (
-                <p className="banner warn">unknown — no project matches</p>
+                <p className="banner warn">
+                  <TruthChip state="unknown" /> no project matches
+                </p>
               ) : (
                 <ul className="theme-hub">
                   {projects.map((project, index) => (
@@ -141,7 +182,9 @@ export default function AskPage() {
             <section className="panel" aria-label="Knowledge matches">
               <h2>Knowledge</h2>
               {knowledge.length === 0 ? (
-                <p className="banner warn">unknown — no knowledge matches</p>
+                <p className="banner warn">
+                  <TruthChip state="unknown" /> no knowledge matches
+                </p>
               ) : (
                 <ul className="theme-hub">
                   {knowledge.map((row, index) => (
@@ -162,7 +205,9 @@ export default function AskPage() {
             <section className="panel" aria-label="Health keyword matches">
               <h2>Health keywords</h2>
               {healthHits.length === 0 ? (
-                <p className="banner warn">unknown — no health keyword matches</p>
+                <p className="banner warn">
+                  <TruthChip state="unknown" /> no health keyword matches
+                </p>
               ) : (
                 <ul className="theme-hub">
                   {healthHits.map((token) => (

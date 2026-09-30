@@ -6,6 +6,9 @@ const LINKS = [
   { to: "/design-lab/signal-rack", label: "B · Signal" },
   { to: "/design-lab/cartograph-quiet", label: "C · Cartograph" },
   { to: "/design-lab/terminal-honest", label: "D · Terminal" },
+  // Prototype E — selected synthesis direction (AX-002). Additive: ADR-010
+  // requires design-lab directions A–D to be preserved, never replaced.
+  { to: "/design-lab/evidence-desk", label: "E · Evidence Desk" },
 ] as const;
 
 /** Shared design-lab chrome — prototype nav only; not vault authority. */

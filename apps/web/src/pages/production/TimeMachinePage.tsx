@@ -48,7 +48,7 @@ export default function TimeMachinePage() {
 
   return (
     <ProdShell>
-      <main id="main" className="shell" tabIndex={-1}>
+      <main id="main" className="shell shell-data" tabIndex={-1}>
         <header className="hero">
           <p className="eyebrow">Production · Conflict &amp; Time Machine</p>
           <h1>Conflict &amp; Time Machine</h1>

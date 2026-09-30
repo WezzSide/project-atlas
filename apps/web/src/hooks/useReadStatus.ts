@@ -4,6 +4,7 @@ import {
   liveApiDemoOnly,
   liveApiFetch,
 } from "../api/liveApi";
+import { ANNOUNCEMENTS, announce } from "../lib/announce";
 import type { DataSource, ReadStatus } from "../types";
 
 /** AS-2.1-WEB-LIVE-001 deepen: LIVE_API first; demo stub isolated + labelled. */
@@ -104,14 +105,30 @@ export function useReadStatus(): {
           setDataSource(source);
           setLiveError(reason);
           setError(null);
+          // AX-003 / SC 4.1.3. A LIVE -> DEMO fallback is announced assertively
+          // because it changes what the data *means*: without it a screen-reader
+          // user can read fixture data believing it is live. Routine loads stay
+          // polite so they do not interrupt the task in hand.
+          if (source === "demo_stub" && livePreferred && reason !== null) {
+            announce(ANNOUNCEMENTS.fellBackToDemo, "assertive");
+          } else if (source === "demo_stub") {
+            announce(ANNOUNCEMENTS.loadedDemo, "polite");
+          } else {
+            announce(ANNOUNCEMENTS.loadedLive, "polite");
+          }
+          if (payload.health?.rollup === "unknown") {
+            announce(ANNOUNCEMENTS.rollupUnknown, "polite");
+          }
         }
       })
       .catch((err: unknown) => {
         if (!cancelled) {
-          setError(err instanceof Error ? err.message : "status load failed");
+          const reason = err instanceof Error ? err.message : "status load failed";
+          setError(reason);
           setStatus(null);
           setDataSource(null);
           setLiveError(null);
+          announce(ANNOUNCEMENTS.readFailed(reason), "assertive");
         }
       })
       .finally(() => {
@@ -122,7 +139,7 @@ export function useReadStatus(): {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [livePreferred]);
 
   return { status, error, loading, dataSource, livePreferred, liveError };
 }

@@ -94,7 +94,7 @@ export default function IntelligencePage() {
 
   return (
     <ProdShell>
-      <main id="main" className="shell" tabIndex={-1}>
+      <main id="main" className="shell shell-data" tabIndex={-1}>
         <header className="hero">
           <p className="eyebrow">Production · Atlas Intelligence</p>
           <h1>Intelligence</h1>
