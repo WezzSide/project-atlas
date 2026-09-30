@@ -53,6 +53,29 @@ def test_reconcile_keeps_conflict_and_does_not_promote() -> None:
     assert report["original_provenance_erased"] is False
 
 
+def test_foreign_stronger_evidence_fails_closed_when_scoped() -> None:
+    with pytest.raises(Atlas3Error) as exc:
+        reconcile_memories(
+            [
+                {
+                    "text": "production uses PostgreSQL 16",
+                    "provider": "chatgpt",
+                    "item_type": "claim_candidate",
+                    "project_id": "harbor-api",
+                }
+            ],
+            stronger_evidence=[
+                {
+                    "kind": "deployment",
+                    "text": "PostgreSQL 15",
+                    "project_id": "other-api",
+                }
+            ],
+            project_id="harbor-api",
+        )
+    assert exc.value.code == "PROJECT_MISMATCH"
+
+
 def test_mixed_valid_and_corrupt_fails_closed() -> None:
     with pytest.raises(Atlas3Error) as exc:
         reconcile_memories([{"text": "ok"}, "corrupt"])  # type: ignore[list-item]

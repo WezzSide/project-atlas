@@ -21,6 +21,7 @@ from project_atlas.atlas3.memory.gemini import import_gemini_export
 from project_atlas.atlas3.memory.normalize import normalize_turns
 from project_atlas.atlas3.memory.reconcile import reconcile_memories
 from project_atlas.atlas3.memory.routing import (
+    assert_evidence_project_scope,
     assert_items_project_scope,
     assert_turns_project_scope,
 )
@@ -59,10 +60,12 @@ def run_memory_vertical(
     root = require_vault(vault)
     pid = require_project(root, project_id)
     assert_items_project_scope(provider_items, project_id=pid)
+    assert_evidence_project_scope(stronger_evidence, project_id=pid)
     reconciled = reconcile_memories(
         provider_items,
         stronger_evidence=stronger_evidence,
         current_state_text=current_state_text,
+        project_id=pid,
     )
     searched = search_memory(reconciled["items"], query, project_id=pid)
     ranked = rank_context_layers(

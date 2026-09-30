@@ -155,6 +155,43 @@ def test_search_and_cli_reject_leaked_mixed_reconcile(tmp_path: Path) -> None:
     assert rc == 1
 
 
+def test_foreign_stronger_evidence_rejected_before_persist(tmp_path: Path) -> None:
+    vault = _vault(tmp_path)
+    with pytest.raises(Atlas3Error) as exc:
+        run_memory_vertical(
+            vault,
+            "harbor-api",
+            provider_items=_items("harbor-api"),
+            stronger_evidence=[
+                {
+                    "kind": "deployment",
+                    "text": "PostgreSQL 15",
+                    "project_id": "other-api",
+                }
+            ],
+            current_state_text="unknown",
+        )
+    assert exc.value.code == "PROJECT_MISMATCH"
+    assert not (
+        vault / "generated" / "ops" / "atlas3" / "memory" / "harbor-api" / "reconcile.json"
+    ).exists()
+
+
+def test_unlabeled_stronger_evidence_still_allowed(tmp_path: Path) -> None:
+    vault = _vault(tmp_path)
+    report = run_memory_vertical(
+        vault,
+        "harbor-api",
+        provider_items=_items("harbor-api"),
+        stronger_evidence=[{"kind": "deployment", "text": "PostgreSQL 15"}],
+        current_state_text="PostgreSQL 15",
+    )
+    assert report["project_id"] == "harbor-api"
+    assert (
+        vault / "generated" / "ops" / "atlas3" / "memory" / "harbor-api" / "reconcile.json"
+    ).is_file()
+
+
 def test_ingest_turn_project_mismatch() -> None:
     with pytest.raises(Atlas3Error) as exc:
         ingest_provider_turns(

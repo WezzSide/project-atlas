@@ -61,3 +61,24 @@ def assert_items_project_scope(
                 f"item project_id {item_pid!r} != requested {pid!r}",
             )
     return pid
+
+
+def assert_evidence_project_scope(
+    evidence: object,
+    *,
+    project_id: str,
+) -> str:
+    """Reject evidence rows that name a foreign project. Unlabeled rows stay allowed."""
+    pid = require_memory_project(project_id)
+    if not isinstance(evidence, list):
+        raise Atlas3Error("MALFORMED_ITEM", "evidence must be a list")
+    for index, row in enumerate(evidence):
+        if not isinstance(row, dict):
+            raise Atlas3Error("MALFORMED_ITEM", f"evidence {index} must be an object")
+        explicit = row.get("project_id")
+        if explicit is not None and str(explicit) != pid:
+            raise Atlas3Error(
+                "PROJECT_MISMATCH",
+                f"evidence project_id {explicit!r} != requested {pid!r}",
+            )
+    return pid

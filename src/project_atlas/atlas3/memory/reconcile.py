@@ -8,6 +8,7 @@ from project_atlas.atlas3.contracts import Atlas3Error, honesty_block
 from project_atlas.atlas3.memory.conflicts import detect_conflicts
 from project_atlas.atlas3.memory.dedup import deduplicate_items
 from project_atlas.atlas3.memory.freshness import apply_freshness
+from project_atlas.atlas3.memory.routing import assert_evidence_project_scope
 
 PACKAGE_ID: Final[str] = "AT3-049"
 
@@ -27,9 +28,12 @@ def reconcile_memories(
     *,
     stronger_evidence: list[dict[str, Any]] | None = None,
     current_state_text: str | None = None,
+    project_id: str | None = None,
 ) -> dict[str, Any]:
     if not isinstance(items, list):
         raise Atlas3Error("RECONCILE_INVALID", "items must be a list")
+    if project_id is not None and stronger_evidence is not None:
+        assert_evidence_project_scope(stronger_evidence, project_id=project_id)
     deduped = deduplicate_items(items)
     fresh = apply_freshness(deduped["items"], stronger_evidence=stronger_evidence)
     conflicts = detect_conflicts(fresh, current_state_text=current_state_text)
