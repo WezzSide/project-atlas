@@ -789,11 +789,20 @@ def test_malformed_origination_projection_file_does_not_crash_tick(tmp_path: Pat
 def test_completed_dependency_stays_visible_for_dependent_on_next_tick(
     tmp_path: Path,
 ) -> None:
-    """A RELEASED lease must keep the completed dependency in the DAG as a
-    CERTIFIED witness. Excluding it entirely made ``select_next()`` /
-    ``lease()`` treat the missing id as unsatisfied, so a later
-    materialized dependent could never be leased.
+    """A RELEASED lease corroborated by ``completed_lease_ids`` must keep
+    the completed dependency in the DAG as a CERTIFIED witness. Excluding
+    it entirely made ``select_next()`` / ``lease()`` treat the missing id
+    as unsatisfied, so a later materialized dependent could never be
+    leased. AS-LEASE-RELEASED-CERTIFIED-WITNESS-001: RELEASED alone is
+    not that witness.
     """
+    from project_atlas.orchestration.autonomy.loop import (
+        LoopPhase,
+        initial_loop_state,
+        persist_loop_state,
+        seal_loop_state,
+    )
+
     repo = _make_repo(tmp_path)
     main = _run_git(repo, "rev-parse", "origin/main")
     tree = _run_git(repo, "rev-parse", "origin/main^{tree}")
@@ -885,11 +894,20 @@ def test_completed_dependency_stays_visible_for_dependent_on_next_tick(
         encoding="utf-8",
     )
 
+    loop_store = tmp_path / "loop-state"
+    state = initial_loop_state(trusted).model_copy(
+        update={
+            "phase": LoopPhase.IDLE,
+            "completed_lease_ids": ("LEASE-1",),
+        }
+    )
+    persist_loop_state(loop_store, seal_loop_state(state))
+
     rehydrate_governor(
         governor,
         inventory=inventory,
         trusted=trusted,
-        loop_store=tmp_path / "loop-state",
+        loop_store=loop_store,
         lease_projection_store=lease_store,
         origination_projection_store=origination_store,
     )

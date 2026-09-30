@@ -59,15 +59,15 @@ class ProjectedLease(BaseModel):
     # evidence-gated EXHAUSTED FAILURE (see lease_recovery.py), never a
     # success. Deliberately distinct from RELEASED, which every other
     # caller (governor.release_lease(), reap_orphaned_lease_releases())
-    # only ever writes AFTER a real completion --
-    # rehydration._originate()'s CERTIFIED-witness inference reads
-    # RELEASED as proof of that completion, and has no other way to tell
-    # the two apart. Conflating them would let an evidence-gated failure
-    # release be silently reconstructed as a certified success on the
-    # very next rehydration -- exactly the fabrication this whole
-    # mechanism exists to prevent. An ABANDONED row is excluded from
-    # BOTH active_rows() and the CERTIFIED-witness set, so the node it
-    # names simply falls through to _originate()'s ordinary add_node()+
+    # only ever writes AFTER a real completion. AS-LEASE-RELEASED-
+    # CERTIFIED-WITNESS-001: ``_originate()`` still must not treat a
+    # planted RELEASED row as a CERTIFIED witness by itself -- the
+    # durable ``LoopState.completed_lease_ids`` must corroborate the
+    # lease_id. Conflating ABANDONED with RELEASED would additionally
+    # let an evidence-gated failure release be reconstructed as a
+    # certified success. An ABANDONED row is excluded from both
+    # active_rows() and the CERTIFIED-witness set, so the node it names
+    # simply falls through to _originate()'s ordinary add_node()+
     # mark_ready() path on its next materialization -- a genuine fresh
     # attempt, never a fabricated one.
     status: Literal["ACTIVE", "RELEASED", "ABANDONED"]
@@ -399,10 +399,10 @@ def project_abandon(store: Path, lease: AgentLease, *, live_main: str) -> LeaseP
     other caller in this codebase releases a lease after a real success
     and must keep calling ``project_release()``, never this. See
     ``ProjectedLease.status``'s own docstring for why the two are not
-    interchangeable: ``_originate()``'s CERTIFIED-witness inference reads
-    ``RELEASED`` as proof of completion, and writing that status here
-    would fabricate exactly the certified result this function exists to
-    avoid. Same reject_foreign_worker/reject_foreign_package/
+    interchangeable: ``_originate()``'s CERTIFIED-witness inference
+    still reads corroborated ``RELEASED`` rows as completion witnesses,
+    and writing that status here would look like a success release.
+    Same reject_foreign_worker/reject_foreign_package/
     reject_stale_base defense-in-depth as ``project_release()``.
     """
 
