@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from project_atlas.inventory_drift import attach_source_drift
+from project_atlas.secrets import scan_text
 
 PACKAGE_ID = "AS-CODER-ALPHA-ARCH-002"
 GENERATOR_ID = "atlas-coder-alpha-architecture-002"
@@ -140,6 +141,14 @@ def _manifest_source_rows(vault: Path, project_id: str) -> list[dict[str, Any]]:
             continue
         owner = raw_owner.strip() or "unknown-project"
         if owner == "unknown-project" or owner != project_id:
+            continue
+        source_id = row.get("source_id")
+        path = row.get("path")
+        if isinstance(source_id, str) and scan_text(source_id):
+            continue
+        if isinstance(path, str) and scan_text(path):
+            continue
+        if scan_text(owner):
             continue
         selected.append(row)
     return selected

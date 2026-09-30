@@ -6,8 +6,12 @@ import json
 from pathlib import Path
 
 from project_atlas.connect import connect_project
-from project_atlas.project_architecture import ARCHITECTURE_SLOTS
+from project_atlas.project_architecture import (
+    ARCHITECTURE_SLOTS,
+    materialize_architecture_lenses,
+)
 from project_atlas.project_brief import build_project_brief
+from project_atlas.secrets import scan_text
 
 
 def test_plan_agents_claude_fill_structured_architecture_slots(tmp_path: Path) -> None:
@@ -194,3 +198,28 @@ def test_readme_only_keeps_architecture_unknown(tmp_path: Path) -> None:
     assert set(lens["slots"]) == set(ARCHITECTURE_SLOTS)
     assert all(value == "UNKNOWN" for value in lens["slots"].values())
     assert brief["architecture_summary"] == "UNKNOWN"
+
+
+def test_json_unicode_escape_source_id_is_not_persisted(tmp_path: Path) -> None:
+    """AS-SEC-SCAN-ARCH-SOURCEID-JSON-ESC-001: decoded source_id must not persist."""
+    token = "AKIAAAAAAAAAAAAAAAAA"
+    vault = tmp_path / "vault"
+    (vault / "projects" / "harbor-api").mkdir(parents=True)
+    (vault / "projects" / "harbor-api" / "project.md").write_text(
+        "# h\n", encoding="utf-8"
+    )
+    manifest = vault / "generated" / "ops" / "connect-manifest.json"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    raw = (
+        '{"sources":[{"source_id":"\\u0041KIAAAAAAAAAAAAAAAAA",'
+        '"path":"docs/plan.md","likely_project":"harbor-api",'
+        '"sha256":"' + ("a" * 64) + '"}]}'
+    )
+    manifest.write_text(raw, encoding="utf-8")
+    assert scan_text(raw) == []
+    materialize_architecture_lenses(vault, project_ids=["harbor-api"])
+    answer = (
+        vault / "generated" / "answers" / "ans-architecture-harbor-api.json"
+    ).read_text(encoding="utf-8")
+    assert token not in answer
+    assert scan_text(answer) == []
