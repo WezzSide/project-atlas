@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -118,6 +119,141 @@ def test_truth_core_promotion_fails_closed() -> None:
             requested_project_id="harbor-api",
         )
     assert exc.value.code == "TRUTH_CORE_PROMOTION_ATTEMPT"
+
+
+def _composed_report(
+    *,
+    project_id: str = "harbor-api",
+    intent_rows: list[object] | None = None,
+    honesty: object | None = None,
+    extra_layers: dict[str, object] | None = None,
+) -> dict[str, object]:
+    layers: dict[str, object] = {
+        "intent": intent_rows
+        if intent_rows is not None
+        else [
+            {
+                "item_type": "idea",
+                "layer": "intent",
+                "project_id": project_id,
+                "text": "ok",
+                "id": "a",
+            }
+        ],
+        "current_state": [],
+        "decision": [],
+        "history": [],
+        "unknown": [],
+    }
+    if extra_layers:
+        layers.update(extra_layers)
+    counts = {
+        name: len(rows) if isinstance(rows, list) else 0 for name, rows in layers.items()
+    }
+    return {
+        "project_id": project_id,
+        "counts": counts,
+        "layers": layers,
+        "honesty": {"intent_is_current_state": False} if honesty is None else honesty,
+    }
+
+
+def test_composed_mixed_corrupt_layer_fails_closed() -> None:
+    def fake_report(
+        items: list[dict[str, object]],
+        *,
+        requested_project_id: str,
+        owner_origin: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        del items, owner_origin
+        return _composed_report(
+            project_id=requested_project_id,
+            intent_rows=[
+                {
+                    "item_type": "idea",
+                    "layer": "intent",
+                    "project_id": requested_project_id,
+                    "text": "ok",
+                    "id": "a",
+                },
+                "corrupt-row",
+            ],
+        )
+
+    with (
+        patch(
+            "project_atlas.atlas3.memory.honesty.extract_intent_report",
+            side_effect=fake_report,
+        ),
+        pytest.raises(Atlas3Error) as exc,
+    ):
+        wrap_intent_state_honesty(
+            [_item(item_type="idea", text="ok")],
+            requested_project_id="harbor-api",
+        )
+    assert exc.value.code == "INTENT_ITEM_INVALID"
+
+
+def test_composed_non_list_layer_fails_closed() -> None:
+    def fake_report(
+        items: list[dict[str, object]],
+        *,
+        requested_project_id: str,
+        owner_origin: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        del items, owner_origin
+        return _composed_report(
+            project_id=requested_project_id,
+            extra_layers={"history": {"not": "a-list"}},
+        )
+
+    with (
+        patch(
+            "project_atlas.atlas3.memory.honesty.extract_intent_report",
+            side_effect=fake_report,
+        ),
+        pytest.raises(Atlas3Error) as exc,
+    ):
+        wrap_intent_state_honesty(
+            [_item(item_type="idea", text="ok")],
+            requested_project_id="harbor-api",
+        )
+    assert exc.value.code == "LAYER_COLLAPSE"
+
+
+def test_composed_foreign_layer_row_fails_closed() -> None:
+    def fake_report(
+        items: list[dict[str, object]],
+        *,
+        requested_project_id: str,
+        owner_origin: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        del items, owner_origin
+        return _composed_report(
+            project_id=requested_project_id,
+            intent_rows=[
+                {
+                    "item_type": "idea",
+                    "layer": "intent",
+                    "project_id": "other-api",
+                    "text": "foreign",
+                    "id": "x",
+                }
+            ],
+        )
+
+    with (
+        patch(
+            "project_atlas.atlas3.memory.honesty.extract_intent_report",
+            side_effect=fake_report,
+        ),
+        pytest.raises(Atlas3Error) as exc,
+    ):
+        wrap_intent_state_honesty(
+            [_item(item_type="idea", text="ok")],
+            requested_project_id="harbor-api",
+        )
+    assert exc.value.code == "CROSS_PROJECT"
 
 
 def test_same_identity_in_both_layers_fails_closed() -> None:
