@@ -33,7 +33,9 @@ LABEL org.opencontainers.image.title="atlas-runner-worker" \
 # Python is deliberately NOT installed from apt: the base image's
 # /usr/local/bin/python (3.12) is the only interpreter. build-essential is
 # included for trivial compile checks only.
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Bounded apt network waits so a blocked build network fails in ~a minute, not 12.
+RUN apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 update \
+    && apt-get install -y --no-install-recommends \
       bash coreutils git curl ca-certificates jq ripgrep tar zip unzip \
       openssh-client nodejs npm build-essential \
     && rm -rf /var/lib/apt/lists/*

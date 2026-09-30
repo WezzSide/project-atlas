@@ -61,7 +61,7 @@ def test_deploy_builds_revision_image_validates_python_and_binds_identity(tmp_pa
     assert len(builds) == 1
     assert f"atlas.runner.revision={REV_A}" in builds[0] and "latest" not in builds[0]
     # the Python contract is proven in the exact built image (by ID), isolated
-    (run,) = repo.docker.calls("run")
+    (run,) = [c for c in repo.docker.calls("run") if "sys.version_info" in c]
     assert binding["image_id"] in run and "--network none" in run
     assert "--cap-drop ALL" in run and "no-new-privileges" in run and "--entrypoint python3" in run
     # evidence: the deploy log names the image actually selected
@@ -129,7 +129,8 @@ def test_redeploy_of_same_revision_reuses_the_image_and_is_deterministic(tmp_pat
     proc2, _ = _deploy(repo, tmp_path, REV_A)
     assert proc1.returncode == proc2.returncode == 0
     assert len(repo.docker.calls("build")) == 1  # no rebuild
-    assert len(repo.docker.calls("run")) == 2  # Python contract re-proven each deploy
+    # Python contract re-proven each deploy (the network preflight only runs when building)
+    assert len([c for c in repo.docker.calls("run") if "sys.version_info" in c]) == 2
     assert _binding(env, REV_A) == first
     assert b"reused=1" in proc2.stdout
 
@@ -288,3 +289,44 @@ def test_evidence_digest_is_the_content_id_for_locally_built_images(tmp_path):
             return subprocess.CompletedProcess(argv, 0, ID_X + "\n", "")
 
     assert Stub(jobs_root=tmp_path).image_digest(expected_tag(REV_A)) == ID_X
+
+
+# ---------------------------------------------------------------------------
+# build network (live run 36764955502: default bridge is default-DROP on the host)
+# ---------------------------------------------------------------------------
+
+
+def test_build_runs_on_the_permitted_worker_network_never_host(tmp_path):
+    repo = FakeGitRepo(tmp_path, remote_url=REMOTE)
+    proc, _ = _deploy(repo, tmp_path, REV_A)
+    assert proc.returncode == 0, proc.stdout.decode()
+    (build,) = repo.docker.calls("build")
+    assert "--network atlas-runner-net" in build and "host" not in build
+    (probe,) = [c for c in repo.docker.calls("run") if "create_connection" in c]
+    assert "--network atlas-runner-net" in probe and "--cap-drop ALL" in probe
+    # the probe uses the Dockerfile's own FROM image
+    assert probe.split(" --entrypoint python3 ")[1].startswith("scratch ")
+
+
+def test_worker_network_name_is_overridable_for_the_host(tmp_path):
+    repo = FakeGitRepo(tmp_path, remote_url=REMOTE)
+    proc, _ = _deploy(repo, tmp_path, REV_A, ATLAS_WORKER_NET="custom-net")
+    assert proc.returncode == 0
+    (build,) = repo.docker.calls("build")
+    assert "--network custom-net" in build
+
+
+def test_unreachable_build_network_fails_fast_before_building_or_activating(tmp_path):
+    repo = FakeGitRepo(tmp_path, remote_url=REMOTE)
+    _, env = _deploy(repo, tmp_path, REV_A)
+    before = Path(env["ATLAS_CURRENT_LINK"]).resolve()
+    proc, _ = _deploy(repo, tmp_path, REV_B, FAKE_DOCKER_NET_FAILS="1")
+    assert proc.returncode != 0
+    assert b"cannot reach deb.debian.org" in proc.stdout
+    assert len(repo.docker.calls("build")) == 1  # only REV_A's build; none for REV_B
+    assert Path(env["ATLAS_CURRENT_LINK"]).resolve() == before
+
+
+def test_dockerfile_apt_waits_are_bounded():
+    dockerfile = (Path(__file__).resolve().parents[1] / "Dockerfile").read_text(encoding="utf-8")
+    assert "Acquire::http::Timeout=20" in dockerfile and "Acquire::Retries=1" in dockerfile

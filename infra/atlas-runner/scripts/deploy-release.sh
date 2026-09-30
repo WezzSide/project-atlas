@@ -34,6 +34,12 @@ SYSTEMCTL="${ATLAS_SYSTEMCTL:-systemctl}"
 POST_RESTART_SLEEP="${ATLAS_POST_RESTART_SLEEP:-5}"
 DOCKER="${ATLAS_DOCKER:-docker}"
 IMAGE_REPO="atlas-runner-worker"
+# The host's DOCKER-USER guard default-DROPs egress from every container bridge
+# except the dedicated worker bridge (scripts/atlas-runner-firewall.sh). Image
+# build RUN steps (apt, pip, runner download) therefore run on that SAME network:
+# no new firewall permit and no host networking. Live run 36764955502 failed
+# closed because the default build network could not resolve deb.debian.org.
+BUILD_NET="${ATLAS_WORKER_NET:-atlas-runner-net}"
 
 log() { printf '[deploy] %s\n' "$*"; }
 die() { log "FATAL: $*"; exit 1; }
@@ -173,11 +179,23 @@ if existing="$(inspect_image)"; then
         reuse=1
     fi
 fi
+if [ "${reuse}" -eq 0 ]; then
+    # Fast, diagnosable preflight (seconds, not a 12-minute apt timeout): the build
+    # network must resolve and reach the Debian mirror the Dockerfile uses.
+    BASE_IMAGE="$(awk '/^FROM /{print $2; exit}' "${RELEASE_DIR}/Dockerfile")"
+    [ -n "${BASE_IMAGE}" ] || die "cannot determine the Dockerfile base image; release NOT activated"
+    timeout 120 "${DOCKER}" run --rm --network "${BUILD_NET}" --cap-drop ALL --security-opt no-new-privileges \
+        --entrypoint python3 "${BASE_IMAGE}" -c 'import socket; socket.create_connection(("deb.debian.org", 80), timeout=15).close()' >/dev/null 2>&1 \
+        || die "worker image build network '${BUILD_NET}' cannot reach deb.debian.org (check the worker network and atlas-runner-firewall); release NOT activated"
+fi
 if [ "${reuse}" -eq 1 ]; then
     log "worker image ${IMAGE_TAG} already built for ${REV}; reusing after validation"
 else
     log "building worker image ${IMAGE_TAG} from ${RELEASE_DIR}"
-    "${DOCKER}" build --tag "${IMAGE_TAG}" --label "atlas.runner.revision=${REV}" "${RELEASE_DIR}" \
+    # Classic builder: BuildKit only accepts default|none|host for --network and
+    # cannot join the permitted worker bridge; host networking is never used.
+    DOCKER_BUILDKIT=0 "${DOCKER}" build --network "${BUILD_NET}" --tag "${IMAGE_TAG}" \
+        --label "atlas.runner.revision=${REV}" "${RELEASE_DIR}" \
         || die "worker image build failed for ${REV}; release NOT activated"
 fi
 IMAGE_ID_LINE="$(inspect_image)" || die "cannot inspect worker image ${IMAGE_TAG}; release NOT activated"

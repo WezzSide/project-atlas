@@ -162,7 +162,8 @@ class FakeDocker:
     Images are files under <state>/images holding ``<image-id> <revision-label>``.
     Every build yields a NEW image ID so a reused image is distinguishable from a
     rebuilt one. ``FAKE_DOCKER_PY`` selects the interpreter version the image
-    reports; ``FAKE_DOCKER_BUILD_FAILS=1`` makes ``docker build`` fail.
+    reports; ``FAKE_DOCKER_BUILD_FAILS=1`` makes ``docker build`` fail;
+    ``FAKE_DOCKER_NET_FAILS=1`` fails the build-network preflight.
     """
 
     def __init__(self, tmp_path: Path):
@@ -192,6 +193,9 @@ class FakeDocker:
             '    id="sha256:$(printf "%s-%s" "$tag" "$n" | sha256sum | cut -c1-64)"\n'
             '    echo "$id $label" > "$S/images/${tag}" ;;\n'
             "  run)\n"
+            '    case "$*" in *create_connection*)\n'
+            '      [ "${FAKE_DOCKER_NET_FAILS:-0}" = 1 ] && exit 1; exit 0 ;;\n'
+            "    esac\n"
             '    ver="${FAKE_DOCKER_PY:-3.12.14}"; IFS=. read -r a b _ <<<"$ver"\n'
             '    if [ "$a" -gt 3 ] || { [ "$a" -eq 3 ] && [ "$b" -ge 12 ]; }; then\n'
             '      echo "$ver"; exit 0\n'
