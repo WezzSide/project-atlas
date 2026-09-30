@@ -28,6 +28,7 @@ from project_atlas.impact_graph import (
     write_impact_graph,
 )
 from project_atlas.schema import validate_record
+from project_atlas.secrets import scan_text
 
 
 def _relationship(
@@ -231,3 +232,45 @@ def test_j5_self_loop_ignored(tmp_path: Path) -> None:
     document = compile_impact_graph(vault)
     assert document["edge_count"] == 0
     assert document["entity_count"] == 0
+
+
+def test_json_unicode_escape_entity_id_is_not_persisted(tmp_path: Path) -> None:
+    """AS-SEC-SCAN-IMPACT-ENTITY-JSON-ESC-001: decoded entity ids must not persist."""
+    token = "AKIAAAAAAAAAAAAAAAAA"
+    sha = "a" * 64
+    vault = tmp_path / "vault"
+    rel = vault / "generated" / "graph" / "relationships" / "harbor-api"
+    rel.mkdir(parents=True)
+    rec = {
+        "schema_version": 1,
+        "package_id": "AS-GRAPH-003",
+        "project_id": "harbor-api",
+        "relationship_id": "r1",
+        "relationship_type": "depends-on",
+        "source_entity_id": token,
+        "target_entity_id": "svc-b",
+        "link_quality": "inferred",
+        "relationship_fingerprint": sha,
+        "authority": {"level": "derived"},
+        "status": "retained",
+        "truth_boundary": "GRAPH RELATIONSHIP ≠ AUTOMATIC AUTHORITY",
+        "provenance": {
+            "graphify_artifact_refs": [
+                {"relative_path": "generated/graph/x.json", "sha256": sha}
+            ],
+            "graphify_edge_ids": ["e1"],
+            "source_graphify_ids": ["n1"],
+            "target_graphify_ids": ["n2"],
+            "supporting_source_docs": ["docs/a.md"],
+        },
+    }
+    raw = json.dumps(rec).replace('"' + token + '"', '"\\u0041KIAAAAAAAAAAAAAAAAA"')
+    (rel / "r1.json").write_text(raw, encoding="utf-8")
+    assert scan_text(raw) == []
+    document = compile_impact_graph(vault)
+    write_impact_graph(vault, document=document)
+    written = (vault / "generated" / "indexes" / "impact-graph.json").read_text(
+        encoding="utf-8"
+    )
+    assert token not in written
+    assert scan_text(written) == []
