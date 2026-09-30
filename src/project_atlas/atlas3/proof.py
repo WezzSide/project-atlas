@@ -18,6 +18,7 @@ from project_atlas.atlas3.contracts import (
     safe_project_id,
     write_json_atomic,
 )
+from project_atlas.secrets import scan_text
 
 PACKAGE_ID: Final[str] = "AT3-050"
 PROOF_STAGES: Final[tuple[str, ...]] = (
@@ -52,9 +53,19 @@ def evaluate_proof(
     for name in PROOF_STAGES:
         raw = supplied.get(name)
         if isinstance(raw, dict) and raw.get("evidence_ref"):
+            ref = str(raw["evidence_ref"])
+            # AS-SEC-SCAN-ATLAS3-PROOF-EVIDENCE-JSON-ESC-001: json.loads can
+            # decode ``\\u`` refs that scan_text misses on raw bytes.
+            if scan_text(ref):
+                stages[name] = {
+                    "status": "UNKNOWN",
+                    "reason": "no independent evidence_ref",
+                    "authority": "none",
+                }
+                continue
             stages[name] = {
                 "status": "PRESENT",
-                "evidence_ref": str(raw["evidence_ref"]),
+                "evidence_ref": ref,
                 "authority": "derived",
             }
             present += 1
