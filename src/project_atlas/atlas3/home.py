@@ -10,13 +10,35 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Final
 
-from project_atlas.atlas3.contracts import TRUTH_BOUNDARY, Atlas3Error, honesty_block
+from project_atlas.atlas3.contracts import (
+    TRUTH_BOUNDARY,
+    Atlas3Error,
+    honesty_block,
+    require_project,
+    require_vault,
+)
 from project_atlas.atlas3.pulse import compile_pulse
 from project_atlas.atlas3.start import compile_start
 from project_atlas.atlas3.twin_health import compile_twin_health
 
 PACKAGE_ID: Final[str] = "AT3-090"
 GENERATOR_ID: Final[str] = "atlas3-home-090"
+
+
+def _bind_project(
+    payload: dict[str, Any],
+    *,
+    project_id: str,
+    label: str,
+) -> dict[str, Any]:
+    """Unlabeled composed artifacts stay allowed. Explicit foreign project_id fails closed."""
+    explicit = payload.get("project_id")
+    if explicit is not None and str(explicit) != project_id:
+        raise Atlas3Error(
+            "PROJECT_MISMATCH",
+            f"{label} project_id {explicit!r} != requested {project_id!r}",
+        )
+    return payload
 
 
 def compile_home(
@@ -33,20 +55,30 @@ def compile_home(
             "TOKEN_BUDGET_REQUIRED",
             "atlas home requires an explicit positive --budget / token_budget",
         )
-    pulse = compile_pulse(vault, project_id)
-    start = compile_start(
-        vault,
-        project_id,
-        token_budget=token_budget,
-        current_task=current_task,
-        freshness_requirement=freshness_requirement,
+    root = require_vault(vault)
+    pid = require_project(root, project_id)
+    pulse = _bind_project(compile_pulse(root, pid), project_id=pid, label="pulse")
+    start = _bind_project(
+        compile_start(
+            root,
+            pid,
+            token_budget=token_budget,
+            current_task=current_task,
+            freshness_requirement=freshness_requirement,
+        ),
+        project_id=pid,
+        label="start",
     )
-    health = compile_twin_health(vault, project_id)
+    health = _bind_project(
+        compile_twin_health(root, pid),
+        project_id=pid,
+        label="twin-health",
+    )
     return {
         "schema_version": 1,
         "package_id": PACKAGE_ID,
         "generated": {"by": GENERATOR_ID},
-        "project_id": str(pulse.get("project_id") or project_id),
+        "project_id": pid,
         "pulse": pulse,
         "start": start,
         "twin_health": health,

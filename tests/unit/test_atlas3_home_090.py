@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -30,6 +31,56 @@ def test_home_composes_without_authority(tmp_path: Path) -> None:
     assert "questions" in report["pulse"]
     assert "sections" in report["start"]
     assert report["twin_health"]["status"] == "UNKNOWN"
+
+
+def test_foreign_pulse_project_fails_closed(tmp_path: Path) -> None:
+    vault = _vault(tmp_path)
+
+    def fake_pulse(vault_arg: Path, project_id: str) -> dict[str, object]:
+        del vault_arg, project_id
+        return {"project_id": "other-api", "questions": {}}
+
+    with (
+        patch("project_atlas.atlas3.home.compile_pulse", side_effect=fake_pulse),
+        pytest.raises(Atlas3Error) as exc,
+    ):
+        compile_home(vault, "harbor-api", token_budget=64)
+    assert exc.value.code == "PROJECT_MISMATCH"
+
+
+def test_foreign_start_project_fails_closed(tmp_path: Path) -> None:
+    vault = _vault(tmp_path)
+
+    def fake_start(
+        vault_arg: Path,
+        project_id: str,
+        *,
+        token_budget: int,
+        current_task: str | None = None,
+        freshness_requirement: str = "UNKNOWN",
+    ) -> dict[str, object]:
+        del vault_arg, project_id, token_budget, current_task, freshness_requirement
+        return {"project_id": "other-api", "sections": {}}
+
+    with (
+        patch("project_atlas.atlas3.home.compile_start", side_effect=fake_start),
+        pytest.raises(Atlas3Error) as exc,
+    ):
+        compile_home(vault, "harbor-api", token_budget=64)
+    assert exc.value.code == "PROJECT_MISMATCH"
+
+
+def test_output_project_is_requested_not_pulse_fallback(tmp_path: Path) -> None:
+    vault = _vault(tmp_path)
+
+    def fake_pulse(vault_arg: Path, project_id: str) -> dict[str, object]:
+        del vault_arg, project_id
+        return {"questions": {}}
+
+    with patch("project_atlas.atlas3.home.compile_pulse", side_effect=fake_pulse):
+        report = compile_home(vault, "harbor-api", token_budget=64)
+    assert report["project_id"] == "harbor-api"
+    assert report["home_is_authority"] is False
 
 
 def test_budget_required(tmp_path: Path) -> None:
