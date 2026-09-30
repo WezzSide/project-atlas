@@ -13,6 +13,7 @@ from project_atlas.project_roadmap import (
     materialize_roadmap_lenses,
 )
 from project_atlas.schema import validate_record
+from project_atlas.secrets import scan_text
 from project_atlas.web_api.roadmap import read_project_roadmap
 
 
@@ -538,3 +539,34 @@ def test_implemented_all_done_is_not_verified_closed(tmp_path: Path) -> None:
     assert lens["next_unlock"]["lifecycle"] != "CLOSED"
     assert lens["next_unlock"]["reason"] == "remaining_verification"
     assert lens["you_are_here"]["status"] != "VERIFIED_COMPLETION"
+
+
+def test_json_unicode_escape_title_is_not_persisted(tmp_path: Path) -> None:
+    """AS-SEC-SCAN-ROADMAP-JSON-ESC-001: decoded JSON-\\u secrets must not persist."""
+    token = "AKIAAAAAAAAAAAAAAAAA"
+    vault = tmp_path / "vault"
+    note = vault / "projects" / "harbor-api" / "roadmap.md"
+    note.parent.mkdir(parents=True, exist_ok=True)
+    markdown = (
+        "---\ntype: Roadmap\n---\n\n# Roadmap\n\n## Roadmap record\n\n```json\n"
+        '{\n  "items": [{\n    "id": "pkg-sec",\n'
+        '    "title": "\\u0041KIAAAAAAAAAAAAAAAAA",\n'
+        '    "status": "IN_PROGRESS"\n  }]\n}\n```\n'
+    )
+    note.write_text(markdown, encoding="utf-8")
+    (vault / "projects" / "harbor-api" / "project.md").write_text(
+        "---\ntype: Project\ntitle: harbor-api\n---\n\n# harbor-api\n",
+        encoding="utf-8",
+    )
+    assert scan_text(markdown) == []
+    assert token not in markdown
+    materialize_roadmap_lenses(vault, project_ids=["harbor-api"])
+    answer_path = vault / "generated" / "answers" / "ans-roadmap-harbor-api.json"
+    answer = answer_path.read_text(encoding="utf-8")
+    assert token not in answer
+    assert scan_text(answer) == []
+    payload = json.loads(answer)
+    assert payload["items"][0]["title"] == "UNKNOWN"
+    assert payload["you_are_here"]["title"] != token
+    assert payload["next_unlock"]["title"] != token
+    assert token not in str(payload["summary"])
