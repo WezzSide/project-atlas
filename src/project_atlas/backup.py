@@ -818,7 +818,7 @@ def restore_bundle(
         from project_atlas.scaffold import ScaffoldError, create_scaffold
 
         try:
-            create_scaffold(target)
+            create_scaffold(target, mint_identity=False)
         except ScaffoldError as exc:
             raise BackupError(f"restore scaffold failed: {exc}") from exc
 

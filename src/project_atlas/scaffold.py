@@ -250,6 +250,7 @@ def create_scaffold(
     *,
     dry_run: bool = False,
     vault_id: str = DEFAULT_VAULT_ID,
+    mint_identity: bool = True,
 ) -> ScaffoldPlan:
     """Create (or, with ``dry_run``, only plan) the vault scaffold at ``output``.
 
@@ -268,10 +269,11 @@ def create_scaffold(
         return plan
 
     if _is_atlas_vault(resolved):
-        try:
-            ensure_vault_identity(resolved, vault_id=vault_id)
-        except VaultIdentityError as exc:
-            raise ScaffoldError(str(exc)) from exc
+        if mint_identity:
+            try:
+                ensure_vault_identity(resolved, vault_id=vault_id)
+            except VaultIdentityError as exc:
+                raise ScaffoldError(str(exc)) from exc
         _log.info(
             "vault scaffold already exists; init is a no-op",
             extra={"context": {"root": str(resolved)}},
@@ -296,10 +298,14 @@ def create_scaffold(
             raise ScaffoldError(f"refusing to write outside vault root: {relative}") from exc
         _write_atomic(target, content)
 
-    try:
-        identity = ensure_vault_identity(resolved, vault_id=vault_id)
-    except VaultIdentityError as exc:
-        raise ScaffoldError(str(exc)) from exc
+    if mint_identity:
+        try:
+            identity = ensure_vault_identity(resolved, vault_id=vault_id)
+        except VaultIdentityError as exc:
+            raise ScaffoldError(str(exc)) from exc
+        vault_id_note = identity.vault_id
+    else:
+        vault_id_note = "not-minted"
 
     _log.info(
         "vault scaffold created",
@@ -308,7 +314,7 @@ def create_scaffold(
                 "root": str(resolved),
                 "directories": len(plan.directories),
                 "files": len(plan.files),
-                "vault_id": identity.vault_id,
+                "vault_id": vault_id_note,
             }
         },
     )
