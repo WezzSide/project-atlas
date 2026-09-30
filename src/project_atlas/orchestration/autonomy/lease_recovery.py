@@ -155,8 +155,7 @@ def release_stalled_lease_after_exhausted_dispatch(
         raise LeaseRecoveryError(f"unknown lease {lease_id!r}", code="LEASE_UNKNOWN")
     if row.status != "ACTIVE":
         raise LeaseRecoveryError(
-            f"lease {lease_id!r} is already {row.status!r}, not ACTIVE -- "
-            "nothing to release",
+            f"lease {lease_id!r} is already {row.status!r}, not ACTIVE -- nothing to release",
             code="LEASE_NOT_ACTIVE",
         )
 
@@ -235,8 +234,7 @@ def release_stalled_lease_after_exhausted_dispatch(
         )
     except ValidationError as exc:
         raise LeaseRecoveryError(
-            f"lease {lease_id!r} does not reconstruct into a valid "
-            f"AgentLease: {exc}",
+            f"lease {lease_id!r} does not reconstruct into a valid AgentLease: {exc}",
             code="STATE_CORRUPT",
         ) from exc
 

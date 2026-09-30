@@ -197,14 +197,12 @@ class AutonomousGovernor:
             nodes=nodes,
             agents=tuple(self._agents),
             leases=tuple(self._leases),
-            dependencies=tuple(
-                f"{edge.source}->{edge.target}" for edge in self._edges(nodes)
-            ),
+            dependencies=tuple(f"{edge.source}->{edge.target}" for edge in self._edges(nodes)),
             dag_edges=self._edges(nodes),
-            mutation_surfaces=tuple(
-                sorted({node.mutation_surface.surface_id for node in nodes})
-            ),
-            overlap_state=overlap_gate(nodes) if nodes else OverlapState(
+            mutation_surfaces=tuple(sorted({node.mutation_surface.surface_id for node in nodes})),
+            overlap_state=overlap_gate(nodes)
+            if nodes
+            else OverlapState(
                 parallel_execution=False,
                 conflict_surfaces=(),
                 reason="NO_NODES",
@@ -212,9 +210,7 @@ class AutonomousGovernor:
             ci_state=self._ci_state,
             iv_state=self._iv_state,
             certification_state=self._certification_state,
-            owner_gates=tuple(
-                node.owner_gate for node in nodes if node.owner_gate is not None
-            ),
+            owner_gates=tuple(node.owner_gate for node in nodes if node.owner_gate is not None),
             hard_blockers=tuple(self._hard_blockers),
             sequence=self._sequence,
         )
@@ -743,9 +739,7 @@ class AutonomousGovernor:
                 released,
                 live_main=self._current_main,
             )
-        self._leases = [
-            released if item.lease_id == lease_id else item for item in self._leases
-        ]
+        self._leases = [released if item.lease_id == lease_id else item for item in self._leases]
         return released
 
     def execute_leased(self, lease_id: str) -> EvidenceBundle:

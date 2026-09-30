@@ -376,9 +376,7 @@ def evaluate_advancement(
         authorized_candidate_tree_match=(
             head_exists and head_tree == proof.authorized_candidate_tree
         ),
-        merge_parent_1_match=(
-            parent_1_ok and proof.merge_parent_1 == current.trusted_main
-        ),
+        merge_parent_1_match=(parent_1_ok and proof.merge_parent_1 == current.trusted_main),
         merge_parent_2_match=(
             parent_2_ok and proof.merge_parent_2 == proof.authorized_candidate_head
         ),
@@ -846,9 +844,7 @@ def advance_via_checkpoint_recovery(
         if proof.repository_identity != expected_repository_identity:
             raise TrustError("proof repository identity mismatch", code="REPO_IDENTITY_MISMATCH")
         if current.repository_identity != expected_repository_identity:
-            raise TrustError(
-                "current repository identity mismatch", code="REPO_IDENTITY_MISMATCH"
-            )
+            raise TrustError("current repository identity mismatch", code="REPO_IDENTITY_MISMATCH")
     if proof.repository_identity != current.repository_identity:
         raise TrustError(
             "cross-repository anchor reuse is forbidden",
@@ -1198,9 +1194,7 @@ def advance_via_bounded_catchup(
         if proof.repository_identity != expected_repository_identity:
             raise TrustError("proof repository identity mismatch", code="REPO_IDENTITY_MISMATCH")
         if current.repository_identity != expected_repository_identity:
-            raise TrustError(
-                "current repository identity mismatch", code="REPO_IDENTITY_MISMATCH"
-            )
+            raise TrustError("current repository identity mismatch", code="REPO_IDENTITY_MISMATCH")
     if proof.repository_identity != current.repository_identity:
         raise TrustError(
             "cross-repository anchor reuse is forbidden",

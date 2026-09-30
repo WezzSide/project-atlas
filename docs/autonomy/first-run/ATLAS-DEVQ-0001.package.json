@@ -1,0 +1,71 @@
+{
+  "abort_conditions": [
+    "main is not at the sealed base revision before dispatch",
+    "run correlation ambiguous",
+    "result branch moves after ingestion",
+    "result touches forbidden or out-of-scope paths",
+    "verifier verdict REJECTED/UNESTABLISHED repeatedly or attempt ceiling reached"
+  ],
+  "acceptance": {
+    "commands": [
+      "PYTHONPATH=src python -m pytest tests/unit/test_as_graph_005_projections.py tests/unit/test_as_graph_005_adversarial.py tests/unit/test_as_obsidian_capture_001_f11_mkdir_boundary.py -q --no-cov",
+      "PYTHONPATH=src python -m pytest tests/unit -k 'f14 or graph_projection' -q --no-cov",
+      "python -m ruff check src/project_atlas/graph_projections.py tests/unit",
+      "python -m mypy src/project_atlas/graph_projections.py"
+    ],
+    "contract": [
+      "issue #757 F14: read-only dir, unreadable target and ENAMETOOLONG raise GraphProjectionError naming the path",
+      "task-specific tests (graph_projections, F11 boundary, new F14 test) pass; new F14 tests fail on base and pass on head",
+      "ruff and mypy clean on changed files",
+      "infra/atlas-runner tests are corroborating only, never sufficient"
+    ],
+    "note": "infra/atlas-runner tests are corroborating evidence only"
+  },
+  "allowed_paths": [
+    "src/project_atlas/graph_projections.py",
+    "tests/unit/"
+  ],
+  "authority_reference": "OWNER-DIRECTIVE-2026-09-30-AUTONOMOUS-LOOP-FIRST-TASK",
+  "base_revision": "40ad664e16bc7f88735ab3801fab7276da4ab08a",
+  "execution_id": "ATLAS-DEVQ-0001-E1",
+  "expected_agent_branch_pattern": "^atlas/agent-([0-9]+)-([0-9]+)$",
+  "failure_ceiling": {
+    "max_attempts": 3,
+    "repair_base": "previous result branch"
+  },
+  "forbidden_paths": [
+    "infra/atlas-runner/controller",
+    "src/project_atlas/ingestion.py",
+    "src/project_atlas/orchestration/autonomy/trust.py",
+    ".github/"
+  ],
+  "grant_required": "ONE_WORKFLOW_DISPATCH_GRANT",
+  "package_version": 1,
+  "repository": "WezzSide/project-atlas",
+  "result_discovery_contract": {
+    "branch": "atlas/agent-<run_id>-<run_attempt>; head sha = result revision; tree via git commit; merge-base with the sealed base must equal the base; changed paths must lie within allowed_paths and outside forbidden_paths",
+    "evidence_artifact": "atlas-agent-execute-evidence",
+    "ingestion": "ingest_report -> Crosswalk-bound ResultRecord",
+    "run": "single workflow_dispatch run of atlas-agent-execute.yml on main created after the write-ahead DISPATCH record; ambiguity => refuse"
+  },
+  "rollback": "delete the atlas/agent-* branch and close the draft evidence PR; nothing is merged and nothing touches main",
+  "secrets": {
+    "ANTHROPIC_API_KEY": "UNKNOWN (owner confirmation pending; never inspected)"
+  },
+  "task_id": "ATLAS-DEVQ-0001",
+  "verification_profile": {
+    "policy": "PASS iff verifier verdict VERIFIED for the source run AND every check run on the exact result head concluded success (draft evidence PR opened by the adapter); UNESTABLISHED => no verdict",
+    "profile": "github_hosted",
+    "report_artifact": "atlas-verification-report",
+    "workflow": "atlas-runner-verify.yml"
+  },
+  "work_seal": "8e86faba0dcb85bda55151745061e79d558ab62b4cf37b99ba18bee0f14e2abf",
+  "workflow": "atlas-agent-execute.yml",
+  "workflow_inputs": {
+    "agent_type": "claude",
+    "base_branch": "main",
+    "task_prompt": "Atlas dev-loop task ATLAS-DEVQ-0001 | execution ATLAS-DEVQ-0001-E1 | seal 8e86faba0dcb85bda55151745061e79d558ab62b4cf37b99ba18bee0f14e2abf\nRepository WezzSide/project-atlas; base revision 40ad664e16bc7f88735ab3801fab7276da4ab08a; attempt 1/3; authority OWNER-DIRECTIVE-2026-09-30-AUTONOMOUS-LOOP-FIRST-TASK.\nFix GitHub issue #757 (F14) in src/project_atlas/graph_projections.py. In the canonical promotion loop, a read-only output directory (staged.write_bytes), an unreadable existing target (path.read_bytes() == plan[path]) and ENAMETOOLONG (path.exists() and not path.is_file()) currently escape as raw OSError; each must raise GraphProjectionError naming the path, mirroring the existing F11 unwritable-note-directory:<Type>:<path> pattern. Assert on the measured raised exception class, never on hard-coded platform-coupled strings. Add a new test file tests/unit/test_as_obsidian_capture_001_f14_write_boundary.py.\nONLY modify paths under: src/project_atlas/graph_projections.py, tests/unit/.\nNEVER modify: infra/atlas-runner/controller, src/project_atlas/ingestion.py, src/project_atlas/orchestration/autonomy/trust.py, .github/.\nAcceptance (task-specific, all required; run them and keep them passing):\n  - issue #757 F14: read-only dir, unreadable target and ENAMETOOLONG raise GraphProjectionError naming the path\n  - task-specific tests (graph_projections, F11 boundary, new F14 test) pass; new F14 tests fail on base and pass on head\n  - ruff and mypy clean on changed files\n  - infra/atlas-runner tests are corroborating only, never sufficient\n  - run: PYTHONPATH=src python -m pytest tests/unit/test_as_graph_005_projections.py tests/unit/test_as_graph_005_adversarial.py tests/unit/test_as_obsidian_capture_001_f11_mkdir_boundary.py -q --no-cov\n  - run: PYTHONPATH=src python -m pytest tests/unit -k 'f14 or graph_projection' -q --no-cov\n  - run: python -m ruff check src/project_atlas/graph_projections.py tests/unit\n  - run: python -m mypy src/project_atlas/graph_projections.py\nNew tests must fail on the base revision and pass after your change. The infra runner tests alone are NOT sufficient acceptance for this task."
+  },
+  "workflow_inputs_sha256": "8d35c4762dc2b8480cf0578a991b59977b37ab3fb73de24367d2ef23bcc7866a",
+  "workflow_ref": "main"
+}

@@ -199,9 +199,7 @@ def run_estate_preflight(estate_root: Path) -> EstatePreflight:
         except Exception:
             marker_parse_ok = False
     authentic_marker = (
-        marker.is_file()
-        and marker_parse_ok
-        and not is_fixture_or_temp_marker(marker)
+        marker.is_file() and marker_parse_ok and not is_fixture_or_temp_marker(marker)
     )
     readable = os.access(root, os.R_OK)
     preflight_pass = all(
@@ -495,8 +493,7 @@ def refresh_authentic_o2_node_states(repo_root: Path) -> list[str]:
         if (
             node.OWNER_GATE == "NONE"
             and not node.DEPENDENCIES
-            and node.status
-            not in {"READY", "DISPATCHED", "RUNNING", "COMPLETED"}
+            and node.status not in {"READY", "DISPATCHED", "RUNNING", "COMPLETED"}
         ):
             node.status = "READY"
         if mutated:

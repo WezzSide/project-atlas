@@ -170,6 +170,11 @@ class Planner:
         else:
             self._terminal(st, Phase.BLOCKED, decision.reason)
 
+    def fail_execution(self, task_id: str, reason: str) -> None:
+        """The remote execution itself failed (no result): block that lineage only."""
+        st = self._lineage_for(task_id)
+        self._terminal(st, Phase.BLOCKED, f"EXECUTION_FAILED:{reason}")
+
     def _terminal(self, st: LineageState, phase: Phase, reason: str) -> None:
         st.phase, st.reason = phase, reason
         st.history.append(f"{phase.value}:{reason}")

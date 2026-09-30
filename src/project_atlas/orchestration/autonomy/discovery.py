@@ -182,9 +182,7 @@ def collect_live_inventory(repo: Path) -> LiveInventory:
     worktree_dirty = len(status_lines) > 1
 
     def _is_current_dirty_branch(refname: str) -> bool:
-        return (
-            worktree_dirty and current_branch_ref is not None and refname == current_branch_ref
-        )
+        return worktree_dirty and current_branch_ref is not None and refname == current_branch_ref
 
     all_matching_refs = [
         (refname, tip)

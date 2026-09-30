@@ -295,9 +295,10 @@ class AutonomousLoop:
         self._worktree = worktree
         self._execution_host_class_override = execution_host_class_override
         snapshot = governor.snapshot()
-        if evaluate_target_moved(
-            snapshot.current_main, snapshot.current_tree, trusted
-        ) or snapshot.target_moved:
+        if (
+            evaluate_target_moved(snapshot.current_main, snapshot.current_tree, trusted)
+            or snapshot.target_moved
+        ):
             raise LoopError("refusing loop on moved target", code="TARGET_MOVED")
         if not store.exists():
             persist_loop_state(store, initial_loop_state(trusted))
@@ -958,8 +959,7 @@ class AutonomousLoop:
             return True, dispatch_id
         if self._dispatch is None:
             self._fail(
-                f"dangling dispatch {dispatch_id!r} cannot be reobserved without "
-                "a dispatch port",
+                f"dangling dispatch {dispatch_id!r} cannot be reobserved without a dispatch port",
                 code="DISPATCH_UNAVAILABLE",
             )
         observed = self._dispatch.recover(self._root, dispatch_id)

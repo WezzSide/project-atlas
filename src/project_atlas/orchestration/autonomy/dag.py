@@ -24,9 +24,7 @@ ALLOWED_TRANSITIONS: dict[NodeState, frozenset[NodeState]] = {
     NodeState.VERIFYING: frozenset(
         {NodeState.CERTIFIED, NodeState.REMEDIATING, NodeState.BLOCKED, NodeState.OWNER_HELD}
     ),
-    NodeState.REMEDIATING: frozenset(
-        {NodeState.ACTIVE, NodeState.BLOCKED, NodeState.OWNER_HELD}
-    ),
+    NodeState.REMEDIATING: frozenset({NodeState.ACTIVE, NodeState.BLOCKED, NodeState.OWNER_HELD}),
     NodeState.CERTIFIED: frozenset(
         {NodeState.OWNER_HELD, NodeState.MERGE_ELIGIBLE, NodeState.CLOSED}
     ),
@@ -56,9 +54,7 @@ class IllegalTransitionError(ValueError):
 def assert_transition(from_state: NodeState, to_state: NodeState) -> None:
     allowed = ALLOWED_TRANSITIONS.get(from_state)
     if allowed is None or to_state not in allowed:
-        raise IllegalTransitionError(
-            f"illegal transition {from_state.value} -> {to_state.value}"
-        )
+        raise IllegalTransitionError(f"illegal transition {from_state.value} -> {to_state.value}")
 
 
 def apply_transition(

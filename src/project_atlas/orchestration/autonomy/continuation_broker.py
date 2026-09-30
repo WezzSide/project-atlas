@@ -46,9 +46,7 @@ from project_atlas.orchestration.autonomy.return_gate import (
 from project_atlas.orchestration.autonomy.trust import require_full_pin
 from project_atlas.source_identity import IdentityLockError, ProjectIdentityLock
 
-PACKAGE_ID: Final[Literal["AS-ORCH-CONTINUATION-BROKER-001"]] = (
-    "AS-ORCH-CONTINUATION-BROKER-001"
-)
+PACKAGE_ID: Final[Literal["AS-ORCH-CONTINUATION-BROKER-001"]] = "AS-ORCH-CONTINUATION-BROKER-001"
 PRIMARY_CONTINUATION_BACKEND: Final[Literal["CURSOR_SDK_DURABLE_AGENT_RUNTIME"]] = (
     "CURSOR_SDK_DURABLE_AGENT_RUNTIME"
 )
@@ -546,9 +544,7 @@ def final_response_allowed(
             return False
         return may_emit_final_return(_coerce_return_state(return_state))
 
-    if return_state is not None and not may_emit_final_return(
-        _coerce_return_state(return_state)
-    ):
+    if return_state is not None and not may_emit_final_return(_coerce_return_state(return_state)):
         return successor_state in FINAL_RESPONSE_SUCCESSOR_STATES
 
     return successor_state in FINAL_RESPONSE_SUCCESSOR_STATES
@@ -1055,9 +1051,7 @@ def finalize_governor_checkpoint(
     return_state: object | None = None,
 ) -> FinalizeResult:
     """Authoritative checkpoint path. CHECKPOINT_CONTINUE implies successor queued."""
-    terminal_path = (
-        result_class in TERMINAL_RESULT_CLASSES or owner_action_required_now
-    )
+    terminal_path = result_class in TERMINAL_RESULT_CLASSES or owner_action_required_now
     return_state = _resolve_return_state(
         root,
         return_state,
@@ -1077,8 +1071,8 @@ def finalize_governor_checkpoint(
             next_machine_action=None,
             next_machine_action_scheduled=False,
             final_response_allowed=final_response_allowed(
-                owner_action_required_now=owner_action_required_now or result_class
-                == TerminalResultClass.WAITING_OWNER,
+                owner_action_required_now=owner_action_required_now
+                or result_class == TerminalResultClass.WAITING_OWNER,
                 safe_dag_work_remains=remains,
                 successor_state=phase.value,
                 return_state=return_state,

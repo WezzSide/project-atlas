@@ -382,9 +382,7 @@ def project_release(store: Path, lease: AgentLease, *, live_main: str) -> LeaseP
             reject_foreign_package(row=row, package_id=lease.package_id)
             reject_stale_base(row=row, live_main=live_main)
             rows.append(
-                row.model_copy(
-                    update={"status": "RELEASED", "released_sequence": lease.sequence}
-                )
+                row.model_copy(update={"status": "RELEASED", "released_sequence": lease.sequence})
             )
         if not found:
             raise ProjectionError("lease not in projection", code="LEASE_UNKNOWN")
@@ -419,9 +417,7 @@ def project_abandon(store: Path, lease: AgentLease, *, live_main: str) -> LeaseP
             reject_foreign_package(row=row, package_id=lease.package_id)
             reject_stale_base(row=row, live_main=live_main)
             rows.append(
-                row.model_copy(
-                    update={"status": "ABANDONED", "released_sequence": lease.sequence}
-                )
+                row.model_copy(update={"status": "ABANDONED", "released_sequence": lease.sequence})
             )
         if not found:
             raise ProjectionError("lease not in projection", code="LEASE_UNKNOWN")
@@ -519,8 +515,7 @@ def reap_orphaned_lease_releases(
             capabilities = tuple(AgentCapability(value) for value in row.capabilities)
         except ValueError as exc:
             raise ProjectionError(
-                f"completed lease {lease_id!r} has an unrecognized capability "
-                f"value: {exc}",
+                f"completed lease {lease_id!r} has an unrecognized capability value: {exc}",
                 code="STATE_CORRUPT",
             ) from exc
         try:
@@ -553,8 +548,7 @@ def reap_orphaned_lease_releases(
             )
         except ValidationError as exc:
             raise ProjectionError(
-                f"completed lease {lease_id!r} does not reconstruct into a "
-                f"valid AgentLease: {exc}",
+                f"completed lease {lease_id!r} does not reconstruct into a valid AgentLease: {exc}",
                 code="STATE_CORRUPT",
             ) from exc
         try:

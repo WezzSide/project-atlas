@@ -96,7 +96,7 @@ class Crosswalk:
             raise CrosswalkError(f"{kind} for an unbound work seal")
         hop = {k: v for k, v in ev.items() if k not in ("work_seal",)}
         same = [h for h in cur["hops"] if h["event"] == kind]
-        if kind in ("RESULT", "VERIFICATION"):
+        if kind in ("RESULT", "VERIFICATION", "DISPATCH", "RUN"):
             if same:
                 if same[0] != hop:
                     raise CrosswalkError(f"conflicting second {kind} for one work item")
@@ -175,6 +175,48 @@ class Crosswalk:
                 "result_tree": ver.result_tree,
             }
         )
+
+    def bind_dispatch(self, work_seal: str, *, dispatched_at: str, payload_sha256: str) -> None:
+        """Write-ahead record: a work item is dispatched at most once (never re-dispatched)."""
+        self._append(
+            {
+                "event": "DISPATCH",
+                "work_seal": work_seal,
+                "dispatched_at": dispatched_at,
+                "payload_sha256": payload_sha256,
+            }
+        )
+
+    def bind_run(self, work_seal: str, *, run_id: int, run_attempt: int, branch: str) -> None:
+        self._append(
+            {
+                "event": "RUN",
+                "work_seal": work_seal,
+                "run_id": run_id,
+                "run_attempt": run_attempt,
+                "branch": branch,
+            }
+        )
+
+    def hop(self, work_seal: str, kind: str) -> dict[str, Any] | None:
+        row = self._rows.get(work_seal)
+        if row is None:
+            raise CrosswalkError("unbound work seal")
+        return next((h for h in row["hops"] if h["event"] == kind), None)
+
+    def branch_for_revision(self, revision: str) -> str | None:
+        """Result branch that produced ``revision`` (used as repair base); ambiguity => refuse."""
+        found = {
+            run["branch"]
+            for row in self._rows.values()
+            for res in row["hops"]
+            if res["event"] == "RESULT" and res["result_revision"] == revision
+            for run in row["hops"]
+            if run["event"] == "RUN"
+        }
+        if len(found) > 1:
+            raise CrosswalkError(f"revision {revision} maps to several branches")
+        return next(iter(found), None)
 
     # -- resolution -----------------------------------------------------------------------
     def resolve(self, key: str, value: str) -> dict[str, Any]:
