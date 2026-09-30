@@ -52,6 +52,22 @@ _PATTERNS: tuple[tuple[str, str, re.Pattern[str]], ...] = (
         re.compile(r"(?i)\b(?:postgres|mysql|mongodb(?:\+srv)?|redis)://[^\s]+"),
     ),
     ("cloud-access-key", "high", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
+    # AS-SEC-SCAN-F1: well-known token prefixes persist when only
+    # assignment-shaped / AKIA patterns are scanned. Bare ghp_/sk-
+    # must fail closed. Min 32 payload chars on sk- so short fixtures
+    # (sk-test) stay unmatched.
+    ("github-pat", "high", re.compile(r"\bghp_[A-Za-z0-9]{36}\b")),
+    (
+        "github-fine-grained-pat",
+        "high",
+        re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}\b"),
+    ),
+    ("openai-api-key", "high", re.compile(r"\bsk-[A-Za-z0-9]{32,}\b")),
+    (
+        "openai-project-key",
+        "high",
+        re.compile(r"\bsk-proj-[A-Za-z0-9_-]{16,}\b"),
+    ),
 )
 
 
