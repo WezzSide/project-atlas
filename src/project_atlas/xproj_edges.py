@@ -294,12 +294,18 @@ def _secret_findings_present(
     *,
     notes: str | None,
     extension_type: str | None,
+    source_display_name: str | None = None,
+    target_display_name: str | None = None,
 ) -> bool:
     blobs: list[str] = []
     if notes:
         blobs.append(notes)
     if extension_type:
         blobs.append(extension_type)
+    if source_display_name:
+        blobs.append(source_display_name)
+    if target_display_name:
+        blobs.append(target_display_name)
     return any(scan_text(blob) for blob in blobs)
 
 
@@ -381,6 +387,23 @@ def register_global_edge(
     target_display_name: str | None = None,
 ) -> GlobalEdgeRecord | EdgeQuarantineCandidate:
     """Explicit cross-project edge. Name-only / fuzzy / missing globals fail closed."""
+    # AS-SEC-SCAN-XPROJ-QUAR-JSON-ESC-001: scan decoded name-only scalars
+    # before quarantine so ``\\u``-decoded secrets never persist.
+    if _secret_findings_present(
+        notes=notes,
+        extension_type=extension_type,
+        source_display_name=source_display_name,
+        target_display_name=target_display_name,
+    ):
+        return _quarantine(
+            category="secret-finding",
+            reason="secret-finding",
+            inputs={
+                "source_display_name": "[redacted-scan]" if source_display_name else "",
+                "target_display_name": "[redacted-scan]" if target_display_name else "",
+                "notes": "[redacted-scan]" if notes else "",
+            },
+        )
     if fuzzy:
         return _quarantine(
             category="fuzzy-edge-forbidden",
