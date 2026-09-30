@@ -5,6 +5,23 @@ exact commands run, exact results, deviations, and remaining risks.
 
 ---
 
+## AS-OVERVIEW-FOREIGN-SOURCE-BLURB-001 — foreign source_id is not purpose
+
+Base: `b87b4a226f4aa8b2f669edf112aa3476454f754f` / tree `46d1989b026a2f15920ec5e1c78a106799bd1249`.
+
+`_readme_blurb` opened `sources/imported-documents/{source_id}.md` for any
+`source_id` listed on `project.md`. Harbor overview quoted a portal README
+(`SIBLING SECRET PURPOSE`) when connect-manifest owned that id.
+
+Fix: skip source_ids whose connect-manifest `likely_project` is a different
+project. Unmapped source_ids are unchanged. Regression in
+`tests/unit/test_as_overview_foreign_source_blurb_001.py`.
+
+Does not merge, wake OPT, or treat overview as authority.
+`MERGE_AUTHORIZATION = NOT_GRANTED`.
+
+---
+
 ## D-193 — Atlas 3.0 foundation convergence
 
 **Date:** 2026-08-25
