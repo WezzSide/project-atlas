@@ -973,3 +973,80 @@ def test_cwd_traversal_via_dotdot_segment_is_rejected() -> None:
 
 def test_error_types_are_local_execution_error_subclasses() -> None:
     assert issubclass(LocalExecutionDisabledError, LocalExecutionError)
+
+
+def test_i_declared_forbidden_dir_symlink_write_is_not_authority_clean(
+    tmp_path: Path,
+) -> None:
+    """P1: a declared forbidden path that is itself a symlink to an
+    outside store must not skip the snapshot. Writes through the link
+    must fail closed (authority_clean=False). Nested planted links under
+    an in-repo forbidden dir remain link-text-only (I-010 / I-012).
+    """
+    repo = _make_repo(tmp_path)
+    outside = tmp_path / "outside_store"
+    outside.mkdir()
+    (outside / "key").write_text("SECRET_VALUE\n", encoding="utf-8")
+    secrets = repo / "secrets"
+    try:
+        secrets.symlink_to(outside)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlink creation not permitted in this environment")
+    subprocess.run(["git", "add", "secrets"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "track secrets link"],
+        cwd=repo,
+        check=True,
+    )
+    envelope = LocalTaskEnvelope(
+        work_id="I-013",
+        argv=(
+            sys.executable,
+            "-c",
+            "from pathlib import Path; Path('secrets/key').write_text('PWNED\\n')",
+        ),
+        authorized_paths=("src/",),
+        forbidden_paths=("secrets/",),
+    )
+    result = run_local_task(envelope, ENABLED, project_root=repo)
+    assert (outside / "key").read_text(encoding="utf-8") == "PWNED\n"
+    assert result.authority_clean is False
+    assert any(v.reason == "FORBIDDEN_PATH" for v in result.violations)
+    assert result.merge_authorized is False
+    assert result.execution_authorized is False
+
+
+def test_i_declared_forbidden_file_symlink_write_is_not_authority_clean(
+    tmp_path: Path,
+) -> None:
+    """P1 companion: declared forbidden *file* entry that is a symlink
+    to an outside token must not certify authority_clean after a write.
+    """
+    repo = _make_repo(tmp_path)
+    token = tmp_path / "outside_token"
+    token.write_text("TOKEN\n", encoding="utf-8")
+    link = repo / "secrets"
+    try:
+        link.symlink_to(token)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlink creation not permitted in this environment")
+    subprocess.run(["git", "add", "secrets"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "track secrets file link"],
+        cwd=repo,
+        check=True,
+    )
+    envelope = LocalTaskEnvelope(
+        work_id="I-014",
+        argv=(
+            sys.executable,
+            "-c",
+            "from pathlib import Path; Path('secrets').write_text('LEAKED\\n')",
+        ),
+        authorized_paths=("src/",),
+        forbidden_paths=("secrets",),
+    )
+    result = run_local_task(envelope, ENABLED, project_root=repo)
+    assert token.read_text(encoding="utf-8") == "LEAKED\n"
+    assert result.authority_clean is False
+    assert any(v.reason == "FORBIDDEN_PATH" for v in result.violations)

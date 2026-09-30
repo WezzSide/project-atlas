@@ -686,7 +686,25 @@ def _forbidden_path_content_snapshot(
     snapshot: dict[str, str] = {}
     for entry in forbidden_paths:
         is_dir_prefix = entry.endswith("/")
-        base = (repo_root / entry.rstrip("/")).resolve()
+        lexical = repo_root / entry.rstrip("/")
+        # The declared forbidden entry itself may be a tracked symlink /
+        # junction to an outside store. Path.resolve() follows it out of
+        # the repo; skipping that entry (the previous fail-open) left
+        # writes through the link invisible and certified authority_clean.
+        # Nested reparse points *under* an in-repo forbidden directory
+        # stay link-text-only (IV #661 rounds 3-4). The operator-declared
+        # entry is the exception: snapshot the link and a bounded through-
+        # target digest so content writes are detected.
+        if _is_reparse_point(lexical):
+            _snapshot_declared_reparse(
+                lexical,
+                repo_root,
+                entry=entry,
+                snapshot=snapshot,
+                is_dir_prefix=is_dir_prefix,
+            )
+            continue
+        base = lexical.resolve()
         if not base.is_relative_to(repo_root):
             continue  # scope-path validator already rejects traversal; defensive only
         if is_dir_prefix:
@@ -755,14 +773,87 @@ def _snapshot_leaf(file_path: Path, repo_root: Path, snapshot: dict[str, str]) -
     if not file_path.is_file():
         return
     rel = file_path.relative_to(repo_root).as_posix()
+    _snapshot_file_bytes(file_path, rel, snapshot)
+
+
+def _snapshot_file_bytes(file_path: Path, key: str, snapshot: dict[str, str]) -> None:
+    """Bounded content digest keyed independently of repo-relative resolve."""
     try:
         size = file_path.stat().st_size
         with file_path.open("rb") as handle:
             head = handle.read(_MAX_FORBIDDEN_PATH_HASH_BYTES)
     except OSError:
-        snapshot[rel] = "UNREADABLE"
+        snapshot[key] = "UNREADABLE"
         return
-    snapshot[rel] = digest_bytes(head) + f":{size}"
+    snapshot[key] = digest_bytes(head) + f":{size}"
+
+
+_MAX_DECLARED_REPARSE_WALK_FILES = 4096
+
+
+def _snapshot_declared_reparse(
+    lexical: Path,
+    repo_root: Path,
+    *,
+    entry: str,
+    snapshot: dict[str, str],
+    is_dir_prefix: bool,
+) -> None:
+    """Fingerprint a declared forbidden path that is itself a reparse point.
+
+    Link-target text detects repointing. A bounded through-target digest
+    detects content writes that git and link-text hashing both miss.
+    Nested reparse points under the target are not followed.
+    """
+    _snapshot_symlink(lexical, repo_root, snapshot)
+    prefix = entry.rstrip("/")
+    try:
+        target = lexical.resolve()
+    except OSError:
+        return
+    if not is_dir_prefix:
+        if target.is_file() and not _is_reparse_point(target):
+            _snapshot_file_bytes(target, f"{prefix}/*through*", snapshot)
+        return
+    if not target.is_dir():
+        return
+    walked = 0
+    for dirpath, dirnames, filenames in os.walk(target, followlinks=False):
+        dirnames.sort()
+        reparse_names = [name for name in dirnames if _is_reparse_point(Path(dirpath) / name)]
+        dirnames[:] = [name for name in dirnames if name not in reparse_names]
+        rel = Path(dirpath).relative_to(target).as_posix()
+        key_base = prefix if rel == "." else f"{prefix}/{rel}"
+        for name in reparse_names:
+            child = Path(dirpath) / name
+            try:
+                link = os.readlink(child)
+            except OSError:
+                link = "<unreadable>"
+            snapshot[f"{key_base}/{name}"] = (
+                f"SYMLINK:{digest_bytes(link.encode('utf-8', 'surrogateescape'))}"
+            )
+            walked += 1
+            if walked >= _MAX_DECLARED_REPARSE_WALK_FILES:
+                snapshot[f"{prefix}/*truncated*"] = "TRUNCATED"
+                return
+        for name in sorted(filenames):
+            child = Path(dirpath) / name
+            child_key = f"{key_base}/{name}"
+            if _is_reparse_point(child):
+                try:
+                    link = os.readlink(child)
+                except OSError:
+                    link = "<unreadable>"
+                snapshot[child_key] = (
+                    f"SYMLINK:{digest_bytes(link.encode('utf-8', 'surrogateescape'))}"
+                )
+            else:
+                _snapshot_file_bytes(child, child_key, snapshot)
+            walked += 1
+            if walked >= _MAX_DECLARED_REPARSE_WALK_FILES:
+                snapshot[f"{prefix}/*truncated*"] = "TRUNCATED"
+                return
 
 
 def _matches_scope(path: str, patterns: tuple[str, ...]) -> bool:
