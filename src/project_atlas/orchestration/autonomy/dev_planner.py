@@ -153,7 +153,7 @@ class Planner:
             while True:
                 try:
                     rec = self.transport.claim(channel, role=Role.PLANNER, identity=self.identity)
-                except ContractError as exc:  # poisoned wire: rejected by the transport, once
+                except (ContractError, OSError) as exc:  # poisoned wire: rejected once / IO trouble
                     self._quarantine(channel.value, "UNDECODABLE", str(exc))
                     n += 1
                     raises += 1
