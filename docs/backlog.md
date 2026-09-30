@@ -723,6 +723,7 @@ Honesty (mandatory):
 - [x] ORCHLEASE-004 Ack + release visibility after process restart
 - [x] ORCHLEASE-005 Focused + concurrent + control-plane tests
 - [x] ORCHLEASE-006 Exact-head CI + independent IV + adversarial control-plane review (independently verified 2026-08-28, `PASS_WITH_NONBLOCKING_FINDINGS`, 127/127 broader autonomy suite, symlink-escape and tamper/replay defenses reconstructed adversarially, real concurrency race test -- see WORKLOG "EOD convergence wave")
+- [x] ORCHLEASE-008 Contain raw OSError from `_write_atomic` at the lease mutator (`PROJECTION_WRITE_BLOCKED`). An obstructed store parent and a short write previously escaped as `NotADirectoryError` / `OSError` past autonomy CLI / loop catch tuples, which handle `ProjectionError` only. Shared `_write_atomic` stays OSError-typed for origination callers. Reproduced on `b87b4a22`. MERGE_AUTHORIZATION NOT_GRANTED.
 - [ ] ORCHLEASE-007 Owner merge gate (not this package)
 
 ## Atlas 3.0 program (D-191 / D-192 / D-193)

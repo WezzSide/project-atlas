@@ -247,6 +247,18 @@ def _mutate_projection(
             _write_atomic(root / PROJECTION_NAME, updated.model_dump(mode="json"))
     except IdentityLockError as exc:
         raise ProjectionError("projection lock is held", code="CONCURRENT_PROJECTION") from exc
+    except OSError as exc:
+        # IV-ready P1: mkdir / short-write / ENOSPC / EACCES from
+        # ``_write_atomic`` previously escaped this module as a raw
+        # OSError. Autonomy CLI and loop.py catch ProjectionError, not
+        # OSError, so a blocked store crashed the entrypoint instead of
+        # the fail-closed JSON response every other projection failure
+        # already gets. Shared ``_write_atomic`` stays OSError-typed for
+        # origination.py callers; this boundary is the lease-owned wrap.
+        raise ProjectionError(
+            f"lease projection write is blocked ({exc.__class__.__name__})",
+            code="PROJECTION_WRITE_BLOCKED",
+        ) from exc
     return updated
 
 
