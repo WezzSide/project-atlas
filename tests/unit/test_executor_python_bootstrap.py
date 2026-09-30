@@ -81,7 +81,7 @@ def test_deploy_receipt_correlates_release_revision_and_worker_image():
     # image is built/validated/bound strictly before the symlink swap
     assert (
         script.index('"${DOCKER}" build')
-        < script.index("worker-image.json")
+        < script.index('"${RELEASE_DIR}/worker-image.json"')
         < script.index("# --- activate: symlink swap")
     )
     assert ":latest" not in script
