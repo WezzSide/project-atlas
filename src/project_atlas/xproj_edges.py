@@ -450,14 +450,14 @@ def register_global_edge(
             )
         raise
 
-    if _secret_findings_present(notes=notes, extension_type=extension_type):
+    if _secret_findings_present(notes=notes, extension_type=extension_type) or any(
+        scan_text(part) for part in (eid, source, target)
+    ):
+        # AS-SEC-SCAN-XPROJ-ID-JSON-ESC-001: identity tokens scanned too.
         return _quarantine(
             category="secret-finding",
             reason="secret-finding",
-            inputs={"edge_id": eid, "notes": "[redacted-scan]"},
-            edge_id=eid,
-            source=source,
-            target=target,
+            inputs={"edge_id": "[redacted-scan]", "notes": "[redacted-scan]"},
         )
 
     normalized = _normalize_relationship_type(relationship_type)
