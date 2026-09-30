@@ -37,6 +37,26 @@ def test_append_replay_and_no_ops_events_write(tmp_path: Path) -> None:
     assert typed[0]["event_type"] == "AGENT_FAILED"
 
 
+def test_append_same_event_id_altered_payload_fails_closed(tmp_path: Path) -> None:
+    """AT3-014-F2: append-path collision is not a silent replay."""
+    vault = _vault(tmp_path)
+    event = normalize_engineering_event(
+        project_id="harbor-api",
+        kind="failure",
+        source_plane="engineering",
+        summary="CI failed on kdiff",
+    )
+    append_event(vault, "harbor-api", event)
+    collided = dict(event)
+    collided["summary"] = "CI failed on kdiff ALTERED"
+    collided["content_hash"] = "sha256:" + ("ab" * 32)
+    with pytest.raises(Atlas3Error) as exc:
+        append_event(vault, "harbor-api", collided)
+    assert exc.value.code == "EVENT_ID_COLLISION"
+    assert len(list_events(vault, "harbor-api")) == 1
+    assert list_events(vault, "harbor-api")[0]["summary"] == "CI failed on kdiff"
+
+
 def test_query_filters_observed_time_and_corrupt_fails_closed(tmp_path: Path) -> None:
     vault = _vault(tmp_path)
     append_event(

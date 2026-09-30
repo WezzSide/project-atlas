@@ -42,8 +42,12 @@ def append_event(
     path = _ledger_path(root, pid)
     path.parent.mkdir(parents=True, exist_ok=True)
     existing = list_events(root, pid)
+    incoming_id = record.get("event_id")
+    incoming_hash = record.get("content_hash")
     for prior in existing:
-        if prior.get("event_id") == record.get("event_id"):
+        if prior.get("event_id") != incoming_id:
+            continue
+        if prior.get("content_hash") == incoming_hash:
             return {
                 "status": "ok",
                 "package": PACKAGE_ID,
@@ -51,6 +55,10 @@ def append_event(
                 "event_id": record["event_id"],
                 "path": str(LEDGER_RELATIVE / f"{pid}.jsonl"),
             }
+        raise Atlas3Error(
+            "EVENT_ID_COLLISION",
+            f"event_id {incoming_id!r} reused with altered payload",
+        )
     line = json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n"
     with path.open("a", encoding="utf-8", newline="\n") as handle:
         handle.write(line)
