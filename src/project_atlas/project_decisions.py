@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from project_atlas.inventory_drift import attach_source_drift
+from project_atlas.secrets import scan_text
 
 PACKAGE_ID = "AS-CODER-ALPHA-DECISIONS-001"
 GENERATOR_ID = "atlas-coder-alpha-decisions-001"
@@ -439,6 +440,11 @@ def _decision_claims(vault: Path, project_id: str) -> list[dict[str, str]]:
         title = str(claim.get("value") or claim.get("normalized_text") or claim.get("field") or "")
         if not title.strip():
             continue
+        claim_id = str(claim.get("claim_id") or "")
+        # AS-SEC-SCAN-DECISIONS-JSON-ESC-001: json.loads of claims can decode
+        # \\u escapes that scan_text misses on raw bytes.
+        if scan_text(title) or scan_text(claim_id):
+            continue
         status = _classify_decision_status(
             title,
             kind="claim",
@@ -448,7 +454,7 @@ def _decision_claims(vault: Path, project_id: str) -> list[dict[str, str]]:
         out.append(
             {
                 "title": title.strip()[:200],
-                "claim_id": str(claim.get("claim_id") or ""),
+                "claim_id": claim_id,
                 "kind": "claim",
                 "status": status,
                 "authority": "claim",
