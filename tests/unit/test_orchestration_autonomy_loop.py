@@ -31,6 +31,7 @@ from project_atlas.orchestration.autonomy.models import (
     CANONICAL_REPOSITORY_IDENTITY,
     AdvancementReason,
     AgentCapability,
+    AgentRecord,
     ExecutionHostClass,
     IvRequirements,
     MutationSurface,
@@ -137,7 +138,9 @@ def test_schema_registered() -> None:
     validate_record(initial_loop_state(_anchor()).model_dump(mode="json"), "autonomy-loop-state")
 
 
-def test_in_process_ready_completes_and_stops_without_owner(tmp_path: Path) -> None:
+def test_in_process_implementation_waits_for_independent_verification(
+    tmp_path: Path,
+) -> None:
     gov = _governor(_node("AS-ORCH-NEXT-001"))
     loop = _loop(tmp_path, gov)
     result = loop.run_until_stop()
@@ -146,7 +149,148 @@ def test_in_process_ready_completes_and_stops_without_owner(tmp_path: Path) -> N
     assert result.merge_authorized is False
     assert result.authority_granted is False
     node = next(item for item in gov.snapshot().nodes if item.package_id == "AS-ORCH-NEXT-001")
-    assert node.state in {NodeState.CERTIFIED, NodeState.OWNER_HELD, NodeState.CLOSED}
+    assert node.state is NodeState.VERIFYING
+    assert gov.snapshot().certification_state.value != "CERTIFIED"
+
+
+def test_successful_implementer_result_does_not_certify_required_iv(tmp_path: Path) -> None:
+    gov = _governor(_node("AS-ORCH-IV-BOUNDARY-001"))
+    loop = _loop(tmp_path, gov)
+
+    loop.tick()
+
+    node = next(
+        item for item in gov.snapshot().nodes if item.package_id == "AS-ORCH-IV-BOUNDARY-001"
+    )
+    assert node.state is NodeState.VERIFYING
+    assert gov.snapshot().certification_state.value != "CERTIFIED"
+
+
+def test_loop_selects_worker_that_has_required_capability(tmp_path: Path) -> None:
+    agents = (
+        AgentRecord(
+            agent_id="verify-first",
+            capabilities=(AgentCapability.VERIFY, AgentCapability.ADVERSARIAL_REVIEW),
+        ),
+        AgentRecord(
+            agent_id="implement-second",
+            capabilities=(AgentCapability.IMPLEMENT,),
+        ),
+    )
+    gov = AutonomousGovernor(
+        current_main=PIN,
+        current_tree=TREE,
+        trusted_anchor=_anchor(),
+        agents=agents,
+    )
+    gov.add_node(
+        _node(
+            "AS-ORCH-CAPABILITY-001",
+            host=ExecutionHostClass.EXTERNAL_AGENT,
+        )
+    )
+    port = CallableDispatchPort(
+        lambda _root: {"dispatch_id": "disp-capability", "status": "RUNNING"}
+    )
+
+    result = _loop(tmp_path, gov, port).tick()
+
+    assert result.dispatched is True
+    assert gov.snapshot().leases[-1].agent_id == "implement-second"
+
+
+def test_loop_selects_verifier_capability_for_verification_node(tmp_path: Path) -> None:
+    agents = (
+        AgentRecord(agent_id="implement-first", capabilities=(AgentCapability.IMPLEMENT,)),
+        AgentRecord(
+            agent_id="verify-second",
+            capabilities=(AgentCapability.VERIFY, AgentCapability.ADVERSARIAL_REVIEW),
+        ),
+    )
+    gov = AutonomousGovernor(
+        current_main=PIN,
+        current_tree=TREE,
+        trusted_anchor=_anchor(),
+        agents=agents,
+    )
+    node = _node("AS-ORCH-IV-CAPABILITY-001", host=ExecutionHostClass.EXTERNAL_AGENT)
+    node = node.model_copy(update={"agent_capabilities_required": (AgentCapability.VERIFY,)})
+    gov.add_node(node)
+    port = CallableDispatchPort(
+        lambda _root: {"dispatch_id": "disp-verify-cap", "status": "RUNNING"}
+    )
+
+    result = _loop(tmp_path, gov, port).tick()
+
+    assert result.dispatched is True
+    assert gov.snapshot().leases[-1].agent_id == "verify-second"
+
+
+def test_loop_does_not_dispatch_when_no_worker_has_required_capability(tmp_path: Path) -> None:
+    agents = (
+        AgentRecord(
+            agent_id="verify-only",
+            capabilities=(AgentCapability.VERIFY, AgentCapability.ADVERSARIAL_REVIEW),
+        ),
+    )
+    gov = AutonomousGovernor(
+        current_main=PIN,
+        current_tree=TREE,
+        trusted_anchor=_anchor(),
+        agents=agents,
+    )
+    gov.add_node(_node("AS-ORCH-CAPABILITY-MISSING-001", host=ExecutionHostClass.EXTERNAL_AGENT))
+    calls: list[str] = []
+    port = CallableDispatchPort(
+        lambda _root: (
+            calls.append("dispatch") or {"dispatch_id": "wrong-agent", "status": "RUNNING"}
+        )
+    )
+
+    with pytest.raises(LoopError) as exc:
+        _loop(tmp_path, gov, port).tick()
+
+    assert exc.value.code == "CAPABILITY_UNAVAILABLE"
+    assert calls == []
+    assert not gov.snapshot().leases
+
+
+def test_failed_worker_result_is_not_treated_as_independent_review_failure(
+    tmp_path: Path,
+) -> None:
+    gov = _governor(_node("AS-ORCH-EXEC-FAIL-001", host=ExecutionHostClass.EXTERNAL_AGENT))
+    port = CallableDispatchPort(lambda _root: {"dispatch_id": "disp-exec-fail", "status": "FAILED"})
+
+    _loop(tmp_path, gov, port).tick()
+
+    node = next(item for item in gov.snapshot().nodes if item.package_id == "AS-ORCH-EXEC-FAIL-001")
+    assert node.state is NodeState.BLOCKED
+    assert node.retry_policy.cycles_used == 0
+    assert gov.snapshot().iv_state.value != "FAIL"
+
+
+def test_missing_verifier_blocks_only_its_node_and_finalizes_attempt(tmp_path: Path) -> None:
+    agents = (AgentRecord(agent_id="implement-only", capabilities=(AgentCapability.IMPLEMENT,)),)
+    gov = AutonomousGovernor(
+        current_main=PIN,
+        current_tree=TREE,
+        trusted_anchor=_anchor(),
+        agents=agents,
+    )
+    gov.add_node(_node("AS-ORCH-NO-VERIFIER-001", host=ExecutionHostClass.EXTERNAL_AGENT))
+    port = CallableDispatchPort(
+        lambda _root: {"dispatch_id": "disp-no-verifier", "status": "COMPLETED"}
+    )
+
+    result = _loop(tmp_path, gov, port).tick()
+
+    node = next(
+        item for item in gov.snapshot().nodes if item.package_id == "AS-ORCH-NO-VERIFIER-001"
+    )
+    assert result.phase is LoopPhase.IDLE
+    assert node.state is NodeState.BLOCKED
+    assert result.dispatch_id is None
+    assert gov.snapshot().certification_state.value != "CERTIFIED"
 
 
 def test_in_process_recovery_within_same_process_after_partial_execution(
@@ -206,7 +350,9 @@ def test_in_process_recovery_within_same_process_after_partial_execution(
     result = loop.recover()  # must not raise IllegalTransitionError
     assert result.phase is not LoopPhase.FAILED_CLOSED
     node = next(item for item in gov.snapshot().nodes if item.package_id == "AS-ORCH-CRASH-001")
-    assert node.state in {NodeState.CERTIFIED, NodeState.OWNER_HELD, NodeState.CLOSED}
+    # EXECUTION_SUCCESS != CERTIFICATION: a successful implementer result routes
+    # to independent IV and stays VERIFYING until a bound verifier verdict.
+    assert node.state is NodeState.VERIFYING
 
 
 def test_in_process_recovery_fails_closed_on_unexpected_node_state(tmp_path: Path) -> None:
@@ -570,7 +716,9 @@ def test_orphaned_dispatch_recovery_reconciles_completed(tmp_path: Path) -> None
     assert calls == ["dispatch"]  # never re-dispatched a duplicate process
     assert result.stop_reason is None
     node = next(item for item in gov.snapshot().nodes if item.package_id == "AS-ORCH-ORPHAN-001")
-    assert node.state in {NodeState.CERTIFIED, NodeState.OWNER_HELD, NodeState.CLOSED}
+    # EXECUTION_SUCCESS != CERTIFICATION: a successful implementer result routes
+    # to independent IV and stays VERIFYING until a bound verifier verdict.
+    assert node.state is NodeState.VERIFYING
 
 
 def test_orphaned_dispatch_recovery_reconciles_still_running(tmp_path: Path) -> None:
@@ -758,7 +906,9 @@ def test_validating_dangling_in_process_redrives_and_completes(tmp_path: Path) -
     assert loop.state.active_dispatch_id is None
     assert dispatch_id in loop.state.completed_dispatch_ids
     node = next(item for item in gov.snapshot().nodes if item.package_id == package_id)
-    assert node.state in {NodeState.CERTIFIED, NodeState.OWNER_HELD}
+    # EXECUTION_SUCCESS != CERTIFICATION: a successful implementer result routes
+    # to independent IV and stays VERIFYING until a bound verifier verdict.
+    assert node.state is NodeState.VERIFYING
     # A repeated tick() on the now-IDLE loop must not re-stall either.
     again = loop.tick()
     assert again.phase is LoopPhase.STOPPED
@@ -839,7 +989,9 @@ def test_validating_dangling_external_dispatch_reobserves_before_redriving(tmp_p
     assert recover_calls == ["val-3"]  # re-observed the durable record
     assert result.phase is LoopPhase.IDLE
     node = next(item for item in gov.snapshot().nodes if item.package_id == package_id)
-    assert node.state in {NodeState.CERTIFIED, NodeState.OWNER_HELD}
+    # EXECUTION_SUCCESS != CERTIFICATION: a successful implementer result routes
+    # to independent IV and stays VERIFYING until a bound verifier verdict.
+    assert node.state is NodeState.VERIFYING
     assert "cc" * 32 in loop.state.completed_result_digests
 
 
@@ -1022,8 +1174,9 @@ def test_crash_recover_does_not_respawn(tmp_path: Path) -> None:
     recover_calls: list[str] = []
     port = CallableDispatchPort(
         lambda _root: {"dispatch_id": "disp-crash", "status": "RUNNING"},
-        recover=lambda _root, did: recover_calls.append(did)
-        or {"dispatch_id": did, "status": "RUNNING"},
+        recover=lambda _root, did: (
+            recover_calls.append(did) or {"dispatch_id": did, "status": "RUNNING"}
+        ),
     )
     loop = _loop(tmp_path, gov, port)
     loop.tick()
@@ -1062,9 +1215,12 @@ def test_digest_roundtrip(tmp_path: Path) -> None:
     state = initial_loop_state(_anchor())
     persisted = persist_loop_state(tmp_path / "s", state)
     assert verify_loop_state(persisted).record_digest == hash_payload(persisted.unsigned_payload())
-    assert persisted.record_digest != seal_loop_state(
-        persisted.model_copy(update={"sequence": 1, "record_digest": "00" * 32})
-    ).record_digest
+    assert (
+        persisted.record_digest
+        != seal_loop_state(
+            persisted.model_copy(update={"sequence": 1, "record_digest": "00" * 32})
+        ).record_digest
+    )
 
 
 def test_package_id_constant() -> None:
@@ -1092,3 +1248,96 @@ def test_resource_boundary_enqueues_yield_not_owner(tmp_path: Path) -> None:
     assert recovered is not None
     assert recovered.kind is SuccessorKind.RESOURCE_YIELD
     assert recovered.execution_authorized is False
+
+
+def _leased_for_dispatch(
+    tmp_path: Path,
+    package_id: str,
+    *,
+    host: ExecutionHostClass,
+    override: ExecutionHostClass | None,
+) -> tuple[AutonomousGovernor, str]:
+    gov = _governor(_node(package_id, host=host))
+    loop = _loop(tmp_path, gov)
+    lease = gov.lease(
+        package_id,
+        loop._first_agent(),
+        branch=loop._branch,
+        worktree=loop._worktree,
+        execution_host_class_override=override,
+    )
+    return gov, lease.lease_id
+
+
+def test_local_process_dispatch_requires_governed_override(tmp_path: Path) -> None:
+    """LOCAL_PROCESS is not a blanket bypass: a node that merely *declares* the
+    host class (no governed override on its lease) is denied at dispatch."""
+    from project_atlas.orchestration.autonomy.governor import GovernorError
+
+    gov, lease_id = _leased_for_dispatch(
+        tmp_path, "AS-ORCH-HOST-DECLARED-001", host=ExecutionHostClass.LOCAL_PROCESS, override=None
+    )
+    ran: list[str] = []
+    with pytest.raises(GovernorError) as exc:
+        gov.dispatch_external_leased(lease_id, lambda: ran.append("x") or {})
+    assert exc.value.code == "HOST_NOT_AUTHORIZED"
+    assert ran == []
+
+
+def test_local_process_dispatch_allowed_through_governed_override(tmp_path: Path) -> None:
+    gov, lease_id = _leased_for_dispatch(
+        tmp_path,
+        "AS-ORCH-HOST-GOVERNED-001",
+        host=ExecutionHostClass.IN_PROCESS,
+        override=ExecutionHostClass.LOCAL_PROCESS,
+    )
+    assert gov.dispatch_external_leased(lease_id, lambda: {"ok": True}) == {"ok": True}
+
+
+def test_in_process_host_is_denied_external_dispatch(tmp_path: Path) -> None:
+    from project_atlas.orchestration.autonomy.governor import GovernorError
+
+    gov, lease_id = _leased_for_dispatch(
+        tmp_path, "AS-ORCH-HOST-INPROC-001", host=ExecutionHostClass.IN_PROCESS, override=None
+    )
+    with pytest.raises(GovernorError) as exc:
+        gov.dispatch_external_leased(lease_id, lambda: {})
+    assert exc.value.code == "HOST_NOT_AUTHORIZED"
+
+
+def test_mailbox_successor_can_never_run_as_local_process(tmp_path: Path) -> None:
+    from project_atlas.orchestration.autonomy.governor import GovernorError
+
+    # An unguarded mailbox successor cannot even be leased, let alone be
+    # redirected to a local process by an override.
+    with pytest.raises(GovernorError) as exc:
+        _leased_for_dispatch(
+            tmp_path,
+            "MBX-SUCC-HOST-001",
+            host=ExecutionHostClass.IN_PROCESS,
+            override=ExecutionHostClass.LOCAL_PROCESS,
+        )
+    assert exc.value.code == "MAILBOX_AUTHORITY_REVALIDATION_REQUIRED"
+
+
+def test_failed_local_process_result_keeps_remediation_contract(tmp_path: Path) -> None:
+    """Only EXTERNAL_AGENT failures are RESULT-not-VERDICT blocks; the governed
+    local/in-process controlled-failure -> remediation-retry contract is kept."""
+    gov = _governor(_node("AS-ORCH-LOCAL-FAIL-001", host=ExecutionHostClass.IN_PROCESS))
+    loop = _loop(tmp_path, gov)
+    lease = gov.lease(
+        "AS-ORCH-LOCAL-FAIL-001",
+        loop._first_agent(),
+        branch=loop._branch,
+        worktree=loop._worktree,
+    )
+    gov.transition("AS-ORCH-LOCAL-FAIL-001", NodeState.ACTIVE, "TEST_ACTIVE")
+    loop._save(
+        phase=LoopPhase.AWAITING_RESULT,
+        active_package_id="AS-ORCH-LOCAL-FAIL-001",
+        active_lease_id=lease.lease_id,
+        active_dispatch_id="disp-local-fail",
+    )
+    loop.apply_observed_result("disp-local-fail", "dd" * 32, passed=False)
+    node = next(n for n in gov.snapshot().nodes if n.package_id == "AS-ORCH-LOCAL-FAIL-001")
+    assert node.state is not NodeState.BLOCKED

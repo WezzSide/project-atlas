@@ -685,6 +685,7 @@ def _restore_leased_node(
                 update={"execution_host_class": execution_host_class_override}
             )
             governor._replace(overridden)
+            governor.record_governed_host_override(package_id, execution_host_class_override)
     except (GovernorError, IllegalTransitionError) as exc:
         # A prior process's real governor would have gone through these
         # exact same transitions successfully to reach LEASED in the first

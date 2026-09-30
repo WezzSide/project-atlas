@@ -80,7 +80,6 @@ SCHEMA_FILES: dict[str, str] = {
     "xproj-index-document": "xproj-index-document.schema.json",
     # AS-XPROJ-003 - Duplicate / successor review candidates (derived; no autocollapse)
     "xproj-duplicate-candidate": "xproj-duplicate-candidate.schema.json",
-
     # AS-BACKUP-001 — verified snapshot / restore (operational durability ≠ authority)
     "backup-manifest": "backup-manifest.schema.json",
     "backup-meta": "backup-meta.schema.json",
@@ -202,6 +201,8 @@ SCHEMA_FILES: dict[str, str] = {
     "opt-experiment-receipt": "opt-experiment-receipt.schema.json",
     # AS-ORCH-001A — agent result envelope (evidence ≠ authority; classify ≠ execute)
     "agent-result-envelope": "agent-result-envelope.schema.json",
+    "agent-inbox-message": "agent-inbox-message.schema.json",
+    "mailbox-successor-binding-v1": "mailbox-successor-binding-v1.schema.json",
     # AS-ORCH-001B — typed task directive + discriminated routing output
     "task-directive": "task-directive.schema.json",
     "orchestration-route": "orchestration-route.schema.json",
@@ -285,6 +286,4 @@ def validate_record(record: BaseModel | dict[str, Any], kind: str) -> None:
     error = next(validator.iter_errors(instance), None)
     if error is not None:
         location = "/".join(str(part) for part in error.absolute_path) or "<root>"
-        raise SchemaValidationError(
-            f"{kind} record violates schema at {location}: {error.message}"
-        )
+        raise SchemaValidationError(f"{kind} record violates schema at {location}: {error.message}")
