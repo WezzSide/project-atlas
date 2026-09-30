@@ -1363,6 +1363,10 @@ def _apply_lifecycle(
                 for record in (
                     ClaimLifecycleRecord.model_validate(item) for item in raw["claims"]
                 )
+                # AS-SEC-SCAN-KC-LIFECYCLE-JSON-ESC-001: json.loads of prior
+                # lifecycle claim_id can decode \\u escapes that scan_text
+                # misses on raw bytes. Drop those rows before rewrite.
+                if not scan_text(record.claim_id)
             }
         except (ValidationError, TypeError) as exc:
             raise ValueError(f"invalid claim lifecycle state: {state_path}") from exc
