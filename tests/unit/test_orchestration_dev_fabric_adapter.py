@@ -781,3 +781,81 @@ def test_recover_trouble_is_reported_not_raised(tmp_path, monkeypatch):
     _spool, _xw, ad, _pl = build(tmp_path, gh)
     monkeypatch.setattr(ad, "recover", lambda: (_ for _ in ()).throw(RuntimeError("disk")))
     assert any(e.startswith("RECOVER_ERROR") for e in ad.tick())
+
+
+# ---- round-6 IV regressions ---------------------------------------------------------------
+
+
+@pytest.mark.parametrize("channel", ["WORK", "VERIFICATION"])
+@pytest.mark.parametrize("kind", ["deep", "binary", "dir", "empty"])
+def test_hostile_spool_entries_never_wedge_or_spin_the_tick(tmp_path, channel, kind):
+    gh = FakeGitHub()
+    _spool, _xw, ad, _pl = build(tmp_path, gh)
+    d = tmp_path / "spool" / channel
+    d.mkdir(parents=True, exist_ok=True)
+    name = "0" * 64 + ".json"  # sorts before any real seal
+    if kind == "deep":
+        (d / name).write_text("[" * 200000, encoding="utf-8")
+    elif kind == "binary":
+        (d / name).write_bytes(b"\xff\xfe\x00bad")
+    elif kind == "dir":
+        (d / name).mkdir()
+    else:
+        (d / name).write_text("", encoding="utf-8")
+    for _ in range(3):
+        ad.tick()  # returns (no infinite loop), never raises
+    assert len(gh.dispatches) == 1  # the legitimate work still got through
+
+
+def test_readopt_persist_failure_is_retried_and_never_loses_the_work(tmp_path, monkeypatch):
+    from project_atlas.orchestration.autonomy import dev_fabric_adapter as fa
+
+    gh = FakeGitHub()
+    spool, _xw, ad, _pl = build(tmp_path, gh)
+    w = spool.claim(Channel.WORK, role=Role.IMPLEMENTER, identity=ad.executor_identity)
+    assert w is not None
+    real = fa._atomic_write
+    calls = {"n": 0}
+
+    def flaky(path, text):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OSError(28, "ENOSPC")
+        return real(path, text)
+
+    monkeypatch.setattr(fa, "_atomic_write", flaky)
+    assert any(e.startswith("WORK_READOPT_DEFERRED") for e in ad.tick())
+    assert "DISPATCHED:DEVQ-1" in ad.tick()  # retried next tick; ledger untouched until persisted
+    assert len(gh.dispatches) == 1
+
+
+def test_torn_claim_meta_still_counts_as_unowned_and_is_readopted(tmp_path):
+    gh = FakeGitHub()
+    spool, _xw, ad, _pl = build(tmp_path, gh)
+    w = spool.claim(Channel.WORK, role=Role.IMPLEMENTER, identity=ad.executor_identity)
+    assert w is not None
+    (tmp_path / "spool" / "WORK" / "claimed" / f"{w.seal}.claim.json").write_text(
+        "", encoding="utf-8"
+    )
+    ad2 = FabricAdapter(
+        gh,
+        spool,
+        Crosswalk(tmp_path / "xw.jsonl"),
+        pending_dir=tmp_path / "pending",
+        clock=lambda: "2026-09-30T15:59:00Z",
+        task_statement=statement,
+        required_checks=frozenset({"quality"}),
+    )
+    assert "WORK_READOPTED:DEVQ-1" in ad2.tick()
+
+
+def test_ledger_tolerates_a_torn_tail_and_does_not_grow_on_idempotent_binds(tmp_path):
+    gh = FakeGitHub()
+    _spool, xw, ad, _pl = build(tmp_path, gh)
+    ad.tick()
+    before = (tmp_path / "xw.jsonl").read_text(encoding="utf-8")
+    ad.xw.bind_work(next(iter(ad.works.values())))
+    assert (tmp_path / "xw.jsonl").read_text(encoding="utf-8") == before  # no duplicate WORK row
+    (tmp_path / "xw.jsonl").write_text(before + '{"event": "RES', encoding="utf-8")  # torn append
+    reopened = Crosswalk(tmp_path / "xw.jsonl")
+    assert reopened.unbound_dispatches() == xw.unbound_dispatches()

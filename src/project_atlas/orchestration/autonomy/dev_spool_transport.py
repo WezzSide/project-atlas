@@ -80,30 +80,21 @@ class SpoolTransport:
             raise TransportError(f"role {role.value} may not claim from {channel.value}")
         d = self._dir(channel)
         for path in sorted(p for p in d.glob("*.json") if not p.name.startswith(".")):
+            if not path.is_file() or path.is_symlink():
+                continue  # directories/symlinks/devices are never records; skip, never spin
             try:
                 wire = path.read_text(encoding="utf-8")
+                rec = decode(wire)
+                bad = "" if rec.seal == path.stem else "spool file name does not match record seal"
             except FileNotFoundError:
                 continue  # another claimer consumed it between listing and reading
-            try:
-                rec = decode(wire)
-            except ContractError:
+            except (OSError, ValueError, ContractError, RecursionError) as exc:
+                bad = f"unreadable or undecodable spool file: {type(exc).__name__}"
+            if bad:
                 # reject exactly once, keep the bytes as evidence, never wedge the channel
-                rej = d / "rejected"
-                rej.mkdir(exist_ok=True)
-                try:
-                    os.replace(path, rej / path.name)
-                except FileNotFoundError:
-                    continue
-                raise
-            if rec.seal != path.stem:
-                # a mis-named (copied/renamed) record: reject exactly once, never wedge the channel
-                rej = d / "rejected"
-                rej.mkdir(exist_ok=True)
-                try:
-                    os.replace(path, rej / path.name)
-                except FileNotFoundError:
-                    continue
-                raise TransportError("spool file name does not match record seal")
+                if self._park(d, path):
+                    raise TransportError(bad)
+                continue  # could not even park it: skip it instead of raising forever
             if channel is Channel.VERIFICATION:
                 assert isinstance(rec, VerificationRequest)
                 if not same_identity(identity, rec.verifier_identity):
@@ -114,12 +105,25 @@ class SpoolTransport:
                 os.rename(path, d / _CLAIMED / path.name)  # exactly one claimer wins
             except FileNotFoundError:
                 continue  # lost the race to another claimer
-            (d / _CLAIMED / f"{rec.seal}.claim.json").write_text(
+            meta = d / _CLAIMED / f"{rec.seal}.claim.json"
+            tmp = meta.with_suffix(".tmp")
+            tmp.write_text(
                 json.dumps({"identity": identity, "role": role.value}, sort_keys=True),
                 encoding="utf-8",
             )
+            os.replace(tmp, meta)  # atomic: never a torn meta
             return rec
         return None
+
+    @staticmethod
+    def _park(d: Path, path: Path) -> bool:
+        rej = d / "rejected"
+        try:
+            rej.mkdir(exist_ok=True)
+            os.replace(path, rej / path.name)
+        except OSError:
+            return False
+        return True
 
     def claimed_records(self, channel: Channel, *, identity: str) -> list[Record]:
         """Records this identity claimed earlier (crash recovery: claim-before-persist window)."""
@@ -129,16 +133,24 @@ class SpoolTransport:
             seal = rec_path.stem
             meta = d / f"{seal}.claim.json"
             try:
-                if meta.exists():  # owned: only its claimer may re-adopt it
-                    who = json.loads(meta.read_text(encoding="utf-8")).get("identity", "")
-                    if not same_identity(str(who), identity):
-                        continue
+                who = _claimer(meta)
+                if who is not None and not same_identity(who, identity):
+                    continue  # owned by another identity: only its claimer may re-adopt it
                 # no meta => crash between rename and meta write: the caller must check that the
                 # record is addressed to it (the adapter does, for VERIFICATION)
                 rec = decode(rec_path.read_text(encoding="utf-8"))
                 if rec.seal != seal:
                     continue
                 out.append(rec)
-            except (OSError, ValueError, ContractError):
+            except (OSError, ValueError, ContractError, RecursionError):
                 continue  # unreadable claim evidence is ignored, never trusted
         return out
+
+
+def _claimer(meta: Path) -> str | None:
+    """Identity recorded in a claim meta; a missing/torn/garbled meta counts as 'unowned'."""
+    try:
+        who = json.loads(meta.read_text(encoding="utf-8")).get("identity")
+    except (OSError, ValueError, AttributeError, RecursionError):
+        return None
+    return who if isinstance(who, str) else None

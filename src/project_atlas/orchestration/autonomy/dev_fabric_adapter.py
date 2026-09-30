@@ -23,11 +23,14 @@ OPERATING ASSUMPTIONS (documented residuals, enforced by deployment, not by this
     while the adapter has an unbound dispatch (the adapter refuses to guess on ambiguity);
   * evidence PRs must be opened with a PAT/App token (not ``GITHUB_TOKEN``) or task CI will not
     trigger and no verdict is ever produced (fail-closed, never a PASS);
-  * a manual re-run of the executor run is refused (attempt guard) before and after ingestion.
+  * a manual re-run of the executor run is refused (attempt guard) before and after ingestion;
+  * single writer: exactly one adapter process per (ledger, pending dir, executor identity); two
+    concurrent adapters would each hold their own in-memory ledger view and could double-adopt.
 """
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -126,6 +129,7 @@ DEFAULT_REQUIRED_CHECKS = frozenset(
         "quality (windows-latest, 3.12, windows)",
     }
 )
+MAX_ACCEPT_PER_TICK = 64  # per-tick ceiling on channel claims (hostile spool entries)
 CLOCK_SKEW = timedelta(seconds=120)
 DISPATCH_DEADLINE = timedelta(minutes=15)
 _OK = frozenset({"success", "skipped", "neutral"})
@@ -138,6 +142,12 @@ def _atomic_write(path: Path, text: str) -> None:
         fh.flush()
         os.fsync(fh.fileno())
     os.replace(tmp, path)
+
+
+def _park(f: Path, suffix: str = ".rejected") -> None:
+    """Move a bad pending file aside (best effort, portable); never raise out of housekeeping."""
+    with contextlib.suppress(OSError):
+        os.replace(f, f.with_suffix(suffix))
 
 
 def _parse(iso: str) -> datetime:
@@ -273,8 +283,8 @@ class FabricAdapter:
                 if not isinstance(w, WorkItem):
                     raise ContractError("not a work item")
                 self.xw.bind_work(w)  # idempotent; closes the persist-before-bind crash window
-            except ContractError:
-                f.rename(f.with_suffix(".rejected"))  # never loaded, never dispatched
+            except (ContractError, OSError, RecursionError):
+                _park(f)  # never loaded, never dispatched
                 continue
             self.works[w.seal] = w
 
@@ -430,8 +440,8 @@ class FabricAdapter:
                     raise ContractError("not a result record")
                 if self.xw.hop(rec.work_seal, "RESULT") is None:
                     self.xw.bind_result(rec)
-            except ContractError as exc:  # stray/forged file: park it, go on
-                f.rename(f.with_suffix(".rejected"))
+            except (ContractError, OSError, RecursionError) as exc:  # stray/forged: park, go on
+                _park(f)
                 out.append(f"RESULT_FILE_REJECTED:{f.name}:{exc}")
                 continue
             if self.transport.publish(rec):
@@ -444,8 +454,8 @@ class FabricAdapter:
                     raise ContractError("not a verdict record")
                 row = self.xw.resolve("execution_id", v.execution_id)
                 hop = self.xw.hop(str(row["work_seal"]), "VERDICT")
-            except ContractError as exc:  # unknown execution / forged file
-                f.rename(f.with_suffix(".rejected"))
+            except (ContractError, OSError, RecursionError) as exc:  # unknown execution / forged
+                _park(f)
                 out.append(f"VERDICT_FILE_REJECTED:{f.name}:{exc}")
                 continue
             if hop is None or hop["verdict_seal"] != v.seal:
@@ -475,10 +485,16 @@ class FabricAdapter:
             ):
                 continue
             try:
-                self.xw.bind_work(rec)  # validates uniqueness BEFORE anything is persisted
-                _atomic_write(self._work_file(rec.seal), encode(rec))
-            except (ContractError, OSError) as exc:
-                self._refused_marker(rec.seal).write_text(str(exc), encoding="utf-8")
+                _atomic_write(self._work_file(rec.seal), encode(rec))  # persist FIRST
+            except OSError as exc:  # transient: stays claimed, retried next tick
+                out.append(f"WORK_READOPT_DEFERRED:{rec.task_id}:{exc}")
+                continue
+            try:
+                self.xw.bind_work(rec)  # uniqueness check; a refusal tombstones + unpersists
+            except ContractError as exc:
+                self._work_file(rec.seal).unlink(missing_ok=True)
+                with contextlib.suppress(OSError):
+                    self._refused_marker(rec.seal).write_text(str(exc), encoding="utf-8")
                 out.append(f"WORK_READOPT_REFUSED:{rec.task_id}:{exc}")
                 continue
             self.works[rec.seal] = rec
@@ -517,8 +533,13 @@ class FabricAdapter:
     def pending_verifications(self) -> list[VerificationRequest]:
         out: list[VerificationRequest] = []
         for f in sorted(self.pending.glob("verify-*.json")):
-            r = decode(f.read_text(encoding="utf-8"))
-            assert isinstance(r, VerificationRequest)
+            try:
+                r = decode(f.read_text(encoding="utf-8"))
+                if not isinstance(r, VerificationRequest):
+                    raise ContractError("not a verification request")
+            except (ContractError, OSError, RecursionError):
+                _park(f)  # a garbled pending file must not block the other verifications
+                continue
             out.append(r)
         return out
 
@@ -637,14 +658,15 @@ class FabricAdapter:
             events.extend(self.recover())
         except Exception as exc:
             events.append(f"RECOVER_ERROR:{type(exc).__name__}:{exc}")
-        while True:
+        for _ in range(MAX_ACCEPT_PER_TICK):  # bounded: a hostile channel cannot spin the tick
             try:
                 w = self.accept_work()
-            except (ContractError, OSError) as exc:  # e.g. duplicate execution id, disk trouble
+            except (ContractError, RecursionError) as exc:  # e.g. duplicate execution id
                 events.append(f"ACCEPT_REFUSED:{exc}")
-                if isinstance(exc, OSError):
-                    break  # do not spin on a failing disk; the claimed record is re-adopted
                 continue
+            except OSError as exc:  # do not spin on a failing disk; claimed records are re-adopted
+                events.append(f"ACCEPT_REFUSED:{exc}")
+                break
             if w is None:
                 break
             events.append(f"ACCEPTED:{w.task_id}")
@@ -672,13 +694,16 @@ class FabricAdapter:
                 events.append(f"TRANSIENT:{w.task_id}:{exc}")
             except Exception as exc:
                 events.append(f"UNEXPECTED:{w.task_id}:{type(exc).__name__}:{exc}")
-        while True:
+        for _ in range(MAX_ACCEPT_PER_TICK):
             try:
                 if self.accept_verification() is None:
                     break
-            except (ContractError, OSError) as exc:  # poisoned/mis-named request: parked once
+            except (ContractError, RecursionError) as exc:  # poisoned request: parked once
                 events.append(f"VERIFICATION_REFUSED:{exc}")
                 continue
+            except OSError as exc:
+                events.append(f"VERIFICATION_REFUSED:{exc}")
+                break
             events.append("VERIFICATION_ACCEPTED")
         for req in self.pending_verifications():
             work = next((x for x in self.works.values() if x.task_id == req.task_id), None)

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -60,7 +61,11 @@ class Crosswalk:
         self._rows: dict[str, dict[str, Any]] = {}
         self._index: dict[tuple[str, str], str] = {}
         if self.path.exists():
-            for n, line in enumerate(self.path.read_text(encoding="utf-8").splitlines(), 1):
+            text = self.path.read_text(encoding="utf-8")
+            lines = text.splitlines()
+            if lines and not text.endswith("\n"):
+                lines.pop()  # torn tail: that append was never completed/acknowledged
+            for n, line in enumerate(lines, 1):
                 try:
                     ev = json.loads(line)
                     self._apply(ev)
@@ -73,6 +78,7 @@ class Crosswalk:
         with self.path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(ev, sort_keys=True) + "\n")
             fh.flush()
+            os.fsync(fh.fileno())  # write-ahead means durable: DISPATCH must survive a host crash
 
     def _apply(self, ev: dict[str, Any]) -> None:
         kind, ws = ev["event"], ev["work_seal"]
@@ -128,6 +134,8 @@ class Crosswalk:
     def bind_work(self, work: WorkItem) -> tuple[str, str]:
         work.verify_seal()
         d, ls = derive_dispatch_id(work), derive_lease_id(work)
+        if work.seal in self._rows:  # idempotent: a seal determines all its bound fields
+            return d, ls
         self._append(
             {
                 "event": "WORK",
