@@ -85,7 +85,12 @@ class SpoolTransport:
             try:
                 wire = path.read_text(encoding="utf-8")
                 rec = decode(wire)
-                bad = "" if rec.seal == path.stem else "spool file name does not match record seal"
+                if rec.seal != path.stem:
+                    bad = "spool file name does not match record seal"
+                elif CHANNEL_FOR_KIND[rec.KIND] is not channel:
+                    bad = "record kind does not belong to this channel"
+                else:
+                    bad = ""
             except FileNotFoundError:
                 continue  # another claimer consumed it between listing and reading
             except (OSError, ValueError, ContractError, RecursionError) as exc:
@@ -96,7 +101,8 @@ class SpoolTransport:
                     raise TransportError(bad)
                 continue  # could not even park it: skip it instead of raising forever
             if channel is Channel.VERIFICATION:
-                assert isinstance(rec, VerificationRequest)
+                if not isinstance(rec, VerificationRequest):  # unreachable: kind/channel checked
+                    raise TransportError("record kind does not belong to this channel")
                 if not same_identity(identity, rec.verifier_identity):
                     continue  # addressed to someone else: leave it, never wedge this claimer
                 if same_identity(identity, rec.executor_identity):

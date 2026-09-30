@@ -295,7 +295,8 @@ class FabricAdapter:
         )
         if w is None:
             return None
-        assert isinstance(w, WorkItem)
+        if not isinstance(w, WorkItem):
+            raise ContractError("claimed record is not a work item")
         _atomic_write(self._work_file(w.seal), encode(w))
         self.works[w.seal] = w
         self.xw.bind_work(w)
@@ -526,7 +527,8 @@ class FabricAdapter:
         )
         if req is None:
             return None
-        assert isinstance(req, VerificationRequest)
+        if not isinstance(req, VerificationRequest):
+            raise ContractError("claimed record is not a verification request")
         _atomic_write(self.pending / f"verify-{req.seal}.json", encode(req))
         return req
 
@@ -664,6 +666,9 @@ class FabricAdapter:
             except (ContractError, RecursionError) as exc:  # e.g. duplicate execution id
                 events.append(f"ACCEPT_REFUSED:{exc}")
                 continue
+            except Exception as exc:
+                events.append(f"ACCEPT_UNEXPECTED:{type(exc).__name__}:{exc}")
+                continue  # bounded by MAX_ACCEPT_PER_TICK
             except OSError as exc:  # do not spin on a failing disk; claimed records are re-adopted
                 events.append(f"ACCEPT_REFUSED:{exc}")
                 break
@@ -701,6 +706,9 @@ class FabricAdapter:
             except (ContractError, RecursionError) as exc:  # poisoned request: parked once
                 events.append(f"VERIFICATION_REFUSED:{exc}")
                 continue
+            except Exception as exc:
+                events.append(f"VERIFICATION_UNEXPECTED:{type(exc).__name__}:{exc}")
+                continue  # bounded by MAX_ACCEPT_PER_TICK
             except OSError as exc:
                 events.append(f"VERIFICATION_REFUSED:{exc}")
                 break

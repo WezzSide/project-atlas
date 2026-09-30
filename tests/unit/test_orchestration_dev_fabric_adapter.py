@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 
 import pytest
 
-from project_atlas.orchestration.autonomy.dev_contracts import Role, make_work
+from project_atlas.orchestration.autonomy.dev_contracts import Role, Verdict, make_work
 from project_atlas.orchestration.autonomy.dev_crosswalk import Crosswalk
 from project_atlas.orchestration.autonomy.dev_fabric_adapter import (
     AdapterError,
@@ -859,3 +859,34 @@ def test_ledger_tolerates_a_torn_tail_and_does_not_grow_on_idempotent_binds(tmp_
     (tmp_path / "xw.jsonl").write_text(before + '{"event": "RES', encoding="utf-8")  # torn append
     reopened = Crosswalk(tmp_path / "xw.jsonl")
     assert reopened.unbound_dispatches() == xw.unbound_dispatches()
+
+
+@pytest.mark.parametrize("channel", ["WORK", "VERIFICATION"])
+def test_valid_record_of_the_wrong_kind_is_parked_and_never_wedges_the_tick(tmp_path, channel):
+    gh = FakeGitHub()
+    _spool, _xw, ad, _pl = build(tmp_path, gh)
+    foreign = make_work(
+        task_id="Z", execution_id="Z-E1", lineage_root="Z", **{**FIELDS, "authority_ref": "AUTH-9"}
+    )
+    d = tmp_path / "spool" / channel
+    d.mkdir(parents=True, exist_ok=True)
+    name = f"{'0' * 64}.json" if channel == "WORK" else f"{foreign.seal}.json"
+    if channel == "WORK":
+        # a verdict-kind record named by its own seal sits in WORK
+        from project_atlas.orchestration.autonomy.dev_contracts import (
+            make_result,
+            make_verdict,
+            make_verification_request,
+        )
+
+        res = make_result(foreign, executor_identity="impl", result_revision=R1, result_tree=T1)
+        req = make_verification_request(foreign, res, verifier_identity="ver")
+        ver = make_verdict(req, verdict=Verdict.PASS)
+        name = f"{ver.seal}.json"
+        (d / name).write_text(encode(ver), encoding="utf-8")
+    else:
+        (d / name).write_text(encode(foreign), encoding="utf-8")
+    for _ in range(3):
+        ad.tick()  # never raises
+    assert (d / "rejected" / name).exists()
+    assert len(gh.dispatches) == 1
