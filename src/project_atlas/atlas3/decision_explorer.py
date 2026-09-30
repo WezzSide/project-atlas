@@ -92,6 +92,12 @@ def _rows(raw: object, *, project_id: str) -> list[dict[str, Any]]:
                 "DECISION_IDENTITY_INCOMPLETE",
                 "decision requires decision_id and text",
             )
+        explicit = item.get("project_id")
+        if explicit is not None and str(explicit) != project_id:
+            raise Atlas3Error(
+                "CROSS_PROJECT",
+                f"decision row project_id {explicit!r} != requested {project_id!r}",
+            )
         origin = item.get("owner_origin")
         origin_dict = origin if isinstance(origin, dict) else None
         if status == "confirmed_owner" and not _valid_owner_origin(origin_dict):

@@ -72,6 +72,59 @@ def test_confirmed_owner_decision(tmp_path: Path) -> None:
     assert report["model_is_owner"] is False
 
 
+def test_foreign_decision_project_fails_closed(tmp_path: Path) -> None:
+    vault = _vault(tmp_path)
+    _write_declared(
+        vault,
+        {
+            "project_id": "harbor-api",
+            "decisions": [
+                {
+                    "decision_id": "d-pg16",
+                    "text": "Use PostgreSQL 16",
+                    "status": "confirmed_owner",
+                    "project_id": "other-api",
+                    "owner_origin": {
+                        "evidence_kind": "explicit_owner_statement",
+                        "origin": "owner",
+                        "statement": "Use PostgreSQL 16",
+                    },
+                    "evidence_refs": ["adr-001"],
+                }
+            ],
+        },
+    )
+    with pytest.raises(Atlas3Error) as exc:
+        compile_decision_explorer(vault, "harbor-api")
+    assert exc.value.code == "CROSS_PROJECT"
+
+
+def test_unlabeled_decision_still_compiles(tmp_path: Path) -> None:
+    vault = _vault(tmp_path)
+    _write_declared(
+        vault,
+        {
+            "project_id": "harbor-api",
+            "decisions": [
+                {
+                    "decision_id": "d-pg16",
+                    "text": "Use PostgreSQL 16",
+                    "status": "confirmed_owner",
+                    "owner_origin": {
+                        "evidence_kind": "explicit_owner_statement",
+                        "origin": "owner",
+                        "statement": "Use PostgreSQL 16",
+                    },
+                    "evidence_refs": ["adr-001"],
+                }
+            ],
+        },
+    )
+    report = compile_decision_explorer(vault, "harbor-api")
+    assert report["status"] == "derived"
+    assert report["decisions"][0]["project_id"] == "harbor-api"
+
+
 def test_model_paraphrase_fails_closed(tmp_path: Path) -> None:
     vault = _vault(tmp_path)
     _write_declared(
