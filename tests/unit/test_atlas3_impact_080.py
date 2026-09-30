@@ -87,6 +87,49 @@ def test_row_trust_score_fails_closed(tmp_path: Path) -> None:
     assert exc.value.code == "TRUST_SCORE_FORBIDDEN"
 
 
+def test_foreign_row_project_fails_closed(tmp_path: Path) -> None:
+    vault = _vault(tmp_path)
+    _write_declared(
+        vault,
+        {
+            "project_id": "harbor-api",
+            "impacts": [
+                {
+                    "impact_kind": "blocks",
+                    "from_id": "conflict-1",
+                    "to_id": "release-1",
+                    "evidence_refs": ["doc:conflicts.md#pg"],
+                    "project_id": "other-api",
+                }
+            ],
+        },
+    )
+    with pytest.raises(Atlas3Error) as exc:
+        compile_impact_explorer(vault, "harbor-api")
+    assert exc.value.code == "CROSS_PROJECT"
+
+
+def test_unlabeled_row_still_compiles(tmp_path: Path) -> None:
+    vault = _vault(tmp_path)
+    _write_declared(
+        vault,
+        {
+            "project_id": "harbor-api",
+            "impacts": [
+                {
+                    "impact_kind": "blocks",
+                    "from_id": "conflict-1",
+                    "to_id": "release-1",
+                    "evidence_refs": ["doc:conflicts.md#pg"],
+                }
+            ],
+        },
+    )
+    report = compile_impact_explorer(vault, "harbor-api")
+    assert report["status"] == "derived"
+    assert report["impacts"][0]["project_id"] == "harbor-api"
+
+
 def test_cross_project_fails_closed(tmp_path: Path) -> None:
     vault = _vault(tmp_path)
     _write_declared(vault, {"project_id": "foreign", "impacts": []})
