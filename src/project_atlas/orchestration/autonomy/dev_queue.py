@@ -68,6 +68,33 @@ class Selection:
     skipped: tuple[tuple[str, str], ...]  # (task_id, reason), rank order
 
 
+def _is_int(v: object) -> bool:
+    return isinstance(v, int) and not isinstance(v, bool)
+
+
+def _check_types(i: QueueItem) -> None:
+    """Fail closed on malformed field types (bool/float ints, str dependency lists, bad enums)."""
+    if (
+        not isinstance(i.task_id, str)
+        or not isinstance(i.title, str)
+        or not isinstance(i.lane, str)
+    ):
+        raise QueueError("task_id/title/lane must be str")
+    if not isinstance(i.category, Category):
+        raise QueueError(f"{i.task_id}: category must be a Category")
+    for name in ("severity", "roadmap_value", "attempts", "max_attempts"):
+        if not _is_int(getattr(i, name)):
+            raise QueueError(f"{i.task_id}: {name} must be an int")
+    if not isinstance(i.depends_on, tuple) or not all(isinstance(d, str) for d in i.depends_on):
+        raise QueueError(f"{i.task_id}: depends_on must be a tuple of str")
+    if not isinstance(i.requires_owner, tuple) or not all(
+        isinstance(o, OwnerInput) for o in i.requires_owner
+    ):
+        raise QueueError(f"{i.task_id}: requires_owner must be a tuple of OwnerInput")
+    if not isinstance(i.bounded, bool) or not isinstance(i.reversible, bool):
+        raise QueueError(f"{i.task_id}: bounded/reversible must be bool")
+
+
 def validate(items: Iterable[QueueItem]) -> tuple[QueueItem, ...]:
     """Reject duplicate ids, self/unknown dependencies, malformed severity and dependency cycles."""
     seq = tuple(items)
@@ -76,6 +103,7 @@ def validate(items: Iterable[QueueItem]) -> tuple[QueueItem, ...]:
         raise QueueError("duplicate task_id")
     known = set(ids)
     for i in seq:
+        _check_types(i)
         if not i.task_id:
             raise QueueError("empty task_id")
         if not 0 <= i.severity <= 3:
