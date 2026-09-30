@@ -10,12 +10,14 @@ import pytest
 from project_atlas.event_retention import apply_event_retention, default_policy
 from project_atlas.event_tombstones import (
     TombstoneError,
+    empty_index,
     list_tombstones,
     projection_inventory,
     record_explicit_tombstone,
     record_retention_tombstones,
 )
 from project_atlas.schema import validate_record
+from project_atlas.secrets import scan_text
 
 
 def _write_unit(vault: Path, project: str, event: str, *, payload: str = "x") -> None:
@@ -116,3 +118,33 @@ def test_as_int_010_deterministic_merge(tmp_path: Path) -> None:
     assert first == second
     keys = [t["unit_key"] for t in list_tombstones(vault)]
     assert keys == sorted(keys)
+
+
+def test_json_unicode_escape_event_id_is_not_rewritten(tmp_path: Path) -> None:
+    """AS-SEC-SCAN-TOMBSTONE-JSON-ESC-001: decoded event_id must not persist."""
+    token = "AKIAAAAAAAAAAAAAAAAA"
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    index = empty_index()
+    index["tombstones"] = [
+        {
+            "unit_key": f"harbor-api/{token}",
+            "project_id": "harbor-api",
+            "event_id": token,
+            "reason": "explicit",
+            "deleted_paths": [
+                f"sources/agent-events/harbor-api/{token}",
+                f"receipts/agent-events/harbor-api/{token}.yaml",
+            ],
+            "state": "deleted",
+        }
+    ]
+    raw = json.dumps(index).replace(token, "\\u0041KIAAAAAAAAAAAAAAAAA")
+    written = vault / "generated" / "ops" / "event-tombstones.json"
+    written.parent.mkdir(parents=True)
+    written.write_text(raw, encoding="utf-8")
+    assert scan_text(raw) == []
+    record_explicit_tombstone(vault, project_id="harbor-api", event_id="evt-other")
+    text = written.read_text(encoding="utf-8")
+    assert token not in text
+    assert scan_text(text) == []
