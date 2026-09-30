@@ -141,6 +141,7 @@ def test_ingest_success_binds_exact_result(tmp_path):
         ({"task_id": "OTHER"}, "identity"),
         ({"execution_id": "OTHER-E1"}, "identity"),
         ({"changed_paths": ("infra/atlas-runner/controller/merge_gate.py",)}, "forbidden"),
+        ({"changed_paths": ("src/x/a.py", "src/y/b.py")}, "outside allowed_paths"),
     ],
 )
 def test_workflow_success_alone_is_never_a_result(tmp_path, kw, match):

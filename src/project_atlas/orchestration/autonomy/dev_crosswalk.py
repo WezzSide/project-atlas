@@ -253,6 +253,12 @@ def ingest_report(report: RemoteExecutionReport, work: WorkItem, xw: Crosswalk) 
     ]
     if forbidden:
         raise CrosswalkError(f"result touches forbidden paths: {forbidden}")
+    if work.allowed_paths:
+        outside = [
+            p for p in report.changed_paths if not any(p.startswith(a) for a in work.allowed_paths)
+        ]
+        if outside:
+            raise CrosswalkError(f"result touches paths outside allowed_paths: {outside}")
     res = make_result(
         work,
         executor_identity=report.executor_identity,
