@@ -283,7 +283,7 @@ class FabricAdapter:
                 if not isinstance(w, WorkItem):
                     raise ContractError("not a work item")
                 self.xw.bind_work(w)  # idempotent; closes the persist-before-bind crash window
-            except (ContractError, OSError, RecursionError):
+            except (ContractError, OSError, ValueError, RecursionError):
                 _park(f)  # never loaded, never dispatched
                 continue
             self.works[w.seal] = w
@@ -441,7 +441,12 @@ class FabricAdapter:
                     raise ContractError("not a result record")
                 if self.xw.hop(rec.work_seal, "RESULT") is None:
                     self.xw.bind_result(rec)
-            except (ContractError, OSError, RecursionError) as exc:  # stray/forged: park, go on
+            except (
+                ContractError,
+                OSError,
+                ValueError,
+                RecursionError,
+            ) as exc:  # stray/forged: park, go on
                 _park(f)
                 out.append(f"RESULT_FILE_REJECTED:{f.name}:{exc}")
                 continue
@@ -455,7 +460,12 @@ class FabricAdapter:
                     raise ContractError("not a verdict record")
                 row = self.xw.resolve("execution_id", v.execution_id)
                 hop = self.xw.hop(str(row["work_seal"]), "VERDICT")
-            except (ContractError, OSError, RecursionError) as exc:  # unknown execution / forged
+            except (
+                ContractError,
+                OSError,
+                ValueError,
+                RecursionError,
+            ) as exc:  # unknown execution / forged
                 _park(f)
                 out.append(f"VERDICT_FILE_REJECTED:{f.name}:{exc}")
                 continue
@@ -539,7 +549,7 @@ class FabricAdapter:
                 r = decode(f.read_text(encoding="utf-8"))
                 if not isinstance(r, VerificationRequest):
                     raise ContractError("not a verification request")
-            except (ContractError, OSError, RecursionError):
+            except (ContractError, OSError, ValueError, RecursionError):
                 _park(f)  # a garbled pending file must not block the other verifications
                 continue
             out.append(r)
@@ -642,11 +652,11 @@ class FabricAdapter:
                 rep = self.port.read_json_artifact(
                     c.run_id, REPORT_ARTIFACT, "verification-report.json"
                 )
-            except AdapterError:
-                continue  # that run has no report (yet); it may belong to another lineage
+            except (AdapterError, KeyError, ValueError, TypeError, OSError, RecursionError):
+                continue  # that run has no (usable) report; it may belong to another lineage
             try:
                 same = int(str(rep.get("source_run_id"))) == source_run
-            except ValueError:
+            except (ValueError, AttributeError):
                 same = False
             if same:
                 matches.append(rep)
@@ -666,12 +676,12 @@ class FabricAdapter:
             except (ContractError, RecursionError) as exc:  # e.g. duplicate execution id
                 events.append(f"ACCEPT_REFUSED:{exc}")
                 continue
-            except Exception as exc:
-                events.append(f"ACCEPT_UNEXPECTED:{type(exc).__name__}:{exc}")
-                continue  # bounded by MAX_ACCEPT_PER_TICK
             except OSError as exc:  # do not spin on a failing disk; claimed records are re-adopted
                 events.append(f"ACCEPT_REFUSED:{exc}")
                 break
+            except Exception as exc:
+                events.append(f"ACCEPT_UNEXPECTED:{type(exc).__name__}:{exc}")
+                continue  # bounded by MAX_ACCEPT_PER_TICK
             if w is None:
                 break
             events.append(f"ACCEPTED:{w.task_id}")
@@ -706,12 +716,12 @@ class FabricAdapter:
             except (ContractError, RecursionError) as exc:  # poisoned request: parked once
                 events.append(f"VERIFICATION_REFUSED:{exc}")
                 continue
-            except Exception as exc:
-                events.append(f"VERIFICATION_UNEXPECTED:{type(exc).__name__}:{exc}")
-                continue  # bounded by MAX_ACCEPT_PER_TICK
             except OSError as exc:
                 events.append(f"VERIFICATION_REFUSED:{exc}")
                 break
+            except Exception as exc:
+                events.append(f"VERIFICATION_UNEXPECTED:{type(exc).__name__}:{exc}")
+                continue  # bounded by MAX_ACCEPT_PER_TICK
             events.append("VERIFICATION_ACCEPTED")
         for req in self.pending_verifications():
             work = next((x for x in self.works.values() if x.task_id == req.task_id), None)

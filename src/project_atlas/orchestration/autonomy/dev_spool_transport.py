@@ -111,13 +111,21 @@ class SpoolTransport:
                 os.rename(path, d / _CLAIMED / path.name)  # exactly one claimer wins
             except FileNotFoundError:
                 continue  # lost the race to another claimer
+            except OSError:
+                # the claimed/ slot is blocked (directory, permissions): never retry it forever
+                if self._park(d, path):
+                    raise TransportError("record could not be claimed and was parked") from None
+                continue
             meta = d / _CLAIMED / f"{rec.seal}.claim.json"
             tmp = meta.with_suffix(".tmp")
-            tmp.write_text(
-                json.dumps({"identity": identity, "role": role.value}, sort_keys=True),
-                encoding="utf-8",
-            )
-            os.replace(tmp, meta)  # atomic: never a torn meta
+            try:
+                tmp.write_text(
+                    json.dumps({"identity": identity, "role": role.value}, sort_keys=True),
+                    encoding="utf-8",
+                )
+                os.replace(tmp, meta)  # atomic: never a torn meta
+            except OSError:
+                pass  # best effort: the claim already happened; a missing meta means 'unowned'
             return rec
         return None
 

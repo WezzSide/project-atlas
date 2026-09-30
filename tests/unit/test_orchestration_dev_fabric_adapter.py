@@ -659,8 +659,7 @@ def test_non_adapter_errors_never_wedge_the_tick_or_later_verifications(tmp_path
     gh.checks[R1] = {"quality": ("completed", "success")}
     gh.verifier_runs(rid, "VERIFIED")
     ev = ad.tick()  # must not raise
-    assert any(e.startswith("VERDICT_UNEXPECTED:DEVQ-1") for e in ev)
-    assert "VERDICT:DEVQ-1" not in ev
+    assert "VERDICT:DEVQ-1" not in ev  # unusable report candidate skipped: no verdict, no wedge
 
 
 def test_rerun_after_ingestion_cannot_vouch_for_the_old_head(tmp_path):
@@ -890,3 +889,50 @@ def test_valid_record_of_the_wrong_kind_is_parked_and_never_wedges_the_tick(tmp_
         ad.tick()  # never raises
     assert (d / "rejected" / name).exists()
     assert len(gh.dispatches) == 1
+
+
+# ---- round-8 IV regressions ---------------------------------------------------------------
+
+
+def test_blocked_claimed_slot_parks_the_record_and_the_channel_keeps_flowing(tmp_path):
+    gh = FakeGitHub()
+    spool, _xw, ad, _pl = build(tmp_path, gh)
+    d = tmp_path / "spool" / "WORK"
+    legit = next(p.stem for p in d.glob("*.json"))
+    evil = None
+    for i in range(500):  # grind a seal that sorts before the legitimate record
+        cand = make_work(
+            task_id="EVIL",
+            execution_id="EVIL-E1",
+            lineage_root="EVIL",
+            **{**FIELDS, "authority_ref": f"AUTH-{i}"},
+        )
+        if cand.seal < legit:
+            evil = cand
+            break
+    assert evil is not None and spool.publish(evil)
+    (d / "claimed" / f"{evil.seal}.json").mkdir(parents=True, exist_ok=True)  # slot blocked
+    for _ in range(3):
+        ad.tick()  # never raises, never spins
+    assert len(gh.dispatches) == 1  # the legitimate work still got through
+    assert (d / "rejected" / f"{evil.seal}.json").exists()
+
+
+@pytest.mark.parametrize("prefix", ["work-", "result-", "verdict-", "verify-"])
+def test_invalid_utf8_in_pending_files_is_parked_not_fatal(tmp_path, prefix):
+    gh = FakeGitHub()
+    _spool, _xw, ad, _pl = build(tmp_path, gh)
+    ad.tick()
+    (ad.pending / f"{prefix}{'0' * 64}.json").write_bytes(b"\xff\xfe\x00bad")
+    ad.tick()  # tick itself survives
+    ad2 = FabricAdapter(  # and so does a restart (the constructor loads work-*.json)
+        gh,
+        _spool,
+        Crosswalk(tmp_path / "xw.jsonl"),
+        pending_dir=ad.pending,
+        clock=lambda: "2026-09-30T15:59:00Z",
+        task_statement=statement,
+        required_checks=frozenset({"quality"}),
+    )
+    ad2.tick()
+    assert list(ad.pending.glob(f"{prefix}{'0' * 64}.rejected"))
