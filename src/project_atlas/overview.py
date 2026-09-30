@@ -21,6 +21,7 @@ from typing import Any
 
 from project_atlas.dogfood_compiler_coverage import attach_compiler_coverage
 from project_atlas.inventory_drift import attach_source_drift
+from project_atlas.secrets import scan_text
 
 PACKAGE_ID = "AS-CODER-ALPHA-OVERVIEW-001"
 GENERATOR_ID = "atlas-coder-alpha-overview-001"
@@ -56,6 +57,26 @@ def _list_projects(vault: Path) -> list[str]:
     )
 
 
+def _redact_secret_scalars(value: Any) -> Any:
+    """Replace decoded secret-shaped strings before overview persist.
+
+    AS-SEC-SCAN-OVERVIEW-JSON-ESC-001: ``json.loads`` of fenced semantic
+    JSON can decode ``\\u`` escapes that ``scan_text`` misses on raw
+    markdown. Those scalars must not reach ``ans-overview-*.json``.
+    """
+    if isinstance(value, str):
+        return "UNKNOWN" if scan_text(value) else value
+    if isinstance(value, dict):
+        out: dict[Any, Any] = {}
+        for key, child in value.items():
+            safe_key = "UNKNOWN" if isinstance(key, str) and scan_text(key) else key
+            out[safe_key] = _redact_secret_scalars(child)
+        return out
+    if isinstance(value, list):
+        return [_redact_secret_scalars(child) for child in value]
+    return value
+
+
 def _parse_semantic_record(project_md: str) -> dict[str, Any] | None:
     match = _JSON_FENCE_RE.search(project_md)
     if not match:
@@ -64,7 +85,10 @@ def _parse_semantic_record(project_md: str) -> dict[str, Any] | None:
         raw = json.loads(match.group(1))
     except json.JSONDecodeError:
         return None
-    return raw if isinstance(raw, dict) else None
+    if not isinstance(raw, dict):
+        return None
+    redacted = _redact_secret_scalars(raw)
+    return redacted if isinstance(redacted, dict) else None
 
 
 def _first_prose_blurb(markdown: str, *, max_chars: int = 480) -> str | None:
