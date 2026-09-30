@@ -21,6 +21,7 @@ from project_atlas.compat_anchor import (
     require_compatibility_anchor,
 )
 from project_atlas.schema import SchemaValidationError, validate_record
+from project_atlas.secrets import scan_text
 
 PACKAGE_ID = "AS-2.0-TEMPORAL-001"
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -105,9 +106,16 @@ def normalize_validity_window(window: ClaimValidityWindow) -> dict[str, Any]:
     claim_id = window.claim_id.strip()
     if not _ID_RE.fullmatch(claim_id):
         raise BitemporalError("bitemporal-claim-id-invalid")
+    # AS-SEC-SCAN-BITEMPORAL-CLAIMID-JSON-ESC-001: json.loads of persisted
+    # claims can decode ``\u`` claim ids that scan_text misses on raw bytes.
+    # Do not persist those values into generated/ops/bitemporal/.
+    if scan_text(claim_id):
+        raise BitemporalError("bitemporal-claim-id-secret")
     compilation = window.knowledge_compilation_id.strip()
     if not _COMPILATION_RE.fullmatch(compilation):
         raise BitemporalError("bitemporal-compilation-id-invalid")
+    if scan_text(compilation):
+        raise BitemporalError("bitemporal-compilation-id-secret")
 
     start = _parse_instant(window.valid_from, field="valid-from")
     end: datetime | None = None
@@ -292,6 +300,8 @@ def write_validity_catalog(
     cid = catalog_id.strip()
     if not _COMPILATION_RE.fullmatch(cid):
         raise BitemporalError("bitemporal-catalog-id-invalid")
+    if scan_text(cid):
+        raise BitemporalError("bitemporal-catalog-id-secret")
 
     items = [normalize_validity_window(w) for w in windows]
     items.sort(key=lambda w: (w["claim_id"], w["valid_from"]))

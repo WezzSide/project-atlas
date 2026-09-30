@@ -41,6 +41,7 @@ from project_atlas.bitemporal import (
     EvidenceKind,
     write_validity_catalog,
 )
+from project_atlas.secrets import scan_text
 from project_atlas.temporal_evidence import extract_source_temporal_facts
 
 PACKAGE_ID = "AS-2.0-TEMPORAL-001"
@@ -85,7 +86,9 @@ def _compilation_id(root: Path, project_id: str) -> str:
     except (OSError, ValueError):
         return _DEFAULT_COMPILATION_ID
     cid = str(payload.get("compilation_id") or "").strip()
-    return cid or _DEFAULT_COMPILATION_ID
+    if not cid or scan_text(cid):
+        return _DEFAULT_COMPILATION_ID
+    return cid
 
 
 def _resolve_imported_source(root: Path, resource: str) -> Path | None:
@@ -154,6 +157,10 @@ def build_project_validity_windows(
         subject = str(claim.get("subject") or "").strip()
         field_name = str(claim.get("field") or "").strip()
         if not claim_id or not subject or not field_name:
+            continue
+        # AS-SEC-SCAN-BITEMPORAL-CLAIMID-JSON-ESC-001: skip decoded secret
+        # claim ids so derivation does not hand them to the catalog writer.
+        if scan_text(claim_id):
             continue
         valid_from = _declared_valid_from(root, claim)
         if valid_from is None:
