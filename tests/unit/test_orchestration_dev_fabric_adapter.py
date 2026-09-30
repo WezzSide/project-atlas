@@ -19,7 +19,7 @@ from project_atlas.orchestration.autonomy.dev_fabric_adapter import (
 from project_atlas.orchestration.autonomy.dev_planner import Phase, Planner
 from project_atlas.orchestration.autonomy.dev_queue import Category, QueueItem
 from project_atlas.orchestration.autonomy.dev_spool_transport import SpoolTransport
-from project_atlas.orchestration.autonomy.dev_transport import Channel
+from project_atlas.orchestration.autonomy.dev_transport import Channel, encode
 
 BASE = "a" * 40
 R1, T1, R2, T2 = "b" * 40, "c" * 40, "d" * 40, "e" * 40
@@ -707,3 +707,77 @@ def test_claimed_but_unpersisted_work_is_readopted_after_a_crash(tmp_path):
     assert "WORK_READOPTED:DEVQ-1" in ev and "DISPATCHED:DEVQ-1" in ev
     assert ad2.tick() == []  # re-adoption is idempotent: never a second dispatch
     assert len(gh.dispatches) == 1
+
+
+# ---- round-5 IV regressions ---------------------------------------------------------------
+
+
+def test_duplicate_execution_id_is_refused_once_and_never_wedges_later_ticks(tmp_path):
+    gh = FakeGitHub()
+    spool, _xw, ad, _pl = build(tmp_path, gh)
+    ad.tick()  # DEVQ-1 accepted + dispatched
+    dup = make_work(
+        task_id="OTHER",
+        execution_id="DEVQ-1-E1",
+        lineage_root="OTHER",
+        **{**FIELDS, "authority_ref": "AUTH-2"},
+    )
+    spool.publish(dup)
+    for _ in range(3):  # must not raise, now or later
+        ad.tick()
+    assert len(gh.dispatches) == 1 and all(w.task_id == "DEVQ-1" for w in ad.works.values())
+
+
+def test_poisoned_verification_file_does_not_abort_the_tick(tmp_path):
+    gh = FakeGitHub()
+    _spool, _xw, ad, _pl = build(tmp_path, gh)
+    ad.tick()
+    d = tmp_path / "spool" / "VERIFICATION"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "garbage.json").write_text("{not json", encoding="utf-8")
+    ev = ad.tick()
+    assert any(e.startswith("VERIFICATION_REFUSED") for e in ev)
+    assert (d / "rejected" / "garbage.json").exists() and ad.tick() == []
+
+
+def test_work_claimed_without_claim_meta_is_still_readopted(tmp_path):
+    gh = FakeGitHub()
+    spool, _xw, ad, _pl = build(tmp_path, gh)
+    w = spool.claim(Channel.WORK, role=Role.IMPLEMENTER, identity=ad.executor_identity)
+    assert w is not None
+    (tmp_path / "spool" / "WORK" / "claimed" / f"{w.seal}.claim.json").unlink()  # meta write lost
+    ad2 = FabricAdapter(
+        gh,
+        spool,
+        Crosswalk(tmp_path / "xw.jsonl"),
+        pending_dir=tmp_path / "pending",
+        clock=lambda: "2026-09-30T15:59:00Z",
+        task_statement=statement,
+        required_checks=frozenset({"quality"}),
+    )
+    assert "WORK_READOPTED:DEVQ-1" in ad2.tick()
+
+
+def test_persist_before_bind_crash_window_is_closed_on_load(tmp_path):
+    gh = FakeGitHub()
+    spool, _xw, ad, _pl = build(tmp_path, gh)
+    w = spool.claim(Channel.WORK, role=Role.IMPLEMENTER, identity=ad.executor_identity)
+    (tmp_path / "pending" / f"work-{w.seal}.json").write_text(encode(w), encoding="utf-8")
+    ad2 = FabricAdapter(
+        gh,
+        spool,
+        Crosswalk(tmp_path / "xw.jsonl"),
+        pending_dir=tmp_path / "pending",
+        clock=lambda: "2026-09-30T15:59:00Z",
+        task_statement=statement,
+        required_checks=frozenset({"quality"}),
+    )
+    ev = ad2.tick()
+    assert "DISPATCHED:DEVQ-1" in ev and not any(e.startswith("EXECUTION_FAILED") for e in ev)
+
+
+def test_recover_trouble_is_reported_not_raised(tmp_path, monkeypatch):
+    gh = FakeGitHub()
+    _spool, _xw, ad, _pl = build(tmp_path, gh)
+    monkeypatch.setattr(ad, "recover", lambda: (_ for _ in ()).throw(RuntimeError("disk")))
+    assert any(e.startswith("RECOVER_ERROR") for e in ad.tick())

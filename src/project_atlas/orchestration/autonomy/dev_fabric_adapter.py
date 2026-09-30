@@ -50,6 +50,7 @@ from project_atlas.orchestration.autonomy.dev_contracts import (
     VerificationRequest,
     WorkItem,
     make_verdict,
+    same_identity,
 )
 from project_atlas.orchestration.autonomy.dev_crosswalk import (
     Crosswalk,
@@ -267,8 +268,14 @@ class FabricAdapter:
 
     def _load_works(self) -> None:
         for f in sorted(self.pending.glob("work-*.json")):
-            w = decode(f.read_text(encoding="utf-8"))
-            assert isinstance(w, WorkItem)
+            try:
+                w = decode(f.read_text(encoding="utf-8"))
+                if not isinstance(w, WorkItem):
+                    raise ContractError("not a work item")
+                self.xw.bind_work(w)  # idempotent; closes the persist-before-bind crash window
+            except ContractError:
+                f.rename(f.with_suffix(".rejected"))  # never loaded, never dispatched
+                continue
             self.works[w.seal] = w
 
     # -- implementer side --------------------------------------------------------------------
@@ -450,6 +457,9 @@ class FabricAdapter:
             f.unlink()
         return out
 
+    def _refused_marker(self, seal: str) -> Path:
+        return self.pending / f"refused-{seal}.marker"
+
     def _readopt_claimed(self) -> list[str]:
         """Claim-before-persist crash window: re-adopt records we claimed but never persisted."""
         lister = getattr(self.transport, "claimed_records", None)
@@ -458,23 +468,38 @@ class FabricAdapter:
         out: list[str] = []
         for rec in lister(Channel.WORK, identity=self.executor_identity):
             if (
-                isinstance(rec, WorkItem)
-                and rec.seal not in self.works
-                and not self.xw.knows_work(rec.seal)
+                not isinstance(rec, WorkItem)
+                or rec.seal in self.works
+                or self.xw.knows_work(rec.seal)
+                or self._refused_marker(rec.seal).exists()
             ):
+                continue
+            try:
+                self.xw.bind_work(rec)  # validates uniqueness BEFORE anything is persisted
                 _atomic_write(self._work_file(rec.seal), encode(rec))
-                self.works[rec.seal] = rec
-                self.xw.bind_work(rec)
-                out.append(f"WORK_READOPTED:{rec.task_id}")
+            except (ContractError, OSError) as exc:
+                self._refused_marker(rec.seal).write_text(str(exc), encoding="utf-8")
+                out.append(f"WORK_READOPT_REFUSED:{rec.task_id}:{exc}")
+                continue
+            self.works[rec.seal] = rec
+            out.append(f"WORK_READOPTED:{rec.task_id}")
         for rec in lister(Channel.VERIFICATION, identity=self.verifier_identity):
-            if not isinstance(rec, VerificationRequest) or self._verify_file(rec).exists():
+            if (
+                not isinstance(rec, VerificationRequest)
+                or not same_identity(rec.verifier_identity, self.verifier_identity)
+                or self._verify_file(rec).exists()
+            ):
                 continue
             try:
                 ws = str(self.xw.resolve("execution_id", rec.execution_id)["work_seal"])
             except CrosswalkError:
                 continue
             if self.xw.hop(ws, "VERDICT") is None:
-                _atomic_write(self._verify_file(rec), encode(rec))
+                try:
+                    _atomic_write(self._verify_file(rec), encode(rec))
+                except OSError as exc:
+                    out.append(f"VERIFICATION_READOPT_FAILED:{rec.task_id}:{exc}")
+                    continue
                 out.append(f"VERIFICATION_READOPTED:{rec.task_id}")
         return out
 
@@ -607,12 +632,18 @@ class FabricAdapter:
 
     # -- one scheduling tick (idempotent; state lives in crosswalk + spool + pending dir) ----
     def tick(self) -> list[str]:
-        events: list[str] = list(self.recover())
+        events: list[str] = []
+        try:
+            events.extend(self.recover())
+        except Exception as exc:
+            events.append(f"RECOVER_ERROR:{type(exc).__name__}:{exc}")
         while True:
             try:
                 w = self.accept_work()
-            except (CrosswalkError, ContractError) as exc:  # e.g. duplicate execution id
+            except (ContractError, OSError) as exc:  # e.g. duplicate execution id, disk trouble
                 events.append(f"ACCEPT_REFUSED:{exc}")
+                if isinstance(exc, OSError):
+                    break  # do not spin on a failing disk; the claimed record is re-adopted
                 continue
             if w is None:
                 break
@@ -641,7 +672,13 @@ class FabricAdapter:
                 events.append(f"TRANSIENT:{w.task_id}:{exc}")
             except Exception as exc:
                 events.append(f"UNEXPECTED:{w.task_id}:{type(exc).__name__}:{exc}")
-        while self.accept_verification() is not None:
+        while True:
+            try:
+                if self.accept_verification() is None:
+                    break
+            except (ContractError, OSError) as exc:  # poisoned/mis-named request: parked once
+                events.append(f"VERIFICATION_REFUSED:{exc}")
+                continue
             events.append("VERIFICATION_ACCEPTED")
         for req in self.pending_verifications():
             work = next((x for x in self.works.values() if x.task_id == req.task_id), None)

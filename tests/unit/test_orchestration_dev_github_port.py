@@ -210,3 +210,12 @@ def test_raw_parse_and_io_failures_surface_as_adapter_errors():
     ):
         with pytest.raises(AdapterError):
             call(Broken({}))
+
+
+def test_hostile_nested_json_is_an_adapter_error_not_a_recursion_crash():
+    class Nested(Stub):
+        def _request(self, method, path, body=None):
+            raise RecursionError("deep")
+
+    with pytest.raises(AdapterError):
+        Nested({}).get_run(1)

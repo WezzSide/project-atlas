@@ -91,7 +91,7 @@ class SpoolTransport:
                 rej = d / "rejected"
                 rej.mkdir(exist_ok=True)
                 try:
-                    os.rename(path, rej / path.name)
+                    os.replace(path, rej / path.name)
                 except FileNotFoundError:
                     continue
                 raise
@@ -100,7 +100,7 @@ class SpoolTransport:
                 rej = d / "rejected"
                 rej.mkdir(exist_ok=True)
                 try:
-                    os.rename(path, rej / path.name)
+                    os.replace(path, rej / path.name)
                 except FileNotFoundError:
                     continue
                 raise TransportError("spool file name does not match record seal")
@@ -125,13 +125,20 @@ class SpoolTransport:
         """Records this identity claimed earlier (crash recovery: claim-before-persist window)."""
         d = self._dir(channel) / _CLAIMED
         out: list[Record] = []
-        for meta in sorted(d.glob("*.claim.json")):
+        for rec_path in sorted(p for p in d.glob("*.json") if not p.name.endswith(".claim.json")):
+            seal = rec_path.stem
+            meta = d / f"{seal}.claim.json"
             try:
-                who = json.loads(meta.read_text(encoding="utf-8")).get("identity", "")
-                if not same_identity(str(who), identity):
+                if meta.exists():  # owned: only its claimer may re-adopt it
+                    who = json.loads(meta.read_text(encoding="utf-8")).get("identity", "")
+                    if not same_identity(str(who), identity):
+                        continue
+                # no meta => crash between rename and meta write: the caller must check that the
+                # record is addressed to it (the adapter does, for VERIFICATION)
+                rec = decode(rec_path.read_text(encoding="utf-8"))
+                if rec.seal != seal:
                     continue
-                seal = meta.name[: -len(".claim.json")]
-                out.append(decode((d / f"{seal}.json").read_text(encoding="utf-8")))
+                out.append(rec)
             except (OSError, ValueError, ContractError):
                 continue  # unreadable claim evidence is ignored, never trusted
         return out

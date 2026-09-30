@@ -233,6 +233,7 @@ def _guarded(fn: Callable[..., Any]) -> Callable[..., Any]:
             AttributeError,
             OSError,  # includes URLError/HTTPError/TimeoutError
             zipfile.BadZipFile,
+            RecursionError,  # hostile deeply-nested JSON in an artifact
         ) as exc:
             raise AdapterError(f"github port {fn.__name__} failed: {type(exc).__name__}") from exc
 
