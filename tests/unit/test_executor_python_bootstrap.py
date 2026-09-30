@@ -72,3 +72,16 @@ def test_no_privilege_or_permission_widening():
         "executor",
     ]
     assert "id-token" not in WORKFLOW_TEXT.split("permissions:")[1].split("concurrency:")[0]
+
+
+def test_deploy_receipt_correlates_release_revision_and_worker_image():
+    deploy = (ROOT / ".github/workflows/atlas-runner-deploy.yml").read_text(encoding="utf-8")
+    assert "worker-image" in deploy and '"worker_image"' in deploy
+    script = (ROOT / "infra/atlas-runner/scripts/deploy-release.sh").read_text(encoding="utf-8")
+    # image is built/validated/bound strictly before the symlink swap
+    assert (
+        script.index('"${DOCKER}" build')
+        < script.index("worker-image.json")
+        < script.index("# --- activate: symlink swap")
+    )
+    assert ":latest" not in script

@@ -58,6 +58,27 @@ def run_health(
         docker_ok, docker_detail = False, type(exc).__name__
     checks["docker"] = {"ok": docker_ok, "detail": docker_detail}
 
+    # -- worker image: the image actually selected must be the release-bound one ----
+    # (EXECUTOR_PY312_DEPLOYMENT_CLOSURE: a stale or moved tag is a hard failure so
+    # the deploy gate rolls back instead of serving jobs from an older image.)
+    bound_id = config.worker.image_id
+    if bound_id is None:
+        image_ok = True
+        image_detail = f"unbound (config image {config.worker.image})"
+    else:
+        try:
+            actual_id = docker.image_id(config.worker.image)
+        except Exception as exc:  # pragma: no cover - defensive
+            actual_id = None
+            image_detail = f"error: {type(exc).__name__}"
+        image_ok = actual_id == bound_id
+        image_detail = (
+            f"{config.worker.image} id={actual_id} revision={config.worker.image_revision}"
+            if image_ok
+            else f"MISMATCH {config.worker.image}: host={actual_id} bound={bound_id}"
+        )
+    checks["worker_image"] = {"ok": image_ok, "detail": image_detail}
+
     # -- state dir writable ------------------------------------------------------
     state_dir = Path(config.paths.state_dir)
     try:

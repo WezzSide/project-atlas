@@ -23,10 +23,15 @@ from controller.grants import GrantError
 from controller.health import health_json, run_health
 from controller.reconcile import Reconciler
 from controller.state import StateError, StateStore, TaskConflictError
+from controller.worker_image import bind_config
+
+RELEASE_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _build_context(config_path: str):
-    config = load_config(config_path)
+    # The worker image is pinned to the release this code was deployed from
+    # (worker-image.json); a malformed/inconsistent binding fails closed here.
+    config = bind_config(load_config(config_path), RELEASE_ROOT)
     store = StateStore(Path(config.paths.state_dir) / "atlas-runner.db")
     docker = DockerCtl(jobs_root=config.paths.jobs_dir)
     token_provider: TokenProvider | None = None
@@ -256,6 +261,8 @@ def cmd_version(args: argparse.Namespace) -> int:
                 "release": {"link": release_link, "target": release_target},
                 "runner_image": config.worker.image,
                 "runner_image_digest": image_digest,
+                "runner_image_bound_id": config.worker.image_id,
+                "runner_image_revision": config.worker.image_revision,
                 "actions_runner_version": _runner_version_from_image(),
             },
             indent=2,

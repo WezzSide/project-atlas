@@ -39,7 +39,8 @@ been exercised against the live host. `DEPLOYED != VERIFIED`.
 ```bash
 # on VPS-02, as a user with sudo, from a release checkout
 sudo scripts/bootstrap-vps.sh                       # user, dirs, unit
-# build the worker image on the host (pinned base digest + runner version)
+# worker image: built by the release deploy itself (see "Worker image closure");
+# only the very first bootstrap needs a manual build so the first release has a base:
 sudo docker build -t atlas-runner-worker:latest infra/atlas-runner
 # mint ATLAS_GITHUB_TOKEN (scripts/gh-token-helper.md), then:
 sudo install -m 0600 -o atlas-runner -g atlas-runner \
@@ -52,6 +53,51 @@ sudo systemctl enable --now atlas-runner-controller.service
 First bootstrap is intentionally manual and is never done by CI. The
 `atlas-runner-deploy.yml` workflow is for **upgrades** of an already
 bootstrapped host only.
+
+## Worker image closure (EXECUTOR_PY312_DEPLOYMENT_CLOSURE)
+
+One governed `atlas-runner-deploy` of an exact `main` revision makes the worker
+image the controller launches correspond to that same revision. No manual SSH or
+`docker build` step is required for upgrades.
+
+`deploy-release.sh <rev>` (target-revision tool, hash-bound by the host shim):
+
+1. stages the release, then builds `atlas-runner-worker:<rev>` from the staged
+   release (digest-pinned `python:3.12-slim-bookworm` base; label
+   `atlas.runner.revision=<rev>`). The tag is revision-specific; `latest` is
+   never used. A pre-existing image under that tag is reused only if its
+   revision label matches, otherwise it is rebuilt.
+2. proves the Python contract **inside the built image** (run by image ID with
+   `--network none --cap-drop ALL --no-new-privileges`): interpreter >= 3.12.
+3. writes `worker-image.json` (`revision`, `tag`, `image_id`, `python_version`)
+   into the release directory, **then** activates the release.
+4. restarts the controller and runs the shared health gate.
+
+Controller semantics: the controller of a release reads its own
+`worker-image.json`; every worker launch re-checks that the host image behind the
+tag still has the bound content ID (`WorkerImageMismatch` -> the execution fails
+closed, no container starts), and `health` reports a `worker_image` check that is
+a hard failure on mismatch. The binding cannot be set from TOML.
+
+Failure and rollback: build failure, Python contract failure or a missing docker
+CLI all stop the deploy **before** the symlink swap (the previous release and its
+image binding stay active - no half-upgraded executor). A health failure after
+activation rolls the symlink back; the previous release carries its own binding
+and its image was not removed, so release + worker image roll back together. A
+legacy release without a binding keeps the configured `[worker] image`.
+Re-deploying the same revision reuses the image (Python contract re-proven);
+deploying a newer revision after an older one builds a new, independent image.
+
+Evidence: the deploy log contains one
+`[deploy] worker-image tag=... id=sha256:... python=3.12.x revision=<rev> reused=0|1`
+line, the health JSON names the selected image ID, `atlas-runner version` prints the
+bound image, job evidence `runner_image_digest` is the content ID of the image used,
+and the deployment receipt carries the `worker_image` fields.
+
+Operational notes: the host needs registry egress for the base image pull at
+build time (a blocked pull fails the deploy closed). Old revision images are kept
+(they are the rollback targets); prune them manually when disk is tight, never the
+image of the active or previous release.
 
 ## GitHub configuration checklist
 

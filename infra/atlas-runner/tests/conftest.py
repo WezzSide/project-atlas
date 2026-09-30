@@ -132,6 +132,10 @@ class FakeDocker:
         self._record("image_digest", image)
         return "sha256:" + "a" * 64
 
+    def image_id(self, image: str) -> str | None:
+        self._record("image_id", image)
+        return getattr(self, "bound_image_id", None) or "sha256:" + "a" * 64
+
 
 class FakeTokenProvider:
     def __init__(self, token: str = "ghp_FAKE_test_token_0123456789"):

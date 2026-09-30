@@ -154,7 +154,17 @@ class DockerCtl:
             repo_tag, _, digest = line.partition(" ")
             if repo_tag.startswith(image) and digest.startswith("sha256:"):
                 return digest.strip()
-        return None
+        # Locally built images carry no registry digest; report the content-addressed
+        # image ID instead so evidence always names the image actually selected.
+        return self.image_id(image)
+
+    def image_id(self, image: str) -> str | None:
+        """Content-addressed ID (``sha256:...``) of a local image, or ``None``."""
+        proc = self._run(["image", "inspect", "--format", "{{.Id}}", image])
+        if proc.returncode != 0:
+            return None
+        value = proc.stdout.strip()
+        return value if value.startswith("sha256:") else None
 
     # -- worker lifecycle ------------------------------------------------------
     def run_worker(

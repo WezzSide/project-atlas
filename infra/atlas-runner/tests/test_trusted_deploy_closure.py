@@ -156,6 +156,67 @@ def test_health_helper_uses_static_default_env_path() -> None:
 # ---------------------------------------------------------------------------
 
 
+class FakeDocker:
+    """Stateful fake docker CLI for sandboxed deploys (no daemon, no network).
+
+    Images are files under <state>/images holding ``<image-id> <revision-label>``.
+    Every build yields a NEW image ID so a reused image is distinguishable from a
+    rebuilt one. ``FAKE_DOCKER_PY`` selects the interpreter version the image
+    reports; ``FAKE_DOCKER_BUILD_FAILS=1`` makes ``docker build`` fail.
+    """
+
+    def __init__(self, tmp_path: Path):
+        self.state = tmp_path / "docker-state"
+        (self.state / "images").mkdir(parents=True)
+        self.log = self.state / "docker.log"
+        self.bin = tmp_path / "docker"
+        self.bin.write_text(
+            "#!/usr/bin/env bash\n"
+            'S="$FAKE_DOCKER_STATE"\n'
+            'echo "$@" >> "$S/docker.log"\n'
+            'cmd="$1"; shift\n'
+            'case "$cmd" in\n'
+            "  image)\n"
+            '    tag="${@: -1}"; f="$S/images/${tag}"\n'
+            '    [ -f "$f" ] || exit 1; cat "$f" ;;\n'
+            "  build)\n"
+            '    [ "${FAKE_DOCKER_BUILD_FAILS:-0}" = 1 ] && { echo "build failed" >&2; exit 1; }\n'
+            '    tag=; label=\n'
+            '    while [ $# -gt 0 ]; do case "$1" in\n'
+            '      --tag) tag="$2"; shift 2 ;;\n'
+            '      --label) label="${2#*=}"; shift 2 ;;\n'
+            '      *) shift ;;\n'
+            "    esac; done\n"
+            '    n="$(cat "$S/counter" 2>/dev/null || echo 0)"; n=$((n+1))\n'
+            '    echo "$n" > "$S/counter"\n'
+            '    id="sha256:$(printf "%s-%s" "$tag" "$n" | sha256sum | cut -c1-64)"\n'
+            '    echo "$id $label" > "$S/images/${tag}" ;;\n'
+            "  run)\n"
+            '    ver="${FAKE_DOCKER_PY:-3.12.14}"; IFS=. read -r a b _ <<<"$ver"\n'
+            '    if [ "$a" -gt 3 ] || { [ "$a" -eq 3 ] && [ "$b" -ge 12 ]; }; then\n'
+            '      echo "$ver"; exit 0\n'
+            "    fi\n"
+            '    echo "AssertionError: $ver" >&2; exit 1 ;;\n'
+            "  *) exit 1 ;;\n"
+            "esac\n",
+            encoding="utf-8",
+        )
+        self.bin.chmod(0o755)
+
+    def env(self) -> dict:
+        return {"ATLAS_DOCKER": str(self.bin), "FAKE_DOCKER_STATE": str(self.state)}
+
+    def calls(self, verb: str) -> list[str]:
+        if not self.log.exists():
+            return []
+        return [ln for ln in self.log.read_text(encoding="utf-8").splitlines()
+                if ln.split(" ", 1)[0] == verb]
+
+    def seed(self, revision: str, image_id: str, label_revision: str) -> None:
+        tag = f"atlas-runner-worker:{revision}"
+        (self.state / "images" / tag).write_text(f"{image_id} {label_revision}\n", encoding="utf-8")
+
+
 class FakeGitRepo:
     """Minimal fake git CLI + repo dir recording invocations."""
 
@@ -196,12 +257,17 @@ class FakeGitRepo:
         (template / "entrypoint.sh").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
         for name in ("bootstrap-vps.sh", "smoke-workload.sh", "atlas-runner-health.sh"):
             f = template / "scripts" / name
-            f.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+            body = "#!/usr/bin/env bash\n"
+            if name == "atlas-runner-health.sh":
+                body += '[ "${FAKE_HEALTH_FAILS:-0}" = 1 ] && exit 1\nexit 0\n'
+            f.write_text(body, encoding="utf-8")
             f.chmod(0o755)
+        (template / "Dockerfile").write_text("FROM scratch\n", encoding="utf-8")
         (template / "systemd" / "atlas-runner-controller.service").write_text(
             "[Service]\nExecStart=/bin/true\n", encoding="utf-8"
         )
         self.template = template.parents[1]  # tmp/template
+        self.docker = FakeDocker(tmp_path)
 
     def env(self, tmp_path: Path) -> dict:
         return {
@@ -217,6 +283,7 @@ class FakeGitRepo:
             "ATLAS_SYSTEMD_SYSTEM_DIR": str(tmp_path / "systemd"),
             "ATLAS_SYSTEMCTL": "/bin/true",
             "ATLAS_POST_RESTART_SLEEP": "0",
+            **self.docker.env(),
         }
 
 

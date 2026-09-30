@@ -71,6 +71,10 @@ class WorkerConfig:
     image: str = "atlas-runner-worker:latest"
     network: str = "bridge"
     env: dict[str, str] = field(default_factory=dict)
+    # Release-bound identity (set only by controller.worker_image.bind_config from the
+    # release's worker-image.json; deliberately NOT a TOML key).
+    image_id: str | None = None
+    image_revision: str | None = None
 
 
 @dataclass(frozen=True)

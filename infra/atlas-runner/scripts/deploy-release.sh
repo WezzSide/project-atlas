@@ -1,7 +1,19 @@
 #!/usr/bin/env bash
 # deploy-release.sh — versioned release deploy with symlink swap + rollback.
-# Contract: stage -> validate -> activate -> restart -> health -> rollback on
-# failure. Idempotent per revision: re-deploying the same rev is a no-op swap.
+# Contract: stage -> validate -> build+validate worker image -> activate ->
+# restart -> health -> rollback on failure. Idempotent per revision:
+# re-deploying the same rev is a no-op swap (the worker image is reused when
+# its revision label and Python contract still hold).
+#
+# Worker image closure (EXECUTOR_PY312_DEPLOYMENT_CLOSURE): one deploy of an
+# exact revision makes the image the controller launches correspond to that
+# same revision. The image is built from the staged release (revision-specific
+# tag atlas-runner-worker:<REV>, never `latest`), the Python >= 3.12 contract
+# is proven INSIDE the built image, and only then is the release-bound identity
+# (worker-image.json) written and the release activated. Any failure here
+# happens before the symlink swap, so the executor is never half-upgraded; a
+# later health failure rolls the symlink back and with it the previous
+# release's own image binding.
 # Usage: deploy-release.sh <git-revision> [--skip-tests]
 set -euo pipefail
 
@@ -20,6 +32,8 @@ SERVICE_USER="${ATLAS_SERVICE_USER:-atlas-runner}"
 SYSTEMD_SYSTEM_DIR="${ATLAS_SYSTEMD_SYSTEM_DIR:-/etc/systemd/system}"
 SYSTEMCTL="${ATLAS_SYSTEMCTL:-systemctl}"
 POST_RESTART_SLEEP="${ATLAS_POST_RESTART_SLEEP:-5}"
+DOCKER="${ATLAS_DOCKER:-docker}"
+IMAGE_REPO="atlas-runner-worker"
 
 log() { printf '[deploy] %s\n' "$*"; }
 die() { log "FATAL: $*"; exit 1; }
@@ -143,6 +157,49 @@ fi
 # The internal health gate invokes this helper; a release without it would
 # fail the gate after activation, so refuse before activating.
 [ -x "${RELEASE_DIR}/scripts/atlas-runner-health.sh" ] || die "release ${REV} lacks the atlas-runner-health.sh entrypoint"
+
+# --- worker image: build from THIS revision, prove Python >= 3.12, bind ---------
+# Fail closed and BEFORE activation: a build failure, a Python contract failure
+# or an unreadable image identity leaves the previously active release (and its
+# own image binding) untouched.
+command -v "${DOCKER}" >/dev/null 2>&1 || die "docker not found; cannot build the worker image for ${REV}; release NOT activated"
+IMAGE_TAG="${IMAGE_REPO}:${REV}"
+inspect_image() { "${DOCKER}" image inspect --format '{{.Id}} {{index .Config.Labels "atlas.runner.revision"}}' "${IMAGE_TAG}" 2>/dev/null; }
+reuse=0
+if existing="$(inspect_image)"; then
+    # Reuse only an image that provably belongs to this revision; a stale or
+    # foreign image under the same tag is rebuilt, never trusted.
+    if [ "${existing#* }" = "${REV}" ]; then
+        reuse=1
+    fi
+fi
+if [ "${reuse}" -eq 1 ]; then
+    log "worker image ${IMAGE_TAG} already built for ${REV}; reusing after validation"
+else
+    log "building worker image ${IMAGE_TAG} from ${RELEASE_DIR}"
+    "${DOCKER}" build --tag "${IMAGE_TAG}" --label "atlas.runner.revision=${REV}" "${RELEASE_DIR}" \
+        || die "worker image build failed for ${REV}; release NOT activated"
+fi
+IMAGE_ID_LINE="$(inspect_image)" || die "cannot inspect worker image ${IMAGE_TAG}; release NOT activated"
+IMAGE_ID="${IMAGE_ID_LINE%% *}"
+[ "${IMAGE_ID_LINE#* }" = "${REV}" ] || die "worker image ${IMAGE_TAG} is not labelled for ${REV}; release NOT activated"
+printf '%s' "${IMAGE_ID}" | grep -Eq '^sha256:[0-9a-f]{64}$' || die "worker image identity '${IMAGE_ID}' is not a sha256 content ID; release NOT activated"
+PY_VERSION="$("${DOCKER}" run --rm --network none --cap-drop ALL --security-opt no-new-privileges \
+    --entrypoint python3 "${IMAGE_ID}" -c 'import sys; assert sys.version_info >= (3, 12), sys.version; print("%d.%d.%d" % sys.version_info[:3])')" \
+    || die "Python >= 3.12 contract failed in worker image ${IMAGE_TAG}; release NOT activated"
+printf '%s' "${PY_VERSION}" | grep -Eq '^3\.(1[2-9]|[2-9][0-9])\.[0-9]+$' || die "worker image reported unusable Python version '${PY_VERSION}'; release NOT activated"
+BINDING_TMP="${RELEASE_DIR}/.worker-image.json.tmp"
+cat > "${BINDING_TMP}" <<BINDING
+{
+  "image_id": "${IMAGE_ID}",
+  "python_version": "${PY_VERSION}",
+  "revision": "${REV}",
+  "schema_version": 1,
+  "tag": "${IMAGE_TAG}"
+}
+BINDING
+mv -f "${BINDING_TMP}" "${RELEASE_DIR}/worker-image.json"
+log "worker-image tag=${IMAGE_TAG} id=${IMAGE_ID} python=${PY_VERSION} revision=${REV} reused=${reuse}"
 
 # --- activate: symlink swap -------------------------------------------------------
 ln -sfn "${RELEASE_DIR}" "${CURRENT_LINK}.new"
