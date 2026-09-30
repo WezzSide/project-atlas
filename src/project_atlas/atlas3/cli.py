@@ -64,6 +64,7 @@ from project_atlas.atlas3.timeline import compile_timeline
 from project_atlas.atlas3.transport import prove_transport_is_not_authority
 from project_atlas.atlas3.truth_graph import compile_truth_graph
 from project_atlas.atlas3.twin_health import compile_twin_health
+from project_atlas.atlas3.validate_report import compile_validate_report
 from project_atlas.orchestration.origination.cli import run_origination_scan
 
 ATLAS3_COMMANDS = frozenset(
@@ -98,6 +99,7 @@ ATLAS3_COMMANDS = frozenset(
         "claim-nodes",
         "conflict-unknown",
         "graph-authority",
+        "validate-report",
     }
 )
 
@@ -566,6 +568,20 @@ def register_atlas3_parsers(subparsers: argparse._SubParsersAction[Any]) -> None
     graph_authority.add_argument("--vault", type=Path, required=True)
     graph_authority.add_argument("--project", required=True)
 
+    validate_report = subparsers.add_parser(
+        "validate-report",
+        help=(
+            "Atlas 3 aggregate diagnostics over the canonical `atlas validate` "
+            "result (observational; existing `validate` command unchanged)."
+        ),
+        description=(
+            "Additively registered through Atlas 3; reuses the canonical "
+            "validate() result and validation_exit_code() mapping verbatim. "
+            "Vault-wide, no --project (mirrors `compatibility`)."
+        ),
+    )
+    validate_report.add_argument("--vault", type=Path, required=True)
+
 
 def _dump(payload: dict[str, Any], *, as_json: bool) -> int:
     print(json.dumps(payload, indent=2, sort_keys=True))
@@ -636,6 +652,13 @@ def dispatch_atlas3(args: argparse.Namespace) -> int | None:
             return _dump(compile_conflict_unknown(args.vault, args.project), as_json=True)
         if command == "graph-authority":
             return _dump(compile_graph_authority(args.vault, args.project), as_json=True)
+        if command == "validate-report":
+            # Not _dump(): that helper always returns 0. validate-report's
+            # exit code must be the canonical validation_exit_code() mapping
+            # embedded in the report, not a hardcoded success.
+            report = compile_validate_report(args.vault)
+            print(json.dumps(report, indent=2, sort_keys=True))
+            return int(report["exit_code"])
         if command == "multi-project-twin":
             return _dump(
                 compile_multi_project_twin(
