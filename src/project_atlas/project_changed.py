@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from project_atlas.inventory_drift import evaluate_connect_inventory_drift
+from project_atlas.secrets import scan_text
 
 PACKAGE_ID = "AS-CODER-ALPHA-CHANGED-001"
 GENERATOR_ID = "atlas-coder-alpha-changed-001"
@@ -54,6 +55,39 @@ def _read_json(path: Path) -> dict[str, Any] | None:
     return raw if isinstance(raw, dict) else None
 
 
+def _sanitize_inventory(payload: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Drop decoded secret-shaped inventory paths before lens persist.
+
+    AS-SEC-SCAN-CHANGED-PATH-JSON-ESC-001: ``json.loads`` of connect-inventory
+    can decode ``\\u`` path escapes that ``scan_text`` misses on raw bytes.
+    """
+    if payload is None:
+        return None
+    sanitized = dict(payload)
+    sources = sanitized.get("sources")
+    if isinstance(sources, list):
+        clean_sources: list[Any] = []
+        for row in sources:
+            if not isinstance(row, dict):
+                continue
+            path = row.get("path")
+            project = row.get("project_id")
+            if isinstance(path, str) and scan_text(path):
+                continue
+            if isinstance(project, str) and scan_text(project):
+                continue
+            clean_sources.append(row)
+        sanitized["sources"] = clean_sources
+    by_path = sanitized.get("by_path")
+    if isinstance(by_path, dict):
+        sanitized["by_path"] = {
+            key: digest
+            for key, digest in by_path.items()
+            if not (isinstance(key, str) and scan_text(key))
+        }
+    return sanitized
+
+
 def _list_projects(vault: Path) -> list[str]:
     root = vault / "projects"
     if not root.is_dir():
@@ -85,6 +119,8 @@ def inventory_from_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
             digest = row.get("sha256")
             project = row.get("likely_project") or "unknown-project"
             if not isinstance(path, str) or not isinstance(digest, str):
+                continue
+            if scan_text(path) or scan_text(str(project)):
                 continue
             rows.append(
                 {
@@ -401,7 +437,7 @@ def rotate_and_diff_inventory(
     current = inventory_from_manifest(manifest)
     inv_path = vault / INVENTORY_RELATIVE
     prev_path = vault / PREV_INVENTORY_RELATIVE
-    previous = _read_json(inv_path)
+    previous = _sanitize_inventory(_read_json(inv_path))
     if inv_path.is_file():
         # Preserve prior baseline for diff/receipt inspection.
         _write_atomic(prev_path, inv_path.read_bytes())
@@ -429,8 +465,8 @@ def materialize_changed_lenses(
     if manifest is not None:
         current, delta, previous = rotate_and_diff_inventory(vault, manifest)
     else:
-        loaded = _read_json(vault / INVENTORY_RELATIVE)
-        previous = _read_json(vault / PREV_INVENTORY_RELATIVE)
+        loaded = _sanitize_inventory(_read_json(vault / INVENTORY_RELATIVE))
+        previous = _sanitize_inventory(_read_json(vault / PREV_INVENTORY_RELATIVE))
         if loaded is None:
             raise ProjectChangedError(
                 "missing connect inventory; run atlas connect or pass a manifest"
