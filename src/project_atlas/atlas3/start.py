@@ -39,6 +39,26 @@ START_SECTIONS: Final[tuple[str, ...]] = (
 )
 
 
+def _bind_answer(
+    answer: dict[str, Any] | None,
+    *,
+    project_id: str,
+    label: str,
+) -> dict[str, Any] | None:
+    """Unlabeled answers stay allowed. Explicit foreign project_id fails closed."""
+    if answer is None:
+        return None
+    if not isinstance(answer, dict):
+        raise Atlas3Error("START_ANSWER_CORRUPT", f"{label} must be an object")
+    explicit = answer.get("project_id")
+    if explicit is not None and str(explicit) != project_id:
+        raise Atlas3Error(
+            "PROJECT_MISMATCH",
+            f"{label} project_id {explicit!r} != requested {project_id!r}",
+        )
+    return answer
+
+
 def _clip(text: str, budget: int) -> tuple[str, int]:
     if budget <= 0:
         return ("", 0)
@@ -96,7 +116,11 @@ def compile_start(
     identity_text = f"project_id={pid}"
     sections["project_identity"] = take("derived", identity_text)
 
-    state = load_answer(root, f"ans-state-{pid}")
+    state = _bind_answer(
+        load_answer(root, f"ans-state-{pid}"),
+        project_id=pid,
+        label="ans-state",
+    )
     stale_block = (pulse.get("questions") or {}).get("what_became_stale") or {}
     stale_items = stale_block.get("items") or []
     truth_text = "UNKNOWN — state lens not materialized"
@@ -138,7 +162,11 @@ def compile_start(
             "UNKNOWN — current task was not supplied",
         )
 
-    constraints = load_answer(root, f"ans-decisions-{pid}")
+    constraints = _bind_answer(
+        load_answer(root, f"ans-decisions-{pid}"),
+        project_id=pid,
+        label="ans-decisions",
+    )
     if constraints is None:
         sections["owner_constraints"] = take(
             "UNKNOWN",
