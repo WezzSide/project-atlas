@@ -185,9 +185,9 @@ if [ "${reuse}" -eq 0 ]; then
     BASE_IMAGE="$(awk '/^FROM /{for (i = 2; i <= NF; i++) if ($i !~ /^--/) { print $i; exit }}' "${RELEASE_DIR}/Dockerfile")"
     [ -n "${BASE_IMAGE}" ] || die "cannot determine the Dockerfile base image; release NOT activated"
     if ! probe_out="$(timeout 120 "${DOCKER}" run --rm --network "${BUILD_NET}" --cap-drop ALL --security-opt no-new-privileges \
-        --entrypoint python3 "${BASE_IMAGE}" -c 'import socket; socket.create_connection(("deb.debian.org", 80), timeout=15).close()' 2>&1)"; then
+        --entrypoint python3 "${BASE_IMAGE}" -c 'import socket; [socket.create_connection(t, timeout=15).close() for t in (("deb.debian.org", 80), ("pypi.org", 443), ("github.com", 443))]' 2>&1)"; then
         log "preflight output (tail): $(printf '%s' "${probe_out}" | tail -n 5)"
-        die "worker image build preflight failed on network '${BUILD_NET}' (network missing, base image pull failed, or deb.debian.org unreachable; check docker network inspect ${BUILD_NET} and the atlas-runner-firewall permit); release NOT activated"
+        die "worker image build preflight failed on network '${BUILD_NET}' (network missing, base image pull failed, or deb.debian.org/pypi.org/github.com unreachable; check docker network inspect ${BUILD_NET} and the atlas-runner-firewall permit); release NOT activated"
     fi
 fi
 if [ "${reuse}" -eq 1 ]; then
@@ -196,18 +196,21 @@ else
     # Classic-builder capability probe (TRANSITIONAL compatibility mechanism; docker has
     # deprecated the legacy builder - follow-up ATLAS_BUILDKIT_NETWORK_MODERNIZATION).
     # Fail fast and diagnostically if the host docker no longer supports it: no silent
-    # fallback to BuildKit/another network mode, no host networking.
+    # fallback to BuildKit/another network mode, no host networking. (BuildKit itself
+    # rejects --network <user-defined> hard, so a BuildKit-only engine fails here too.)
+    # The probe Dockerfile needs a real instruction after FROM: the legacy builder
+    # rejects a bare "FROM scratch" with "No image was generated". It proves the legacy
+    # builder is present; the preflight above and the real build's RUN steps are the
+    # network guards.
     log "docker server version: $("${DOCKER}" version --format '{{.Server.Version}}' 2>/dev/null || echo unknown)"
-    if ! builder_out="$(printf 'FROM scratch\n' | DOCKER_BUILDKIT=0 "${DOCKER}" build --network "${BUILD_NET}" --quiet - 2>&1)"; then
+    if ! builder_out="$(printf 'FROM scratch\nLABEL atlas.probe=1\n' | DOCKER_BUILDKIT=0 "${DOCKER}" build --network "${BUILD_NET}" --quiet - 2>&1)"; then
         log "classic builder probe output (tail): $(printf '%s' "${builder_out}" | tail -n 5)"
         die "host docker does not support the classic (legacy) builder required for build network '${BUILD_NET}'; refusing to fall back to BuildKit or host networking; release NOT activated (see ATLAS_BUILDKIT_NETWORK_MODERNIZATION)"
     fi
-    case "${builder_out}" in
-        *"[internal] load build definition"*|*"building with"*)
-            die "docker used BuildKit despite DOCKER_BUILDKIT=0 (cannot honour --network ${BUILD_NET}); refusing to fall back; release NOT activated (see ATLAS_BUILDKIT_NETWORK_MODERNIZATION)" ;;
-    esac
     probe_id="$(printf '%s' "${builder_out}" | tail -n 1)"
-    [ -z "${probe_id}" ] || "${DOCKER}" rmi -f "${probe_id}" >/dev/null 2>&1 || true
+    printf '%s' "${probe_id}" | grep -Eq '^sha256:[0-9a-f]{64}$' \
+        || die "classic builder probe returned an unexpected result '${probe_id}'; refusing to continue; release NOT activated (see ATLAS_BUILDKIT_NETWORK_MODERNIZATION)"
+    "${DOCKER}" rmi -f "${probe_id}" >/dev/null 2>&1 || true
     log "building worker image ${IMAGE_TAG} from ${RELEASE_DIR}"
     # Classic builder: BuildKit only accepts default|none|host for --network and
     # cannot join the permitted worker bridge; host networking is never used.

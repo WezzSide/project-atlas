@@ -164,8 +164,9 @@ class FakeDocker:
     rebuilt one. ``FAKE_DOCKER_PY`` selects the interpreter version the image
     reports; ``FAKE_DOCKER_BUILD_FAILS=1`` makes ``docker build`` fail;
     ``FAKE_DOCKER_NET_FAILS=1`` fails the build-network preflight;
-    ``FAKE_DOCKER_CLASSIC_UNSUPPORTED=1`` / ``FAKE_DOCKER_BUILDKIT_FALLBACK=1`` simulate a
-    host without the classic builder.
+    ``FAKE_DOCKER_CLASSIC_UNSUPPORTED=1`` simulates a host without the classic builder;
+    like the real legacy builder, the fake rejects a probe Dockerfile that is only
+    ``FROM scratch``.
     """
 
     def __init__(self, tmp_path: Path):
@@ -191,11 +192,12 @@ class FakeDocker:
             '      *) shift ;;\n'
             "    esac; done\n"
             '    if [ -z "$tag" ]; then  # classic-builder capability probe (stdin Dockerfile)\n'
+            '      df="$(cat)"; [ "$(printf "%s\\n" "$df" | grep -c .)" -ge 2 ] || {\n'
+            '        echo "No image was generated. Is your Dockerfile empty?" >&2\n'
+            '        exit 1\n'
+            "      }\n"
             '      if [ "${FAKE_DOCKER_CLASSIC_UNSUPPORTED:-0}" = 1 ]; then\n'
             '        echo "the legacy builder is not supported; BuildKit is required" >&2; exit 1\n'
-            "      fi\n"
-            '      if [ "${FAKE_DOCKER_BUILDKIT_FALLBACK:-0}" = 1 ]; then\n'
-            '        echo "#0 building with default instance using docker driver"; exit 0\n'
             "      fi\n"
             '      echo "sha256:$(printf probe | sha256sum | cut -c1-64)"; exit 0\n'
             "    fi\n"

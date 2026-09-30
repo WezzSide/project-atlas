@@ -365,10 +365,11 @@ def test_missing_classic_builder_fails_fast_with_a_diagnostic_and_no_fallback(tm
     assert all("host" not in c for c in repo.docker.calls("build") + repo.docker.calls("run"))
 
 
-def test_silent_buildkit_fallback_is_detected_and_refused(tmp_path):
+def test_probe_dockerfile_has_an_instruction_after_from(tmp_path):
+    """Regression (real-engine IV): the legacy builder rejects a bare `FROM scratch`."""
+    script = DEPLOY.read_text(encoding="utf-8")
+    assert "FROM scratch\\nLABEL atlas.probe=1" in script
     repo = FakeGitRepo(tmp_path, remote_url=REMOTE)
-    proc, env = _deploy(repo, tmp_path, REV_A, FAKE_DOCKER_BUILDKIT_FALLBACK="1")
-    assert proc.returncode != 0
-    assert b"used BuildKit despite DOCKER_BUILDKIT=0" in proc.stdout
-    assert not Path(env["ATLAS_CURRENT_LINK"]).exists()
-    assert not (Path(env["ATLAS_RELEASES_DIR"]) / REV_A / "worker-image.json").exists()
+    proc, _ = _deploy(repo, tmp_path, REV_A)
+    assert proc.returncode == 0, proc.stdout.decode()  # fake rejects a bare FROM scratch
+
