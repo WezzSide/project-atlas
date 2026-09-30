@@ -19,12 +19,13 @@ import json
 import os
 import re
 import tempfile
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
 from project_atlas.schema import validate_record
+from project_atlas.secrets import scan_text
 from project_atlas.xproj_edges import GlobalEdgeRecord, load_edge_registry_state
 from project_atlas.xproj_registry import (
     GlobalEntityRecord,
@@ -35,6 +36,29 @@ from project_atlas.xproj_registry import (
 PACKAGE_ID = "AS-XPROJ-004"
 AUTHORITY_LEVEL = "derived"
 TRUTH_BOUNDARY = "CROSS-PROJECT INDEX ≠ AUTOMATIC AUTHORITY"
+
+
+def _safe_index_text(value: str | None) -> str | None:
+    """Return persist-safe text; decoded secret-shaped values are omitted.
+
+    AS-SEC-SCAN-XPROJ-INDEX-DISPLAY-JSON-ESC-001: json.loads of global-entity
+    records can decode ``\\u`` display names that scan_text misses on raw bytes.
+    """
+    if value is None:
+        return None
+    text = str(value)
+    if not text or scan_text(text):
+        return None
+    return text
+
+
+def _safe_id_tuple(values: Iterable[str]) -> tuple[str, ...]:
+    return tuple(
+        sorted(
+            {item for item in values if _safe_index_text(item) is not None},
+            key=str.casefold,
+        )
+    )
 
 ALLOWED_WRITE_PREFIXES: tuple[str, ...] = (
     "generated/xproj/indexes/",
@@ -100,8 +124,9 @@ class EvidenceLink:
     kind: str = "source"
 
     def as_dict(self) -> dict[str, str]:
+        path = _safe_index_text(self.relative_path) or "UNKNOWN"
         return {
-            "relative_path": self.relative_path,
+            "relative_path": path,
             "sha256": self.sha256,
             "kind": self.kind,
         }
@@ -129,10 +154,10 @@ class ConflictReport:
             "conflict_id": self.conflict_id,
             "kind": self.kind,
             "summary": self.summary,
-            "global_entity_ids": list(self.global_entity_ids),
-            "project_ids": list(self.project_ids),
+            "global_entity_ids": list(_safe_id_tuple(self.global_entity_ids)),
+            "project_ids": list(_safe_id_tuple(self.project_ids)),
             "evidence_links": [item.as_dict() for item in self.evidence_links],
-            "edge_ids": list(self.edge_ids),
+            "edge_ids": list(_safe_id_tuple(self.edge_ids)),
             "authority": {
                 "level": AUTHORITY_LEVEL,
                 "note": (
@@ -152,7 +177,7 @@ class ConflictReport:
         if self.entity_class is not None:
             payload["entity_class"] = self.entity_class
         if self.versions:
-            payload["versions"] = list(self.versions)
+            payload["versions"] = list(_safe_id_tuple(self.versions))
         return payload
 
     def to_json(self) -> str:
@@ -241,7 +266,9 @@ def _version_of(entity: GlobalEntityRecord) -> str | None:
     if raw is None:
         return None
     text = str(raw).strip()
-    return text or None
+    if not text:
+        return None
+    return _safe_index_text(text)
 
 
 def _evidence_from_joins(
@@ -307,22 +334,17 @@ def detect_explicit_conflicts(
     for edge in sorted(edges, key=lambda item: item.edge_id.casefold()):
         if edge.relationship_type != "conflicts-with":
             continue
-        entity_ids = tuple(
-            sorted(
-                {edge.source_global_entity_id, edge.target_global_entity_id},
-                key=str.casefold,
-            )
+        entity_ids = _safe_id_tuple(
+            [edge.source_global_entity_id, edge.target_global_entity_id]
         )
-        projects = tuple(
-            sorted(
-                {
-                    *_projects_for_global(edge.source_global_entity_id, joins),
-                    *_projects_for_global(edge.target_global_entity_id, joins),
-                },
-                key=str.casefold,
-            )
+        projects = _safe_id_tuple(
+            [
+                *_projects_for_global(edge.source_global_entity_id, joins),
+                *_projects_for_global(edge.target_global_entity_id, joins),
+            ]
         )
-        conflict_id = f"xc-explicit-{_safe_name(edge.edge_id)}"
+        safe_edge = _safe_index_text(edge.edge_id) or "UNKNOWN"
+        conflict_id = f"xc-explicit-{_safe_name(safe_edge)}"
         reports.append(
             ConflictReport(
                 conflict_id=conflict_id,
@@ -355,7 +377,11 @@ def detect_version_divergence(
 
     families: dict[tuple[str, str], list[GlobalEntityRecord]] = {}
     for entity in entity_list:
-        key = (entity.display_name.casefold(), entity.entity_class)
+        display = _safe_index_text(entity.display_name)
+        gid = _safe_index_text(entity.global_entity_id)
+        if display is None or gid is None:
+            continue
+        key = (display.casefold(), entity.entity_class)
         families.setdefault(key, []).append(entity)
 
     reports: list[ConflictReport] = []
@@ -365,16 +391,11 @@ def detect_version_divergence(
         if len(members) < 2:
             continue
         members_sorted = sorted(members, key=lambda item: item.global_entity_id.casefold())
-        entity_ids = tuple(item.global_entity_id for item in members_sorted)
-        project_ids = tuple(
-            sorted(
-                {
-                    project
-                    for gid in entity_ids
-                    for project in _projects_for_global(gid, joins)
-                },
-                key=str.casefold,
-            )
+        entity_ids = _safe_id_tuple(item.global_entity_id for item in members_sorted)
+        project_ids = _safe_id_tuple(
+            project
+            for gid in entity_ids
+            for project in _projects_for_global(gid, joins)
         )
         if len(project_ids) < 2:
             continue
@@ -392,7 +413,7 @@ def detect_version_divergence(
         # with multi-project joins under the same display_name+class family.
         if versions and len(versions) < 2 and len(entity_ids) < 2:
             continue
-        display_name = members_sorted[0].display_name
+        display_name = _safe_index_text(members_sorted[0].display_name)
         conflict_id = (
             f"xc-version-{_safe_name(entity_class)}-{_safe_name(name_key)}"
         )
@@ -424,7 +445,13 @@ def _project_index_entries(joins: Sequence[JoinKeyRecord]) -> list[dict[str, Any
         by_project.setdefault(join.project_id, set()).add(join.global_entity_id)
     entries: list[dict[str, Any]] = []
     for project_id in sorted(by_project, key=str.casefold):
-        globals_sorted = sorted(by_project[project_id], key=str.casefold)
+        if _safe_index_text(project_id) is None:
+            continue
+        globals_sorted = [
+            gid
+            for gid in sorted(by_project[project_id], key=str.casefold)
+            if _safe_index_text(gid) is not None
+        ]
         entries.append(
             {
                 "project_id": project_id,
@@ -445,11 +472,18 @@ def _entity_bucket_entries(
         mapped = _ENTITY_CLASS_TO_BUCKET.get(entity.entity_class)
         if mapped != bucket:
             continue
-        projects = list(_projects_for_global(entity.global_entity_id, joins))
+        gid = _safe_index_text(entity.global_entity_id)
+        if gid is None:
+            continue
+        projects = [
+            project
+            for project in _projects_for_global(entity.global_entity_id, joins)
+            if _safe_index_text(project) is not None
+        ]
         entry: dict[str, Any] = {
-            "global_entity_id": entity.global_entity_id,
+            "global_entity_id": gid,
             "entity_class": entity.entity_class,
-            "display_name": entity.display_name,
+            "display_name": _safe_index_text(entity.display_name),
             "project_ids": projects,
         }
         version = _version_of(entity)
@@ -464,12 +498,12 @@ def _relationship_index_entries(edges: Sequence[GlobalEdgeRecord]) -> list[dict[
     for edge in sorted(edges, key=lambda item: item.edge_id.casefold()):
         entries.append(
             {
-                "edge_id": edge.edge_id,
+                "edge_id": _safe_index_text(edge.edge_id) or "UNKNOWN",
                 "relationship_type": edge.relationship_type,
-                "source_global_entity_id": edge.source_global_entity_id,
-                "target_global_entity_id": edge.target_global_entity_id,
-                "source_project_ids": list(edge.source_project_ids),
-                "target_project_ids": list(edge.target_project_ids),
+                "source_global_entity_id": _safe_index_text(edge.source_global_entity_id),
+                "target_global_entity_id": _safe_index_text(edge.target_global_entity_id),
+                "source_project_ids": list(_safe_id_tuple(edge.source_project_ids)),
+                "target_project_ids": list(_safe_id_tuple(edge.target_project_ids)),
             }
         )
     return entries
