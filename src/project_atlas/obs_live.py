@@ -41,8 +41,13 @@ def build_live_observability_receipt(
     vault: Path,
     *,
     receipt_id: str = "live-obs",
+    persist: bool = True,
 ) -> dict[str, Any]:
-    """Build a deterministic live-surface observability receipt."""
+    """Build a deterministic live-surface observability receipt.
+
+    ``persist=False`` computes the receipt in memory only. LIVE_API GET
+    ``/v1/obs`` must use that mode: write_enabled=false.
+    """
     require_compatibility_anchor()
     ops = vault / "generated" / "ops"
     surfaces = {
@@ -109,6 +114,7 @@ def build_live_observability_receipt(
         "authority_plane": "none",
         "generated": {"by": "project-atlas"},
     }
-    out = ops / "obs" / f"{receipt_id}-live.json"
-    _atomic_write_json(out, payload)
+    if persist:
+        out = ops / "obs" / f"{receipt_id}-live.json"
+        _atomic_write_json(out, payload)
     return payload

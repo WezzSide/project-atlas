@@ -47,6 +47,7 @@ def test_api_obs_authz_and_limits(tmp_path: Path) -> None:
         with urlopen(Request(f"http://{host}:{port}/v1/obs", headers=auth), timeout=2) as resp:
             obs = json.loads(resp.read().decode("utf-8"))
         assert obs["authority_plane"] == "none"
+        assert not (vault / "generated" / "ops" / "obs" / "api-obs-live.json").exists()
         with urlopen(Request(f"http://{host}:{port}/v1/authz", headers=auth), timeout=2) as resp:
             authz = json.loads(resp.read().decode("utf-8"))
         assert authz["authority"] is False

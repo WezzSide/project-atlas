@@ -608,7 +608,7 @@ def make_handler(
                 "/v1/actions": lambda: load_action_ledger(service.vault),
                 "/v1/mcp/tools": lambda: list_mcp_tools(operator=operator),
                 "/v1/obs": lambda: build_live_observability_receipt(
-                    service.vault, receipt_id="api-obs"
+                    service.vault, receipt_id="api-obs", persist=False
                 ),
                 "/v1/mission": lambda: build_mission_view(service.vault),
                 "/v1/workspace": lambda: build_workspace_view(service.vault),
