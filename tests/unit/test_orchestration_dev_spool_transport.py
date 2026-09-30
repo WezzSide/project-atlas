@@ -64,8 +64,8 @@ def test_role_channel_rules_and_no_self_verification(tmp_path):
     assert t.claim(Channel.VERDICT, role=Role.PLANNER, identity="p") is None
     t.publish(make_verification_request(w, r, verifier_identity=VER))
     assert t.claim(Channel.VERIFICATION, role=Role.VERIFIER, identity="other") is None
-    with pytest.raises(TransportError, match="own verification"):
-        t.claim(Channel.VERIFICATION, role=Role.VERIFIER, identity=IMPL)
+    # the executor is not handed its own verification, and is not wedged by it either
+    assert t.claim(Channel.VERIFICATION, role=Role.VERIFIER, identity=IMPL) is None
     assert t.claim(Channel.VERIFICATION, role=Role.VERIFIER, identity=VER) is not None
 
 

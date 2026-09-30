@@ -27,7 +27,7 @@ import re
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Protocol
 
@@ -94,6 +94,13 @@ class CheckRun:
     conclusion: str | None
 
 
+class DispatchRefused(AdapterError):
+    """A dispatch precondition failed BEFORE anything was sent (stale base, unknown repair base).
+
+    Terminal for this work item (the planner must replan); never a reason to stall other works.
+    """
+
+
 class DispatchDeferred(AdapterError):
     code = "DEV_FABRIC_DEFERRED"
 
@@ -126,13 +133,17 @@ def _atomic_write(path: Path, text: str) -> None:
 
 def _parse(iso: str) -> datetime:
     try:
-        return datetime.fromisoformat(iso.replace("Z", "+00:00"))
+        return _aware(datetime.fromisoformat(iso.replace("Z", "+00:00")))
     except ValueError as exc:
         raise AdapterError(f"bad timestamp {iso!r}") from exc
 
 
+def _aware(t: datetime) -> datetime:
+    return t.replace(tzinfo=UTC) if t.tzinfo is None else t.astimezone(UTC)
+
+
 def _shift(iso: str, delta: timedelta) -> str:
-    t = datetime.fromisoformat(iso.replace("Z", "+00:00")) - delta
+    t = _aware(datetime.fromisoformat(iso.replace("Z", "+00:00"))) - delta
     return t.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
@@ -277,10 +288,10 @@ class FabricAdapter:
         else:
             found = self.xw.branch_for_revision(work.base_revision)
             if found is None:
-                raise AdapterError("repair base revision has no known result branch")
+                raise DispatchRefused("repair base revision has no known result branch")
             base_branch = found
         if self.port.branch_head(base_branch) != work.base_revision:
-            raise AdapterError(f"{base_branch} is not at the sealed base revision")
+            raise DispatchRefused(f"{base_branch} is not at the sealed base revision")
         statement, commands = self.task_statement(work)
         payload = build_dispatch_payload(
             work,
@@ -299,13 +310,17 @@ class FabricAdapter:
         return payload
 
     def _unbound_dispatches(self, *, exclude: str = "") -> list[str]:
-        """Seals dispatched but not yet bound to a run: correlation is serialised through these."""
+        """Dispatches without a bound run, taken from the DURABLE ledger (not from live works).
+
+        A dropped lineage whose dispatch may still surface a late run keeps blocking further
+        dispatches until the dispatch deadline has elapsed, so its run can never be adopted by
+        the next work item.
+        """
+        now = _parse(self.clock())
         return [
             seal
-            for seal in self.works
-            if seal != exclude
-            and self.xw.hop(seal, "DISPATCH") is not None
-            and self.xw.hop(seal, "RUN") is None
+            for seal, at in self.xw.unbound_dispatches()
+            if seal != exclude and now - _parse(at) <= self.dispatch_deadline
         ]
 
     def locate_run(self, work: WorkItem) -> RunInfo | None:
@@ -346,21 +361,28 @@ class FabricAdapter:
         if self.xw.hop(work.seal, "RESULT") is not None:
             return True
         run = self.locate_run(work)
-        if run is None or run.status != "completed":
+        if run is None:
+            return False
+        hop = self.xw.hop(work.seal, "RUN")
+        assert hop is not None
+        if run.attempt != int(hop["run_attempt"]):
+            raise RemoteExecutionFailed(
+                f"run {run.run_id} was re-run (attempt {run.attempt} != bound "
+                f"{hop['run_attempt']}); the bound branch/evidence no longer match"
+            )
+        if run.status != "completed":
             return False
         if run.conclusion != "success":
             raise RemoteExecutionFailed(f"run {run.run_id} concluded {run.conclusion}")
-        hop = self.xw.hop(work.seal, "RUN")
-        assert hop is not None
         branch = str(hop["branch"])
         if not AGENT_BRANCH.match(branch):
-            raise AdapterError("unexpected result branch shape")
+            raise RemoteExecutionFailed("unexpected result branch shape")
         head = self.port.branch_head(branch)
         if head is None:
             raise RemoteExecutionFailed("no result branch: the executor produced no change")
         cmp = self.port.compare(work.base_revision, _sha(head))
         if cmp.merge_base != work.base_revision:
-            raise AdapterError("result branch does not descend from the sealed base revision")
+            raise RemoteExecutionFailed("result branch does not descend from the sealed base")
         report = RemoteExecutionReport(
             workflow_conclusion=run.conclusion,
             task_id=work.task_id,
@@ -386,18 +408,28 @@ class FabricAdapter:
         """Finish interrupted hops: bind + (idempotently) publish results/verdicts on disk."""
         out: list[str] = []
         for f in sorted(self.pending.glob("result-*.json")):
-            rec = decode(f.read_text(encoding="utf-8"))
-            assert isinstance(rec, ResultRecord)
-            if self.xw.hop(rec.work_seal, "RESULT") is None:
-                self.xw.bind_result(rec)
+            try:
+                rec = decode(f.read_text(encoding="utf-8"))
+                assert isinstance(rec, ResultRecord)
+                if self.xw.hop(rec.work_seal, "RESULT") is None:
+                    self.xw.bind_result(rec)
+            except (ContractError, AssertionError) as exc:  # stray/forged file: park it, go on
+                f.rename(f.with_suffix(".rejected"))
+                out.append(f"RESULT_FILE_REJECTED:{f.name}:{exc}")
+                continue
             if self.transport.publish(rec):
                 out.append(f"RESULT_REPUBLISHED:{rec.task_id}")
             f.unlink()  # delivered (published now, or already queued/consumed in the spool)
         for f in sorted(self.pending.glob("verdict-*.json")):
-            v = decode(f.read_text(encoding="utf-8"))
-            assert isinstance(v, VerdictRecord)
-            row = self.xw.resolve("execution_id", v.execution_id)
-            hop = self.xw.hop(str(row["work_seal"]), "VERDICT")
+            try:
+                v = decode(f.read_text(encoding="utf-8"))
+                assert isinstance(v, VerdictRecord)
+                row = self.xw.resolve("execution_id", v.execution_id)
+                hop = self.xw.hop(str(row["work_seal"]), "VERDICT")
+            except (ContractError, AssertionError) as exc:  # unknown execution / forged file
+                f.rename(f.with_suffix(".rejected"))
+                out.append(f"VERDICT_FILE_REJECTED:{f.name}:{exc}")
+                continue
             if hop is None or hop["verdict_seal"] != v.seal:
                 f.unlink()  # never validated against the ledger: must not be published
                 out.append(f"VERDICT_DISCARDED:{v.task_id}")
@@ -513,7 +545,7 @@ class FabricAdapter:
             VERIFY_WORKFLOW, event="workflow_run", created_after=_shift(run.created_at, CLOCK_SKEW)
         )
         matches: list[dict[str, object]] = []
-        for c in candidates:
+        for c in sorted(candidates, key=lambda r: (_parse(r.created_at), r.run_id)):
             try:
                 rep = self.port.read_json_artifact(
                     c.run_id, REPORT_ARTIFACT, "verification-report.json"
@@ -526,8 +558,7 @@ class FabricAdapter:
                 same = False
             if same:
                 matches.append(rep)
-        if len({str(m.get("verdict")) for m in matches}) > 1:
-            raise AdapterError("conflicting verifier reports for one source run")
+        # a re-run of the verifier supersedes earlier reports: the LATEST report decides
         return matches[-1] if matches else None
 
     # -- one scheduling tick (idempotent; state lives in crosswalk + spool + pending dir) ----
@@ -543,16 +574,20 @@ class FabricAdapter:
                     except DispatchDeferred:
                         continue  # correlation is serialised; retry next tick
                     events.append(f"DISPATCHED:{w.task_id}")
+                    continue  # never correlate a run in the tick that created it
                 if self.xw.hop(seal, "RESULT") is None and self.collect_result(w):
                     events.append(f"RESULT:{w.task_id}")
             except (
                 RemoteExecutionFailed,
+                DispatchRefused,
                 CrosswalkError,
                 AmbiguousRun,
-            ) as exc:  # this lineage only
+            ) as exc:  # terminal for this lineage only
                 events.append(f"EXECUTION_FAILED:{w.task_id}:{exc}")
                 self._work_file(seal).unlink(missing_ok=True)
                 del self.works[seal]
+            except AdapterError as exc:  # transient port problem: keep the work, retry next tick
+                events.append(f"TRANSIENT:{w.task_id}:{exc}")
         while self.accept_verification() is not None:
             events.append("VERIFICATION_ACCEPTED")
         for req in self.pending_verifications():

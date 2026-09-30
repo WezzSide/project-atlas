@@ -243,9 +243,10 @@ def test_dispatch_is_at_most_once_even_across_adapter_restart(tmp_path):
 def test_base_drift_blocks_dispatch(tmp_path):
     gh = FakeGitHub(branches={"main": "9" * 40})
     _, _, ad, _ = build(tmp_path, gh)
-    with pytest.raises(AdapterError, match="sealed base"):
-        ad.tick()
-    assert gh.dispatches == []
+    events = ad.tick()  # terminal for this work item, never an exception that wedges the tick
+    assert any(e.startswith("EXECUTION_FAILED:DEVQ-1") and "sealed base" in e for e in events)
+    assert gh.dispatches == [] and ad.works == {}
+    assert ad.tick() == []
 
 
 def test_ambiguous_run_is_refused_and_failed_run_blocks_only_that_lineage(tmp_path):
@@ -272,8 +273,7 @@ def test_success_without_result_branch_or_foreign_ancestry_is_not_a_result(tmp_p
     _, _, ad2, _ = build(tmp_path / "b", gh2)
     ad2.tick()
     gh2.executor_finishes(R1, T1)
-    with pytest.raises(AdapterError, match="descend"):
-        ad2.tick()
+    assert any("EXECUTION_FAILED:DEVQ-1" in e and "descend" in e for e in ad2.tick())
 
 
 def test_out_of_scope_change_never_becomes_a_result_and_blocks_only_that_lineage(tmp_path):
@@ -501,3 +501,141 @@ def test_stale_or_unvalidated_verdict_file_is_never_republished(tmp_path):
     assert pl.lineages["DEVQ-1"].phase is Phase.VERIFYING
     pl.pump()
     assert pl.lineages["DEVQ-1"].phase is Phase.VERIFYING
+
+
+# ---- round-3 IV regressions ---------------------------------------------------------------
+
+
+def _late(iso):
+    return lambda: iso
+
+
+def test_dropped_lineage_keeps_blocking_so_its_late_run_is_never_adopted(tmp_path):
+    class Flaky(FakeGitHub):
+        def dispatch_workflow(self, workflow, ref, inputs):
+            super().dispatch_workflow(workflow, ref, inputs)
+            if len(self.dispatches) == 1:
+                raise AdapterError("timeout after GitHub already accepted it")
+
+    gh = Flaky()
+    _, _, ad, pl = build(tmp_path, gh)
+    pl.dispatch(QueueItem(task_id="DEVQ-2", title="t", category=Category.RELIABILITY), **FIELDS)
+    ev = ad.tick()
+    assert any(e.startswith("EXECUTION_FAILED:DEVQ-1") for e in ev)
+    assert len(gh.dispatches) == 1  # DEVQ-2 deferred: the ledger still has an unbound dispatch
+    gh.executor_finishes(R1, T1)  # W1's late run surfaces
+    assert not any(e.startswith("DISPATCHED") for e in ad.tick())
+    assert ad.xw.bound_run_ids() == frozenset()  # and nobody adopted it
+    ad.clock = _late("2026-09-30T16:30:00Z")  # dispatch deadline elapsed
+    assert any(e.startswith("DISPATCHED:DEVQ-2") for e in ad.tick())
+
+
+def test_a_run_is_never_located_in_the_tick_that_dispatched_it(tmp_path):
+    gh = FakeGitHub()
+    gh.executor_finishes(R1, T1)  # a pre-existing foreign run is visible immediately
+    _, _, ad, _ = build(tmp_path, gh)
+    assert ad.tick() == ["ACCEPTED:DEVQ-1", "DISPATCHED:DEVQ-1"]
+    assert ad.xw.bound_run_ids() == frozenset()
+
+
+def test_transient_port_error_keeps_the_work_and_does_not_wedge_other_works(tmp_path):
+    class Down(FakeGitHub):
+        up = False
+
+        def list_runs(self, workflow, *, event, created_after):
+            if not self.up and event == "workflow_dispatch":
+                raise AdapterError("GitHub 502")
+            return super().list_runs(workflow, event=event, created_after=created_after)
+
+    gh = Down()
+    _, _, ad, _ = build(tmp_path, gh)
+    ad.tick()
+    assert any(e.startswith("TRANSIENT:DEVQ-1") for e in ad.tick())
+    assert len(ad.works) == 1
+    gh.up = True
+    gh.executor_finishes(R1, T1)
+    assert "RESULT:DEVQ-1" in ad.tick()
+
+
+def test_rerun_of_the_executor_run_is_not_accepted(tmp_path):
+    gh = FakeGitHub()
+    _, _, ad, _ = build(tmp_path, gh)
+    ad.tick()
+    gh.runs.append(
+        RunInfo(
+            101,
+            1,
+            "atlas-agent-execute.yml",
+            "workflow_dispatch",
+            "in_progress",
+            None,
+            "main",
+            "2026-09-30T16:00:00Z",
+        )
+    )
+    gh.branches["atlas/agent-101-1"] = R1
+    gh.trees[R1] = T1
+    assert ad.tick() == []  # bound at attempt 1, still running
+    gh.runs[0] = RunInfo(
+        101,
+        2,
+        "atlas-agent-execute.yml",
+        "workflow_dispatch",
+        "completed",
+        "success",
+        "main",
+        "2026-09-30T16:00:00Z",
+    )
+    assert any("EXECUTION_FAILED" in e and "re-run" in e for e in ad.tick())
+
+
+def test_latest_verifier_report_wins_over_an_earlier_unestablished_one(tmp_path):
+    gh = FakeGitHub()
+    _, _, ad, pl = build(tmp_path, gh)
+    ad.tick()
+    rid = gh.executor_finishes(R1, T1)
+    ad.tick()
+    pl.pump()
+    ad.tick()
+    gh.checks[R1] = {"quality": ("completed", "success")}
+    gh.verifier_runs(rid, "UNESTABLISHED")
+    assert "VERDICT:DEVQ-1" not in ad.tick()
+    vid2 = rid + 2000
+    gh.verify_runs.append(
+        RunInfo(
+            vid2,
+            1,
+            "atlas-runner-verify.yml",
+            "workflow_run",
+            "completed",
+            "success",
+            "main",
+            "2026-09-30T16:06:00Z",
+        )
+    )
+    gh.verify_reports[vid2] = {"source_run_id": rid, "verdict": "VERIFIED"}
+    assert "VERDICT:DEVQ-1" in ad.tick()
+    pl.pump()
+    assert pl.lineages["DEVQ-1"].phase is Phase.INTEGRATION_READY
+
+
+def test_stray_or_unknown_pending_files_are_parked_not_wedging(tmp_path):
+    gh = FakeGitHub()
+    _, _, ad, _ = build(tmp_path, gh)
+    ad.tick()
+    (ad.pending / "verdict-stray.json").write_text("{not json", encoding="utf-8")
+    (ad.pending / "result-stray.json").write_text("{}", encoding="utf-8")
+    ev = ad.tick()
+    assert any(e.startswith("VERDICT_FILE_REJECTED") for e in ev)
+    assert any(e.startswith("RESULT_FILE_REJECTED") for e in ev)
+    assert ad.tick() == []
+
+
+def test_shift_normalises_offsets_and_naive_clocks_to_utc():
+    from datetime import timedelta
+
+    from project_atlas.orchestration.autonomy.dev_fabric_adapter import _shift
+
+    d = timedelta(seconds=120)
+    assert _shift("2026-09-30T18:00:00+02:00", d) == "2026-09-30T15:58:00Z"
+    assert _shift("2026-09-30T16:00:00", d) == "2026-09-30T15:58:00Z"

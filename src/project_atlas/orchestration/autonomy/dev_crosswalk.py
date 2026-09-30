@@ -209,6 +209,15 @@ class Crosswalk:
     def bound_run_ids(self) -> frozenset[int]:
         return frozenset(int(k[1]) for k in self._index if k[0] == "run_id")
 
+    def unbound_dispatches(self) -> list[tuple[str, str]]:
+        """(work_seal, dispatched_at) of every DISPATCH that has no RUN yet, ledger-wide."""
+        out: list[tuple[str, str]] = []
+        for ws, row in self._rows.items():
+            kinds = {h["event"]: h for h in row["hops"]}
+            if "DISPATCH" in kinds and "RUN" not in kinds:
+                out.append((ws, str(kinds["DISPATCH"]["dispatched_at"])))
+        return out
+
     def hop(self, work_seal: str, kind: str) -> dict[str, Any] | None:
         row = self._rows.get(work_seal)
         if row is None:

@@ -165,3 +165,33 @@ def test_unsafe_names_are_refused_and_pr_lookup_is_open_only():
     p.routes[("POST", "/pulls")] = (201, {"number": 3})
     p.ensure_draft_pr("b", "main", "t", "x")
     assert "state=open" in p.calls[0][1]
+
+
+def test_list_runs_paginates_and_refuses_unbounded_listing():
+    def run(i):
+        return {
+            "id": i,
+            "event": "workflow_dispatch",
+            "status": "completed",
+            "conclusion": "success",
+            "head_branch": "main",
+            "created_at": "2026-09-30T16:00:00Z",
+        }
+
+    class Paged(Stub):
+        def _request(self, method, path, body=None):
+            self.calls.append((method, path, body))
+            if path.endswith("&page=1"):
+                return 200, {"workflow_runs": [run(i) for i in range(100)]}
+            return 200, {"workflow_runs": [run(1000)]}
+
+    p = Paged({})
+    got = p.list_runs("w.yml", event="workflow_dispatch", created_after="2026-09-30T15:00:00Z")
+    assert len(got) == 101 and len(p.calls) == 2
+
+    class Endless(Stub):
+        def _request(self, method, path, body=None):
+            return 200, {"workflow_runs": [run(i) for i in range(100)]}
+
+    with pytest.raises(AdapterError, match="too many"):
+        Endless({}).list_runs("w.yml", event="workflow_dispatch", created_after="x")

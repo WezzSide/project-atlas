@@ -51,6 +51,9 @@ def _run(d: dict[str, Any]) -> RunInfo:
     )
 
 
+MAX_RUN_PAGES = 10
+
+
 class GitHubRestPort:
     def __init__(self, repo: str, token: str, *, owner: str | None = None) -> None:
         if not _REPO.fullmatch(repo):
@@ -92,11 +95,22 @@ class GitHubRestPort:
             raise AdapterError(f"dispatch returned {st}")
 
     def list_runs(self, workflow: str, *, event: str, created_after: str) -> list[RunInfo]:
-        q = urllib.parse.urlencode(
-            {"event": event, "created": f">={created_after}", "per_page": 100}
-        )
-        _, d = self._request("GET", f"/actions/workflows/{workflow}/runs?{q}")
-        return [_run(r) for r in (d or {}).get("workflow_runs", [])]
+        out: list[RunInfo] = []
+        for page_no in range(1, MAX_RUN_PAGES + 1):
+            q = urllib.parse.urlencode(
+                {
+                    "event": event,
+                    "created": f">={created_after}",
+                    "per_page": 100,
+                    "page": page_no,
+                }
+            )
+            _, d = self._request("GET", f"/actions/workflows/{workflow}/runs?{q}")
+            batch = (d or {}).get("workflow_runs", [])
+            out.extend(_run(r) for r in batch)
+            if len(batch) < 100:
+                return out
+        raise AdapterError("too many workflow runs to list safely; refusing to guess")
 
     def get_run(self, run_id: int) -> RunInfo:
         st, d = self._request("GET", f"/actions/runs/{run_id}")

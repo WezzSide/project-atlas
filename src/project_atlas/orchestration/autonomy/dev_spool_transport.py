@@ -99,10 +99,10 @@ class SpoolTransport:
                 raise TransportError("spool file name does not match record seal")
             if channel is Channel.VERIFICATION:
                 assert isinstance(rec, VerificationRequest)
+                if not same_identity(identity, rec.verifier_identity):
+                    continue  # addressed to someone else: leave it, never wedge this claimer
                 if same_identity(identity, rec.executor_identity):
                     raise TransportError("executor identity may not claim its own verification")
-                if not same_identity(identity, rec.verifier_identity):
-                    continue
             try:
                 os.rename(path, d / _CLAIMED / path.name)  # exactly one claimer wins
             except FileNotFoundError:
