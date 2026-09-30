@@ -75,8 +75,8 @@ class Planner:
         identity: str,
         verifier_identities: tuple[str, ...],
     ) -> None:
-        if not verifier_identities:
-            raise PlannerError("at least one verifier identity is required")
+        if not verifier_identities or not isinstance(verifier_identities, tuple | list):
+            raise PlannerError("at least one verifier identity is required (as a tuple)")
         try:
             validate_identity(identity)
             for v in verifier_identities:
@@ -141,11 +141,11 @@ class Planner:
     def pump(self) -> int:
         """Consume every available result and verdict once; returns records processed."""
         n = 0
-        raises = 0
         for channel, handler in (
             (Channel.RESULT, self._on_result),
             (Channel.VERDICT, self._on_verdict),
         ):
+            raises = 0  # per channel: a flooded RESULT channel must not starve VERDICT
             while True:
                 try:
                     rec = self.transport.claim(channel, role=Role.PLANNER, identity=self.identity)
@@ -190,6 +190,12 @@ class Planner:
             raise PlannerError("result is not expected in this phase / for the current work")
         if res.work_seal != work.seal:
             raise PlannerError("result does not answer the dispatched work")
+        if (res.execution_id, res.repository, res.base_revision) != (
+            work.execution_id,
+            work.repository,
+            work.base_revision,
+        ):
+            raise PlannerError("result identity/repository/base does not match the dispatched work")
         others = [v for v in self.verifiers if not same_identity(v, res.executor_identity)]
         if not others:
             self._terminal(st, Phase.BLOCKED, "NO_INDEPENDENT_VERIFIER")
