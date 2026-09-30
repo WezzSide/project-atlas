@@ -123,6 +123,29 @@ def _scan_secret_fields(*texts: str) -> None:
             )
 
 
+def _scan_decoded_record(record: dict[str, Any]) -> None:
+    """Rescan decoded capture scalars after json.loads.
+
+    AS-SEC-SCAN-CONVERSATION-CAPTURE-JSON-ESC-001: on-disk ``\\u`` escapes
+    miss scan_text on raw bytes; review-state rewrite must not persist the
+    decoded token.
+    """
+    texts: list[str] = []
+
+    def walk(value: Any) -> None:
+        if isinstance(value, str):
+            texts.append(value)
+        elif isinstance(value, list):
+            for item in value:
+                walk(item)
+        elif isinstance(value, dict):
+            for item in value.values():
+                walk(item)
+
+    walk(record)
+    _scan_secret_fields(*texts)
+
+
 def _normalize_items(raw_items: Any) -> list[dict[str, Any]]:
     if not isinstance(raw_items, list) or not raw_items:
         raise ConversationCaptureError(
@@ -684,6 +707,7 @@ def set_conversation_review_state(
     record = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(record, dict):
         raise ConversationCaptureError("MALFORMED_SCHEMA", "stored capture is not an object")
+    _scan_decoded_record(record)
     record["review_state"] = state
     inbox = dict(record.get("inbox") or {})
     inbox["status"] = INBOX_BY_REVIEW[state]
