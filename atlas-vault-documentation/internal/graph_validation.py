@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .safe_project import confined_file, require_project_id
+
 
 @dataclass
 class GraphValidationReport:
@@ -24,12 +26,13 @@ class GraphValidationReport:
 
 
 def validate(vault_root: Path, project_id: str) -> GraphValidationReport:
-    report = GraphValidationReport(project_id)
+    pid = require_project_id(project_id)
+    report = GraphValidationReport(pid)
     base = vault_root / "relationships"
-    nodes_path = base / "nodes" / f"{project_id}.jsonl"
-    edges_path = base / "edges" / f"{project_id}.jsonl"
-    state_path = base / "state" / f"{project_id}.json"
-    receipt_paths = sorted((base / "receipts").glob(f"{project_id}-*.json"))
+    nodes_path = confined_file(base / "nodes", pid, "{project_id}.jsonl")
+    edges_path = confined_file(base / "edges", pid, "{project_id}.jsonl")
+    state_path = confined_file(base / "state", pid, "{project_id}.json")
+    receipt_paths = sorted((base / "receipts").glob(f"{pid}-*.json"))
     if not state_path.is_file():
         report.errors.append("missing graph state")
         return report
@@ -49,6 +52,6 @@ def validate(vault_root: Path, project_id: str) -> GraphValidationReport:
         else:
             report.warnings.append(f"missing optional store: {path.name}")
     for projection in ("relationships.md", "graph-health.md"):
-        if not (vault_root / "projects" / project_id / projection).is_file():
+        if not confined_file(vault_root / "projects" / pid, pid, projection).is_file():
             report.errors.append(f"missing graph projection: {projection}")
     return report

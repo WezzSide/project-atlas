@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .safe_project import confined_file
+
 STATE_SCHEMA_VERSION = 1
 
 
@@ -79,7 +81,7 @@ class ProjectRoutingState:
 
 
 def state_path(state_root: Path, project_id: str) -> Path:
-    return state_root / f"{project_id}.json"
+    return confined_file(state_root, project_id, "{project_id}.json")
 
 
 def load_state(state_root: Path, project_id: str) -> ProjectRoutingState:
