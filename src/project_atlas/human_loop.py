@@ -80,6 +80,26 @@ def _pending_path(vault: Path, project_id: str) -> Path:
     return vault / "review" / "pending" / f"{project_id}.json"
 
 
+def _conflict_claim_ids(vault: Path, project_id: str, conflict_id: str) -> set[str]:
+    """Bind a conflict winner to claim ids on the pending conflict record."""
+    path = vault / "review" / "conflicts" / f"{project_id}.json"
+    if not path.is_file():
+        return set()
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return set()
+    entries = raw.get("entries") if isinstance(raw, dict) else None
+    if not isinstance(entries, list):
+        return set()
+    for item in entries:
+        if not isinstance(item, dict) or item.get("conflict_id") != conflict_id:
+            continue
+        ids = item.get("claim_ids") or []
+        return {str(cid) for cid in ids if isinstance(cid, str) and cid.strip()}
+    return set()
+
+
 def _find_pending_entry(
     vault: Path, project_id: str, review_id: str
 ) -> dict[str, Any]:
@@ -135,6 +155,11 @@ def apply_review_decision(
                 "conflict accept requires --winner-claim-id (no silent winner)"
             )
         winner = _safe_token(winner_claim_id, label="winner claim id")
+        allowed = _conflict_claim_ids(vault, project_id, subject_id)
+        if winner not in allowed:
+            raise HumanLoopError(
+                "winner_claim_id is not a claim on the pending conflict"
+            )
 
     registry = load_human_decisions(vault, project_id)
     existing_ids = {
