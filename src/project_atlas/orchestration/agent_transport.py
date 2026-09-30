@@ -43,6 +43,12 @@ RESULT_FRAME_BEGIN = "<<<ATLAS_AGENT_RESULT_ENVELOPE_V1>>>"
 RESULT_FRAME_END = "<<<END_ATLAS_AGENT_RESULT_ENVELOPE_V1>>>"
 _SAFE_META_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 _WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:[\\/]")
+# AS-ORCH-COMSPEC-F1: basename cmd.exe + parent System32 is not trust.
+# Only the OS Windows\System32\cmd.exe path is accepted.
+_TRUSTED_WINDOWS_COMSPEC_RE = re.compile(
+    r"^[A-Za-z]:[\\/]+Windows[\\/]+System32[\\/]+cmd\.exe$",
+    re.IGNORECASE,
+)
 _CURSOR_OMIT_ENV: frozenset[str] = frozenset({"ATLAS_MDA_COMMAND", "MDA_MOCK_MODE"})
 
 
@@ -338,12 +344,9 @@ def resolve_windows_comspec(
             _reject_raw_text(raw)
         except TransportError:
             continue
-        names = {PureWindowsPath(raw).name.lower(), Path(raw).name.lower()}
-        parents = {
-            PureWindowsPath(raw).parent.name.lower(),
-            Path(raw).parent.name.lower(),
-        }
-        if "cmd.exe" not in names or "system32" not in parents:
+        if ".." in raw.split("/") or ".." in PureWindowsPath(raw).parts:
+            continue
+        if not _TRUSTED_WINDOWS_COMSPEC_RE.fullmatch(raw):
             continue
         if (
             not PureWindowsPath(raw).is_absolute()
