@@ -61,6 +61,12 @@ def _edges(raw: object, *, project_id: str) -> list[dict[str, Any]]:
         to_id = str(item.get("to_id") or item.get("to") or "").strip()
         if not from_id or not to_id:
             raise Atlas3Error("CAUSAL_IDENTITY_INCOMPLETE", "edge requires from_id and to_id")
+        explicit = item.get("project_id")
+        if explicit is not None and str(explicit) != project_id:
+            raise Atlas3Error(
+                "CROSS_PROJECT",
+                f"causal edge project_id {explicit!r} != requested {project_id!r}",
+            )
         evidence = item.get("evidence_refs") or item.get("evidence")
         if not isinstance(evidence, list):
             raise Atlas3Error("PROVENANCE_REQUIRED", f"{from_id}->{to_id} requires evidence_refs")
