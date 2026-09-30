@@ -28,6 +28,7 @@ from project_atlas.ops_health import (
     snapshot_to_json,
 )
 from project_atlas.schema import validate_record
+from project_atlas.secrets import scan_text
 
 
 def _write(path: Path, payload: object) -> None:
@@ -268,3 +269,21 @@ def test_skill_drift_fails_ops_sig_011(tmp_path: Path) -> None:
     signals = _signal_map(snapshot)
     assert signals["OPS-SIG-011"]["status"] == "fail"
     assert signals["OPS-SIG-011"]["severity"] == "CRITICAL"
+
+
+def test_json_unicode_escape_vault_uuid_is_not_persisted(tmp_path: Path) -> None:
+    """AS-SEC-SCAN-OPS-HEALTH-UUID-JSON-ESC-001: decoded vault_uuid must not persist."""
+    token = "AKIAAAAAAAAAAAAAAAAA"
+    vault = tmp_path / "vault"
+    ident = vault / ".atlas"
+    ident.mkdir(parents=True)
+    raw = '{"vault_uuid":"\\u0041KIAAAAAAAAAAAAAAAAA","schema_version":1}'
+    (ident / "vault.json").write_text(raw, encoding="utf-8")
+    assert scan_text(raw) == []
+    snap = emit_health_snapshot(vault, persist=True)
+    written = (vault / "generated" / "ops" / "health-snapshot.json").read_text(
+        encoding="utf-8"
+    )
+    assert snap.get("estate_id") != token
+    assert token not in written
+    assert scan_text(written) == []
