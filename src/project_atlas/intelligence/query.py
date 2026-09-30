@@ -588,7 +588,7 @@ def _status_from_assessments(items: tuple[EvidenceAssessment, ...]) -> SlotStatu
         return SlotStatus.CONTESTED
     if "temporal-stale" in factors:
         return SlotStatus.STALE
-    if all(item.confidence_class.value == "unknown" for item in items):
+    if any(item.confidence_class.value == "unknown" for item in items):
         return SlotStatus.UNKNOWN
     if len(items) == 1:
         return SlotStatus.OBSERVED
@@ -600,7 +600,7 @@ def _status_from_facts(facts: tuple[DerivedFact, ...]) -> SlotStatus:
         return SlotStatus.CONTESTED
     if any(item.status.value == "stale" for item in facts):
         return SlotStatus.STALE
-    if all(item.status.value == "unknown" for item in facts):
+    if any(item.status.value == "unknown" for item in facts):
         return SlotStatus.UNKNOWN
     if any(item.status.value == "derived" for item in facts):
         return SlotStatus.DERIVED
