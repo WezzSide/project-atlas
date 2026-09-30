@@ -103,21 +103,47 @@ def _extract_next_text(block: dict[str, Any] | None) -> str | None:
     return None
 
 
+def _bind_project(
+    payload: dict[str, Any] | None,
+    *,
+    project_id: str,
+    label: str,
+) -> dict[str, Any] | None:
+    """Unlabeled artifacts stay allowed. Explicit foreign project_id fails closed."""
+    if payload is None:
+        return None
+    explicit = payload.get("project_id")
+    if explicit is not None and str(explicit) != project_id:
+        raise Atlas3Error(
+            "PROJECT_MISMATCH",
+            f"{label} project_id {explicit!r} != requested {project_id!r}",
+        )
+    return payload
+
+
 def compile_next_action_honesty(vault: Path | str, project_id: str) -> dict[str, Any]:
     """Project next-action honesty from Pulse / next-lens. Does not invent a command."""
     root = require_vault(vault)
     pid = require_project(root, project_id)
 
-    pulse = _read_object(_pulse_path(root, pid), corrupt_code="PULSE_CORRUPT", label="pulse")
+    pulse = _bind_project(
+        _read_object(_pulse_path(root, pid), corrupt_code="PULSE_CORRUPT", label="pulse"),
+        project_id=pid,
+        label="pulse",
+    )
     if pulse is not None:
         _walk_reject(pulse, label="pulse")
         questions = pulse.get("questions")
         if questions is not None and not isinstance(questions, dict):
             raise Atlas3Error("PULSE_CORRUPT", "pulse questions must be an object")
 
-    next_lens = _read_object(
-        _next_lens_path(root, pid),
-        corrupt_code="NEXT_LENS_CORRUPT",
+    next_lens = _bind_project(
+        _read_object(
+            _next_lens_path(root, pid),
+            corrupt_code="NEXT_LENS_CORRUPT",
+            label="next-lens",
+        ),
+        project_id=pid,
         label="next-lens",
     )
     if next_lens is not None:
@@ -132,6 +158,12 @@ def compile_next_action_honesty(vault: Path | str, project_id: str) -> dict[str,
     if pulse_next is not None and not isinstance(pulse_next, dict):
         raise Atlas3Error("PULSE_CORRUPT", "pulse next-action must be an object")
     if isinstance(pulse_next, dict):
+        _bind_project(pulse_next, project_id=pid, label="pulse.next")
+        raw_items = pulse_next.get("items")
+        if isinstance(raw_items, list):
+            for index, item in enumerate(raw_items):
+                if isinstance(item, dict):
+                    _bind_project(item, project_id=pid, label=f"pulse.next.items[{index}]")
         _walk_reject(pulse_next, label="pulse.next")
 
     next_text = _extract_next_text(pulse_next) or _extract_next_text(next_lens)
