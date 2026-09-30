@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 
 import pytest
 
-from project_atlas.orchestration.autonomy.dev_contracts import make_work
+from project_atlas.orchestration.autonomy.dev_contracts import Role, make_work
 from project_atlas.orchestration.autonomy.dev_crosswalk import Crosswalk
 from project_atlas.orchestration.autonomy.dev_fabric_adapter import (
     AdapterError,
@@ -19,6 +19,7 @@ from project_atlas.orchestration.autonomy.dev_fabric_adapter import (
 from project_atlas.orchestration.autonomy.dev_planner import Phase, Planner
 from project_atlas.orchestration.autonomy.dev_queue import Category, QueueItem
 from project_atlas.orchestration.autonomy.dev_spool_transport import SpoolTransport
+from project_atlas.orchestration.autonomy.dev_transport import Channel
 
 BASE = "a" * 40
 R1, T1, R2, T2 = "b" * 40, "c" * 40, "d" * 40, "e" * 40
@@ -382,8 +383,7 @@ def test_crash_between_result_bind_and_publish_is_recovered(tmp_path, monkeypatc
         return orig(rec)
 
     monkeypatch.setattr(spool, "publish", flaky)
-    with pytest.raises(RuntimeError):
-        ad.tick()
+    assert any(e.startswith("UNEXPECTED:DEVQ-1:RuntimeError") for e in ad.tick())
     monkeypatch.undo()
     ad2 = FabricAdapter(
         gh,
@@ -639,3 +639,71 @@ def test_shift_normalises_offsets_and_naive_clocks_to_utc():
     d = timedelta(seconds=120)
     assert _shift("2026-09-30T18:00:00+02:00", d) == "2026-09-30T15:58:00Z"
     assert _shift("2026-09-30T16:00:00", d) == "2026-09-30T15:58:00Z"
+
+
+# ---- round-4 IV regressions ---------------------------------------------------------------
+
+
+def test_non_adapter_errors_never_wedge_the_tick_or_later_verifications(tmp_path):
+    class Boom(FakeGitHub):
+        def read_json_artifact(self, run_id, name, member):
+            raise KeyError("verification-report.json")  # a raw, unwrapped port failure
+
+    gh = Boom()
+    _, _, ad, pl = build(tmp_path, gh)
+    ad.tick()
+    rid = gh.executor_finishes(R1, T1)
+    ad.tick()
+    pl.pump()
+    ad.tick()
+    gh.checks[R1] = {"quality": ("completed", "success")}
+    gh.verifier_runs(rid, "VERIFIED")
+    ev = ad.tick()  # must not raise
+    assert any(e.startswith("VERDICT_UNEXPECTED:DEVQ-1") for e in ev)
+    assert "VERDICT:DEVQ-1" not in ev
+
+
+def test_rerun_after_ingestion_cannot_vouch_for_the_old_head(tmp_path):
+    gh = FakeGitHub()
+    _, _, ad, pl = build(tmp_path, gh)
+    ad.tick()
+    rid = gh.executor_finishes(R1, T1)
+    ad.tick()
+    pl.pump()
+    ad.tick()
+    gh.runs[0] = RunInfo(
+        rid,
+        2,
+        "atlas-agent-execute.yml",
+        "workflow_dispatch",
+        "completed",
+        "success",
+        "main",
+        "2026-09-30T16:00:00Z",
+    )
+    gh.checks[R1] = {"quality": ("completed", "success")}
+    gh.verifier_runs(rid, "VERIFIED")
+    ev = ad.tick()
+    assert any(e.startswith("VERDICT_ERROR:DEVQ-1") and "re-run" in e for e in ev)
+    assert "VERDICT:DEVQ-1" not in ev
+
+
+def test_claimed_but_unpersisted_work_is_readopted_after_a_crash(tmp_path):
+    gh = FakeGitHub()
+    spool, _xw, ad, _pl = build(tmp_path, gh)
+    w = spool.claim(Channel.WORK, role=Role.IMPLEMENTER, identity=ad.executor_identity)
+    assert w is not None  # crash right after the claim: nothing persisted
+    ad2 = FabricAdapter(
+        gh,
+        spool,
+        Crosswalk(tmp_path / "xw.jsonl"),
+        pending_dir=tmp_path / "pending",
+        clock=lambda: "2026-09-30T15:59:00Z",
+        task_statement=statement,
+        required_checks=frozenset({"quality"}),
+    )
+    assert ad2.works == {}
+    ev = ad2.tick()
+    assert "WORK_READOPTED:DEVQ-1" in ev and "DISPATCHED:DEVQ-1" in ev
+    assert ad2.tick() == []  # re-adoption is idempotent: never a second dispatch
+    assert len(gh.dispatches) == 1

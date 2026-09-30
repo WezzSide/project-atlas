@@ -195,3 +195,18 @@ def test_list_runs_paginates_and_refuses_unbounded_listing():
 
     with pytest.raises(AdapterError, match="too many"):
         Endless({}).list_runs("w.yml", event="workflow_dispatch", created_after="x")
+
+
+def test_raw_parse_and_io_failures_surface_as_adapter_errors():
+    class Broken(Stub):
+        def _request(self, method, path, body=None):
+            raise KeyError("boom")
+
+    for call in (
+        lambda p: p.commit_tree("a" * 40),
+        lambda p: p.branch_head("b"),
+        lambda p: p.check_runs("a" * 40),
+        lambda p: p.get_run(1),
+    ):
+        with pytest.raises(AdapterError):
+            call(Broken({}))

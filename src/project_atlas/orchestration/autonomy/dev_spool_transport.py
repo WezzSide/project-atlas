@@ -96,6 +96,13 @@ class SpoolTransport:
                     continue
                 raise
             if rec.seal != path.stem:
+                # a mis-named (copied/renamed) record: reject exactly once, never wedge the channel
+                rej = d / "rejected"
+                rej.mkdir(exist_ok=True)
+                try:
+                    os.rename(path, rej / path.name)
+                except FileNotFoundError:
+                    continue
                 raise TransportError("spool file name does not match record seal")
             if channel is Channel.VERIFICATION:
                 assert isinstance(rec, VerificationRequest)
@@ -113,3 +120,18 @@ class SpoolTransport:
             )
             return rec
         return None
+
+    def claimed_records(self, channel: Channel, *, identity: str) -> list[Record]:
+        """Records this identity claimed earlier (crash recovery: claim-before-persist window)."""
+        d = self._dir(channel) / _CLAIMED
+        out: list[Record] = []
+        for meta in sorted(d.glob("*.claim.json")):
+            try:
+                who = json.loads(meta.read_text(encoding="utf-8")).get("identity", "")
+                if not same_identity(str(who), identity):
+                    continue
+                seal = meta.name[: -len(".claim.json")]
+                out.append(decode((d / f"{seal}.json").read_text(encoding="utf-8")))
+            except (OSError, ValueError, ContractError):
+                continue  # unreadable claim evidence is ignored, never trusted
+        return out

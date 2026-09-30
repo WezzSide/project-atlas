@@ -128,3 +128,15 @@ def test_full_cycle_over_spool_with_separate_role_instances(tmp_path):
     ver_t.publish(make_verdict(req, verdict=Verdict.PASS, findings=()))
     p.pump()
     assert p.lineages["DEVQ-1"].phase is Phase.INTEGRATION_READY
+
+
+def test_misnamed_record_is_rejected_once_and_does_not_wedge_the_channel(tmp_path):
+    t = SpoolTransport(tmp_path)
+    w = work()
+    t.publish(w)
+    d = tmp_path / "WORK"
+    (d / f"{w.seal}.json").rename(d / "0000.json")  # valid record, wrong file name, sorts first
+    with pytest.raises(TransportError, match="does not match"):
+        t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity=IMPL)
+    assert (d / "rejected" / "0000.json").exists()
+    assert t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity=IMPL) is None

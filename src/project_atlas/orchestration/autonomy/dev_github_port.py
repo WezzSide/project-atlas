@@ -8,6 +8,7 @@ of one workflow, and opening a draft evidence PR.
 
 from __future__ import annotations
 
+import functools
 import io
 import json
 import re
@@ -15,6 +16,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
+from collections.abc import Callable
 from typing import Any
 
 from project_atlas.orchestration.autonomy.dev_fabric_adapter import (
@@ -212,3 +214,41 @@ class GitHubRestPort:
             {"title": title, "head": head_branch, "base": base, "body": body, "draft": True},
         )
         return int(made["number"])
+
+
+def _guarded(fn: Callable[..., Any]) -> Callable[..., Any]:
+    """Every parse/IO failure of the real port surfaces as AdapterError (never a raw KeyError)."""
+
+    @functools.wraps(fn)
+    def wrapper(*a: Any, **kw: Any) -> Any:
+        try:
+            return fn(*a, **kw)
+        except AdapterError:
+            raise
+        except (
+            KeyError,
+            ValueError,
+            TypeError,
+            IndexError,
+            AttributeError,
+            OSError,  # includes URLError/HTTPError/TimeoutError
+            zipfile.BadZipFile,
+        ) as exc:
+            raise AdapterError(f"github port {fn.__name__} failed: {type(exc).__name__}") from exc
+
+    return wrapper
+
+
+for _name in (
+    "dispatch_workflow",
+    "list_runs",
+    "get_run",
+    "branch_head",
+    "commit_tree",
+    "compare",
+    "artifact_digests",
+    "read_json_artifact",
+    "check_runs",
+    "ensure_draft_pr",
+):
+    setattr(GitHubRestPort, _name, _guarded(getattr(GitHubRestPort, _name)))

@@ -16,6 +16,14 @@ through the injected ``GitHubPort`` (a fake in tests, ``GitHubRestPort`` live).
 
 Crash safety: DISPATCH is written ahead to the Crosswalk ledger, so a work item is dispatched at
 most once; run discovery is fail-closed on ambiguity.
+
+OPERATING ASSUMPTIONS (documented residuals, enforced by deployment, not by this module):
+  * the execute workflow has no ``run-name``, so a run cannot be tied to a dispatch except by
+    time window + serialisation; humans must not dispatch ``atlas-agent-execute.yml`` by hand
+    while the adapter has an unbound dispatch (the adapter refuses to guess on ambiguity);
+  * evidence PRs must be opened with a PAT/App token (not ``GITHUB_TOKEN``) or task CI will not
+    trigger and no verdict is ever produced (fail-closed, never a PASS);
+  * a manual re-run of the executor run is refused (attempt guard) before and after ingestion.
 """
 
 from __future__ import annotations
@@ -407,13 +415,15 @@ class FabricAdapter:
     def recover(self) -> list[str]:
         """Finish interrupted hops: bind + (idempotently) publish results/verdicts on disk."""
         out: list[str] = []
+        out.extend(self._readopt_claimed())
         for f in sorted(self.pending.glob("result-*.json")):
             try:
                 rec = decode(f.read_text(encoding="utf-8"))
-                assert isinstance(rec, ResultRecord)
+                if not isinstance(rec, ResultRecord):
+                    raise ContractError("not a result record")
                 if self.xw.hop(rec.work_seal, "RESULT") is None:
                     self.xw.bind_result(rec)
-            except (ContractError, AssertionError) as exc:  # stray/forged file: park it, go on
+            except ContractError as exc:  # stray/forged file: park it, go on
                 f.rename(f.with_suffix(".rejected"))
                 out.append(f"RESULT_FILE_REJECTED:{f.name}:{exc}")
                 continue
@@ -423,10 +433,11 @@ class FabricAdapter:
         for f in sorted(self.pending.glob("verdict-*.json")):
             try:
                 v = decode(f.read_text(encoding="utf-8"))
-                assert isinstance(v, VerdictRecord)
+                if not isinstance(v, VerdictRecord):
+                    raise ContractError("not a verdict record")
                 row = self.xw.resolve("execution_id", v.execution_id)
                 hop = self.xw.hop(str(row["work_seal"]), "VERDICT")
-            except (ContractError, AssertionError) as exc:  # unknown execution / forged file
+            except ContractError as exc:  # unknown execution / forged file
                 f.rename(f.with_suffix(".rejected"))
                 out.append(f"VERDICT_FILE_REJECTED:{f.name}:{exc}")
                 continue
@@ -437,6 +448,34 @@ class FabricAdapter:
             if self.transport.publish(v):
                 out.append(f"VERDICT_REPUBLISHED:{v.task_id}")
             f.unlink()
+        return out
+
+    def _readopt_claimed(self) -> list[str]:
+        """Claim-before-persist crash window: re-adopt records we claimed but never persisted."""
+        lister = getattr(self.transport, "claimed_records", None)
+        if lister is None:
+            return []
+        out: list[str] = []
+        for rec in lister(Channel.WORK, identity=self.executor_identity):
+            if (
+                isinstance(rec, WorkItem)
+                and rec.seal not in self.works
+                and not self.xw.knows_work(rec.seal)
+            ):
+                _atomic_write(self._work_file(rec.seal), encode(rec))
+                self.works[rec.seal] = rec
+                self.xw.bind_work(rec)
+                out.append(f"WORK_READOPTED:{rec.task_id}")
+        for rec in lister(Channel.VERIFICATION, identity=self.verifier_identity):
+            if not isinstance(rec, VerificationRequest) or self._verify_file(rec).exists():
+                continue
+            try:
+                ws = str(self.xw.resolve("execution_id", rec.execution_id)["work_seal"])
+            except CrosswalkError:
+                continue
+            if self.xw.hop(ws, "VERDICT") is None:
+                _atomic_write(self._verify_file(rec), encode(rec))
+                out.append(f"VERIFICATION_READOPTED:{rec.task_id}")
         return out
 
     # -- verifier side ------------------------------------------------------------------------
@@ -484,6 +523,11 @@ class FabricAdapter:
             self._verify_file(req).unlink(missing_ok=True)
             return False  # already decided; nothing more to do for this request
         source_run = int(run_hop["run_id"])
+        live = self.port.get_run(source_run)
+        if live.attempt != int(run_hop["run_attempt"]):
+            raise AdapterError(
+                "executor run was re-run after ingestion; evidence no longer matches the result"
+            )
         head = self.port.branch_head(str(run_hop["branch"]))
         if head != req.result_revision:
             raise AdapterError("result branch moved after ingestion; artifact identity changed")
@@ -564,7 +608,14 @@ class FabricAdapter:
     # -- one scheduling tick (idempotent; state lives in crosswalk + spool + pending dir) ----
     def tick(self) -> list[str]:
         events: list[str] = list(self.recover())
-        while (w := self.accept_work()) is not None:
+        while True:
+            try:
+                w = self.accept_work()
+            except (CrosswalkError, ContractError) as exc:  # e.g. duplicate execution id
+                events.append(f"ACCEPT_REFUSED:{exc}")
+                continue
+            if w is None:
+                break
             events.append(f"ACCEPTED:{w.task_id}")
         for seal, w in list(self.works.items()):
             try:
@@ -588,6 +639,8 @@ class FabricAdapter:
                 del self.works[seal]
             except AdapterError as exc:  # transient port problem: keep the work, retry next tick
                 events.append(f"TRANSIENT:{w.task_id}:{exc}")
+            except Exception as exc:
+                events.append(f"UNEXPECTED:{w.task_id}:{type(exc).__name__}:{exc}")
         while self.accept_verification() is not None:
             events.append("VERIFICATION_ACCEPTED")
         for req in self.pending_verifications():
@@ -599,4 +652,6 @@ class FabricAdapter:
                     events.append(f"VERDICT:{req.task_id}")
             except (AdapterError, CrosswalkError) as exc:  # integrity problem: report, keep going
                 events.append(f"VERDICT_ERROR:{req.task_id}:{exc}")
+            except Exception as exc:
+                events.append(f"VERDICT_UNEXPECTED:{req.task_id}:{type(exc).__name__}:{exc}")
         return events

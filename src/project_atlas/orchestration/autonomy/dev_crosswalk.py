@@ -209,6 +209,9 @@ class Crosswalk:
     def bound_run_ids(self) -> frozenset[int]:
         return frozenset(int(k[1]) for k in self._index if k[0] == "run_id")
 
+    def knows_work(self, work_seal: str) -> bool:
+        return work_seal in self._rows
+
     def unbound_dispatches(self) -> list[tuple[str, str]]:
         """(work_seal, dispatched_at) of every DISPATCH that has no RUN yet, ledger-wide."""
         out: list[tuple[str, str]] = []
