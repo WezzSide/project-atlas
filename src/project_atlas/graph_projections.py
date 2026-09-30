@@ -549,7 +549,10 @@ def load_relationships_from_vault(vault: Path, *, project_id: str) -> list[Relat
             raise GraphProjectionError(f"malformed-relationship-json:{path.name}") from exc
         if not isinstance(payload, dict):
             raise GraphProjectionError(f"malformed-relationship-json:{path.name}")
-        if payload.get("status") == "retained" or "relationship_id" in payload:
+        # AS-GRAPH-QUARANTINE-PROJECTION-001: only retained rows are
+        # derived projection truth. relationship_id alone must not promote
+        # quarantined / candidate records into relationships.md.
+        if payload.get("status") == "retained":
             records.append(_coerce_relationship(payload))
     return records
 
