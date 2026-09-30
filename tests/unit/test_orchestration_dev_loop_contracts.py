@@ -22,7 +22,7 @@ from project_atlas.orchestration.autonomy.dev_contracts import (
     make_work,
     materialize_repair,
 )
-from project_atlas.orchestration.autonomy.dev_planner import Phase, Planner
+from project_atlas.orchestration.autonomy.dev_planner import Phase, Planner, PlannerError
 from project_atlas.orchestration.autonomy.dev_queue import Category, QueueItem
 from project_atlas.orchestration.autonomy.dev_transport import (
     Channel,
@@ -476,3 +476,91 @@ def test_attempt_beyond_ceiling_is_not_a_valid_work_item():
 def test_sha_fields_reject_a_trailing_newline():
     with pytest.raises(ContractError):
         work(base_revision=BASE + "\n")
+
+
+# ---- IV #1033 round 2 ------------------------------------------------------------------------
+
+
+def test_stale_pass_for_a_superseded_work_item_cannot_promote_a_noop_repair():
+    t = InMemoryTransport()
+    p, req = _verifying(t)
+    stale_pass = make_verdict(req, verdict=Verdict.PASS)
+    t.publish(
+        make_verdict(
+            req,
+            verdict=Verdict.FAIL,
+            findings=(Finding(finding_id="F1", category=FindingCategory.DEFECT),),
+        )
+    )
+    p.pump()
+    st = p.lineages["A"]
+    assert st.phase is Phase.REPAIR_DISPATCHED
+    # a no-op repair returns the SAME revision/tree
+    rw = t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity=IMPL)
+    assert rw is not None and rw.task_id != "A"
+    t.publish(make_result(rw, executor_identity=IMPL, result_revision=REV1, result_tree=TREE1))
+    p.pump()
+    assert st.phase is Phase.VERIFYING
+    t.publish(stale_pass)  # the old verifier PASS for the ORIGINAL request arrives late
+    p.pump()
+    assert st.phase is Phase.VERIFYING and "A" not in p.completed
+    assert any(q[0] == "VERDICT" for q in p.quarantined)
+
+
+def test_repair_task_id_collision_blocks_the_lineage_instead_of_corrupting_state():
+    t = InMemoryTransport()
+    p = planner(t)
+    p.dispatch(qi("A"), **FIELDS)
+    p.dispatch(qi("A-R1"), **FIELDS)  # squats on the id the repair of A will need
+    run_role_implementer(t, [(REV1, TREE1)])
+    p.pump()
+    req = t.claim(Channel.VERIFICATION, role=Role.VERIFIER, identity=VER)
+    assert req is not None
+    fail = Finding(finding_id="F1", category=FindingCategory.DEFECT)
+    t.publish(make_verdict(req, verdict=Verdict.FAIL, findings=(fail,)))
+    p.pump()
+    assert p.lineages["A"].phase is Phase.BLOCKED
+    assert "COLLISION" in p.lineages["A"].reason
+    assert p.lineages["A-R1"].work.task_id == "A-R1"
+    with pytest.raises(PlannerError):
+        p.dispatch(qi("A"), **FIELDS)
+
+
+@pytest.mark.parametrize("entry", ["secrets\\", "/secrets", "secrets/*", "a/../b", "x[ab]"])
+def test_malformed_scope_entries_are_rejected_at_the_work_item(entry):
+    with pytest.raises(ContractError):
+        work(forbidden_paths=(entry,))
+    with pytest.raises(ContractError):
+        work(allowed_paths=(entry,))
+
+
+def test_path_matching_is_case_and_unicode_normalised():
+    w = work(allowed_paths=("Src/X",), forbidden_paths=("secrets",))
+    for path in ("Secrets/a", "SECRETS/a"):
+        f = Finding(finding_id="F", category=FindingCategory.DEFECT, paths=(path,))
+        assert classify_finding(f, w) is FindingClass.OWNER_AUTHORITY_REQUIRED
+    ok = Finding(finding_id="F", category=FindingCategory.DEFECT, paths=("src/x/a.py",))
+    assert classify_finding(ok, w) is FindingClass.REPAIRABLE_WITHIN_AUTHORITY
+
+
+def test_a_poisoned_wire_is_rejected_once_and_does_not_wedge_the_pump():
+    t = InMemoryTransport()
+    p = planner(t)
+    p.dispatch(qi("A"), **FIELDS)
+    w = p.lineages["A"].work
+    t.publish(make_result(w, executor_identity=IMPL, result_revision=REV1, result_tree=TREE1))
+    t._tamper_next(Channel.RESULT, ("vps1-impl", "vps1-evil"))
+    p.pump()
+    assert t.rejected and any(q[1] == "UNDECODABLE" for q in p.quarantined)
+    p.pump()  # nothing left at the head of the channel; no repeated failure
+    t.publish(make_result(w, executor_identity=IMPL, result_revision=REV2, result_tree=TREE2))
+    p.pump()
+    assert p.lineages["A"].phase is Phase.VERIFYING
+
+
+def test_planner_rejects_non_canonical_identities_up_front():
+    t = InMemoryTransport()
+    with pytest.raises(PlannerError):
+        Planner(t, identity="planner", verifier_identities=("ver a",))
+    with pytest.raises(PlannerError):
+        Planner(t, identity=" planner", verifier_identities=("ver-a",))
