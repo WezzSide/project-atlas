@@ -5,6 +5,25 @@ exact commands run, exact results, deviations, and remaining risks.
 
 ---
 
+## AS-CLAIM-V2-UUID-FALLBACK-001 — do not adopt a foreign sole UUID
+
+Base: `b87b4a226f4aa8b2f669edf112aa3476454f754f` / tree `46d1989b026a2f15920ec5e1c78a106799bd1249`.
+
+`_load_source_metadata` adopted the sole `canonical_project_id` in
+`state/sources.json` when `--project` matched no manifest `likely_project`.
+`atlas migrate-v2 --project requested-project` wrote an alias map under
+the requested id using another project's UUID
+(`aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa`).
+
+Fix: if no requested UUID can be resolved, fail closed whenever the
+registry already has project UUIDs. Empty-registry vaults are unchanged.
+Regression in `tests/integration/test_migration.py`.
+
+Does not merge, wake OPT, or rewrite claim identity rules.
+`MERGE_AUTHORIZATION = NOT_GRANTED`.
+
+---
+
 ## D-193 — Atlas 3.0 foundation convergence
 
 **Date:** 2026-08-25
