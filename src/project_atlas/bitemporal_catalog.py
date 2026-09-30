@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Final
 
@@ -39,6 +40,7 @@ from project_atlas.bitemporal import (
     BitemporalError,
     ClaimValidityWindow,
     EvidenceKind,
+    _parse_instant,
     write_validity_catalog,
 )
 from project_atlas.temporal_evidence import extract_source_temporal_facts
@@ -128,6 +130,20 @@ def _declared_valid_from(root: Path, claim: dict[str, Any]) -> str | None:
     return facts.document_timestamp.isoformat()
 
 
+def _declared_instant(raw: str) -> datetime:
+    """Parse a document-declared instant for succession, never lexicographic order.
+
+    Mixed offset syntax (``+00:00`` vs ``-05:00``) must compare as UTC instants.
+    Lexicographic ``>`` on the raw ISO strings inverts later windows (AS-TEMPORAL-F1).
+    """
+    try:
+        return _parse_instant(raw, field="valid-from")
+    except BitemporalError as exc:
+        raise BitemporalCatalogError(
+            f"bitemporal-catalog-valid-from-invalid:{raw}"
+        ) from exc
+
+
 def build_project_validity_windows(
     vault: Path, project_id: str
 ) -> list[ClaimValidityWindow]:
@@ -169,13 +185,18 @@ def build_project_validity_windows(
 
     windows: list[ClaimValidityWindow] = []
     for key in sorted(rows_by_key):
-        rows = sorted(rows_by_key[key], key=lambda r: (r.valid_from, r.claim_id))
+        rows = sorted(
+            rows_by_key[key],
+            key=lambda r: (_declared_instant(r.valid_from), r.claim_id),
+        )
         for index, row in enumerate(rows):
             # Document-declared succession: valid_to is the next later declared
             # valid-time for this subject+field (open-ended for the most recent).
+            # Compare parsed UTC instants — never raw ISO string order.
             successor_from: str | None = None
+            row_instant = _declared_instant(row.valid_from)
             for later in rows[index + 1 :]:
-                if later.valid_from > row.valid_from:
+                if _declared_instant(later.valid_from) > row_instant:
                     successor_from = later.valid_from
                     break
             windows.append(
