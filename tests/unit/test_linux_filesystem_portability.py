@@ -22,6 +22,7 @@ import shutil
 from pathlib import Path
 
 import pytest
+from _logcapture import DISCOVERY_LOGGER, capturing
 
 from project_atlas.cli import EXIT_OK, main
 from project_atlas.discovery import discover
@@ -208,7 +209,7 @@ def test_non_utf8_filename_is_reported_not_fatal(
     with open(raw_name, "wb") as handle:
         handle.write(b"# undecodable name\n")
 
-    with caplog.at_level("WARNING"):
+    with capturing(caplog, DISCOVERY_LOGGER):
         records = _by_path(_discover(tmp_path, source))
 
     assert "README.md" in records, "the rest of the tree still discovers"
@@ -236,7 +237,7 @@ def test_canonical_normalization_collision_is_reported_not_fatal(
     with open(os.path.join(raw, b"cafe\xcc\x81.md"), "wb") as handle:  # NFD
         handle.write(b"# nfd\n")
 
-    with caplog.at_level("WARNING"):
+    with capturing(caplog, DISCOVERY_LOGGER):
         records = _by_path(_discover(tmp_path, source))
 
     cafes = [path for path in records if "caf" in path]
@@ -274,7 +275,7 @@ def test_backslash_name_colliding_with_real_path_is_reported(
     (source / "docs" / "slash.md").write_text("# real\n", encoding="utf-8")
     (source / "docs\\slash.md").write_text("# literal\n", encoding="utf-8")
 
-    with caplog.at_level("WARNING"):
+    with capturing(caplog, DISCOVERY_LOGGER):
         records = _by_path(_discover(tmp_path, source))
 
     assert "docs/slash.md" in records
@@ -299,7 +300,7 @@ def test_untraversable_directory_does_not_abort(
     try:
         if os.access(locked / "a.md", os.R_OK):
             pytest.skip("filesystem does not enforce the missing execute bit")
-        with caplog.at_level("WARNING"):
+        with capturing(caplog, DISCOVERY_LOGGER):
             records = _by_path(_discover(tmp_path, source))
     finally:
         locked.chmod(0o755)
@@ -327,7 +328,7 @@ def test_unreadable_directory_is_reported_not_silently_lost(
     try:
         if os.access(dark, os.R_OK):
             pytest.skip("filesystem does not enforce directory mode bits")
-        with caplog.at_level("WARNING"):
+        with capturing(caplog, DISCOVERY_LOGGER):
             records = _by_path(_discover(tmp_path, source))
     finally:
         dark.chmod(0o755)
@@ -399,7 +400,7 @@ def test_unexpected_document_in_reserved_scope_is_not_silently_lost(
     _valid_package(inbox, "proj-a", "evt-1")
     (inbox / "proj-a" / "stray.md").write_text("# stray\n", encoding="utf-8")
 
-    with caplog.at_level("WARNING"):
+    with capturing(caplog, DISCOVERY_LOGGER):
         manifest = _discover(tmp_path, source)
 
     records = _by_path(manifest)
@@ -427,7 +428,7 @@ def test_valid_agent_event_package_still_routes(
     _valid_package(inbox, "proj-a", "evt-1")
     _valid_package(inbox, "proj-b", "evt-2")
 
-    with caplog.at_level("WARNING"):
+    with capturing(caplog, DISCOVERY_LOGGER):
         events = _discover(tmp_path, source)["agent_events"]
 
     assert isinstance(events, list)
@@ -476,7 +477,7 @@ def test_reserved_scope_diagnostic_keeps_inventory_deterministic(
         _valid_package(inbox, "proj-a", "evt-1")
         for entry in [*root.rglob("*"), root]:
             os.utime(entry, (fixed, fixed))
-        with caplog.at_level("WARNING"):
+        with capturing(caplog, DISCOVERY_LOGGER):
             caplog.clear()
             manifest = discover(root)
             warnings = [m for m in caplog.messages if "reserved agent-event scope" in m]
@@ -519,7 +520,7 @@ def test_symlink_escaping_the_root_is_reported_not_silently_lost(
     (source / "escape.md").symlink_to(outside / "handbook.md")
     (source / "mirror").symlink_to(outside / "buried")
 
-    with caplog.at_level("WARNING"):
+    with capturing(caplog, DISCOVERY_LOGGER):
         records = _by_path(_discover(tmp_path, source))
 
     # Still excluded -- following the link would escape the approved root.
@@ -551,7 +552,7 @@ def test_non_escaping_symlinks_stay_quiet(
     (source / "broken.md").symlink_to(source / "nowhere.md")
     os.mkfifo(source / "pipe.md")
 
-    with caplog.at_level("WARNING"):
+    with capturing(caplog, DISCOVERY_LOGGER):
         records = _by_path(_discover(tmp_path, source))
 
     assert "docs/target.md" in records, "the real document is inventoried under its own path"
@@ -579,7 +580,7 @@ def test_diagnostics_cannot_forge_log_lines(
     source = _write_source(tmp_path / "source")
     os.symlink(hostile, os.path.join(os.fsencode(source), b"link.md"))
 
-    with caplog.at_level("WARNING"):
+    with capturing(caplog, DISCOVERY_LOGGER):
         _discover(tmp_path, source)
 
     escaped = [m for m in caplog.messages if "outside the source root" in m]
@@ -607,7 +608,7 @@ def test_in_root_control_character_paths_cannot_forge_log_lines(
     with open(os.path.join(docs, b"ev\x0ail-\xff-byte.md"), "wb") as handle:
         handle.write(b"# undecodable\n")
 
-    with caplog.at_level("WARNING"):
+    with capturing(caplog, DISCOVERY_LOGGER):
         _discover(tmp_path, source)
 
     assert caplog.messages, "these inputs must still be reported"
@@ -650,7 +651,7 @@ def test_unreadable_agent_event_project_dir_does_not_abort(
     try:
         if os.access(locked, os.R_OK):
             pytest.skip("filesystem does not enforce directory mode bits")
-        with caplog.at_level("WARNING"):
+        with capturing(caplog, DISCOVERY_LOGGER):
             manifest = _discover(tmp_path, source)
     finally:
         locked.chmod(0o755)
@@ -676,7 +677,7 @@ def test_unreadable_agent_event_root_does_not_abort(
     try:
         if os.access(inbox, os.R_OK):
             pytest.skip("filesystem does not enforce directory mode bits")
-        with caplog.at_level("WARNING"):
+        with capturing(caplog, DISCOVERY_LOGGER):
             manifest = _discover(tmp_path, source)
     finally:
         inbox.chmod(0o755)
@@ -702,7 +703,7 @@ def test_unreadable_event_package_dir_does_not_abort(
     try:
         if os.access(package, os.R_OK):
             pytest.skip("filesystem does not enforce directory mode bits")
-        with caplog.at_level("WARNING"):
+        with capturing(caplog, DISCOVERY_LOGGER):
             manifest = _discover(tmp_path, source)
     finally:
         package.chmod(0o755)
@@ -734,7 +735,7 @@ def test_event_inventory_reports_unreadable_scope_without_relying_on_the_walk(
     try:
         if os.access(source / ".atlas-inbox", os.R_OK):
             pytest.skip("filesystem does not enforce directory mode bits")
-        with caplog.at_level("WARNING"):
+        with capturing(caplog, DISCOVERY_LOGGER):
             manifest = _discover(tmp_path, source)
     finally:
         (source / ".atlas-inbox").chmod(0o755)
@@ -773,7 +774,7 @@ def test_listable_but_untraversable_event_scopes_do_not_abort(
     try:
         if os.access(locked / "probe", os.F_OK):
             pytest.skip("filesystem does not enforce the missing execute bit")
-        with caplog.at_level("WARNING"):
+        with capturing(caplog, DISCOVERY_LOGGER):
             manifest = _discover(tmp_path, source)
     finally:
         locked.chmod(0o755)

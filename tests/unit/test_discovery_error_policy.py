@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from _logcapture import DISCOVERY_LOGGER, capturing
 
 import project_atlas.discovery as discovery_module
 from project_atlas.discovery import discover
@@ -168,7 +169,7 @@ def test_inaccessible_errnos_still_continue_from_every_guard(
     root = _source(tmp_path)
     inject(monkeypatch, root, OSError(inaccessible, "simulated inaccessible scope"))
 
-    with caplog.at_level("WARNING"):
+    with capturing(caplog, DISCOVERY_LOGGER):
         manifest = discover(root)
 
     by_path = {record["path"]: record for record in manifest["sources"]}
@@ -257,7 +258,7 @@ def test_path_past_path_max_is_skipped_not_fatal(
     root = _source(tmp_path)
     _grow_past_path_max(root)
     try:
-        with caplog.at_level("WARNING"):
+        with capturing(caplog, DISCOVERY_LOGGER):
             manifest = discover(root)
     finally:
         _remove_past_path_max(root)
