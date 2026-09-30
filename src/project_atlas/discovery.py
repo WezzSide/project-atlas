@@ -19,6 +19,7 @@ from project_atlas.domain.sources import SourceRecord
 from project_atlas.domain.vocabulary import ClassificationState
 from project_atlas.logging import get_logger
 from project_atlas.quarantine import scan_identifier
+from project_atlas.secrets import scan_text
 from project_atlas.source_identity import (
     TEXT_SOURCE_EXTENSIONS,
     canonical_source_sha256,
@@ -99,6 +100,19 @@ def _project_context(path: Path, root: Path) -> tuple[str | None, str | None]:
                         raise ValueError(
                             f"adversarial project identifier in {marker.relative_to(root)}: "
                             f"{findings[0].rule} ({findings[0].redacted_hint})"
+                        )
+                    # AS-SEC-SCAN-DISCOVER-YAML-001: yaml.safe_load decodes
+                    # quoted escapes after raw scan_text misses (\u0041KIA…).
+                    # scan_identifier is injection-only and does not apply
+                    # NFR-004 secret patterns. Scan the decoded id before it
+                    # becomes likely_project / compatibility source_id.
+                    secret_findings = scan_text(value)
+                    if secret_findings:
+                        raise ValueError(
+                            f"secret-shaped project identifier in "
+                            f"{marker.relative_to(root)}: "
+                            f"{secret_findings[0].pattern} "
+                            f"({secret_findings[0].redacted_hint})"
                         )
                     return str(value), project_uuid
                 return None, project_uuid
