@@ -12,8 +12,10 @@ Not a merge actor: INTEGRATION_READY means "verified candidate exists"; governan
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import Any
 
 from project_atlas.orchestration.autonomy.dev_contracts import (
     ContractError,
@@ -21,10 +23,12 @@ from project_atlas.orchestration.autonomy.dev_contracts import (
     Role,
     Verdict,
     VerdictRecord,
+    VerificationRequest,
     WorkItem,
     make_verification_request,
     make_work,
     materialize_repair,
+    same_identity,
 )
 from project_atlas.orchestration.autonomy.dev_queue import QueueItem, Selection, select_next
 from project_atlas.orchestration.autonomy.dev_transport import Channel, DevTransport
@@ -74,6 +78,8 @@ class Planner:
         self._works: dict[str, WorkItem] = {}
         self.completed: set[str] = set()
         self.blocked: dict[str, str] = {}
+        self.issued: dict[str, VerificationRequest] = {}  # task_id -> the request we issued
+        self.quarantined: list[tuple[str, str, str]] = []  # (channel, seal, reason)
 
     # -- selection / dispatch -------------------------------------------------------------
     def select(self, items: list[QueueItem]) -> Selection:
@@ -110,15 +116,22 @@ class Planner:
             Channel.RESULT, role=Role.PLANNER, identity=self.identity
         ):
             assert isinstance(rec, ResultRecord)
-            self._on_result(rec)
+            self._guarded("RESULT", rec.seal, self._on_result, rec)
             n += 1
         while rec := self.transport.claim(
             Channel.VERDICT, role=Role.PLANNER, identity=self.identity
         ):
             assert isinstance(rec, VerdictRecord)
-            self._on_verdict(rec)
+            self._guarded("VERDICT", rec.seal, self._on_verdict, rec)
             n += 1
         return n
+
+    def _guarded(self, channel: str, seal: str, fn: Callable[[Any], None], rec: Any) -> None:
+        """One bad record is quarantined; it never aborts the pass or blocks other lineages."""
+        try:
+            fn(rec)
+        except ContractError as exc:
+            self.quarantined.append((channel, seal, str(exc)))
 
     def _lineage_for(self, task_id: str) -> LineageState:
         root = self._by_task.get(task_id)
@@ -128,16 +141,23 @@ class Planner:
 
     def _on_result(self, res: ResultRecord) -> None:
         st = self._lineage_for(res.task_id)
-        work = self._works[res.task_id]
+        work = st.work
+        if (
+            st.phase not in (Phase.DISPATCHED, Phase.REPAIR_DISPATCHED)
+            or res.task_id != work.task_id
+        ):
+            raise PlannerError("result is not expected in this phase / for the current work")
         if res.work_seal != work.seal:
             raise PlannerError("result does not answer the dispatched work")
-        others = [v for v in self.verifiers if v != res.executor_identity]
+        others = [v for v in self.verifiers if not same_identity(v, res.executor_identity)]
         if not others:
             self._terminal(st, Phase.BLOCKED, "NO_INDEPENDENT_VERIFIER")
             return
         # deterministic (no PYTHONHASHSEED dependence): stable index from the task id digest
         verifier = others[int(hashlib.sha256(res.task_id.encode()).hexdigest(), 16) % len(others)]
-        self.transport.publish(make_verification_request(work, res, verifier_identity=verifier))
+        req = make_verification_request(work, res, verifier_identity=verifier)
+        self.transport.publish(req)
+        self.issued[res.task_id] = req
         st.result = res
         st.phase = Phase.VERIFYING
         st.history.append(f"VERIFYING:{res.task_id}:{verifier}")
@@ -148,6 +168,15 @@ class Planner:
         res = st.result
         if res is None or st.phase is not Phase.VERIFYING:
             raise PlannerError("verdict without an outstanding verification")
+        req = self.issued.get(ver.task_id)
+        if req is None or ver.request_seal != req.seal:
+            raise PlannerError("verdict does not answer the issued verification request")
+        if ver.verifier_identity != req.verifier_identity or same_identity(
+            ver.verifier_identity, res.executor_identity
+        ):
+            raise PlannerError("verdict is not from the assigned independent verifier")
+        if ver.execution_id != req.execution_id:
+            raise PlannerError("verdict execution identity mismatch")
         if ver.result_revision != res.result_revision or ver.result_tree != res.result_tree:
             raise PlannerError("verdict judged a different artifact")
         if ver.verdict is Verdict.PASS:

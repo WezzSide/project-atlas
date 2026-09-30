@@ -335,8 +335,8 @@ def test_verdict_for_a_different_artifact_is_refused():
     # forge a verdict on a different artifact by re-sealing a modified request
     other = req.model_copy(update={"result_revision": REV2, "result_tree": TREE2}).sealed()
     t.publish(make_verdict(other, verdict=Verdict.PASS))
-    with pytest.raises(ContractError):
-        p.pump()
+    p.pump()  # the forged verdict is quarantined, never applied, and never aborts the pass
+    assert p.quarantined and p.quarantined[0][0] == "VERDICT"
     assert st.phase is Phase.VERIFYING and "A" not in p.completed
 
 
@@ -346,3 +346,133 @@ def test_owner_only_or_inadmissible_task_cannot_be_dispatched():
     p = planner(InMemoryTransport())
     with pytest.raises(ContractError):
         p.dispatch(qi("S", requires_owner=(OwnerInput.SECRET,)), **FIELDS)
+
+
+# ---- IV #1033 repairs ------------------------------------------------------------------------
+
+
+def _verifying(t, tid="A"):
+    p = planner(t)
+    p.dispatch(qi(tid), **FIELDS)
+    run_role_implementer(t, [(REV1, TREE1)])
+    p.pump()
+    return p, t.claim(Channel.VERIFICATION, role=Role.VERIFIER, identity=VER)
+
+
+def test_planner_refuses_self_or_unissued_verdict_even_if_resealed():
+    from project_atlas.orchestration.autonomy.dev_contracts import VerdictRecord
+
+    t = InMemoryTransport()
+    p, req = _verifying(t)
+    forged = VerdictRecord(
+        task_id="A",
+        execution_id=req.execution_id,
+        verifier_identity=IMPL,  # the executor "verifies" itself
+        verdict=Verdict.PASS,
+        result_revision=req.result_revision,
+        result_tree=req.result_tree,
+        request_seal="x" * 8,
+    ).sealed()
+    t.publish(forged)
+    p.pump()
+    assert p.lineages["A"].phase is Phase.VERIFYING and p.quarantined
+    other = VerdictRecord(
+        task_id="A",
+        execution_id=req.execution_id,
+        verifier_identity="some-other-verifier",
+        verdict=Verdict.PASS,
+        result_revision=req.result_revision,
+        result_tree=req.result_tree,
+        request_seal=req.seal,
+    ).sealed()
+    t.publish(other)
+    p.pump()
+    assert p.lineages["A"].phase is Phase.VERIFYING and len(p.quarantined) == 2
+    t.publish(make_verdict(req, verdict=Verdict.PASS))
+    p.pump()
+    assert p.lineages["A"].phase is Phase.INTEGRATION_READY
+
+
+@pytest.mark.parametrize("variant", ["Impl-A", "impl-a ", " IMPL-A", "IMPL-A"])
+def test_identity_variants_are_the_same_identity(variant):
+    w = work()
+    r = result(w, who="impl-a")
+    with pytest.raises(ContractError):
+        make_verification_request(w, r, verifier_identity=variant)
+
+
+def test_non_canonical_identities_are_rejected_at_record_level():
+    w = work()
+    for bad in ("impl a", "impl-a\n", "", " x"):
+        with pytest.raises(ContractError):
+            make_result(w, executor_identity=bad, result_revision=REV1, result_tree=TREE1)
+
+
+def test_transport_treats_identity_variants_as_the_same_identity():
+    t = InMemoryTransport()
+    w = work()
+    r = result(w, who="vps1-impl")
+    t.publish(make_verification_request(w, r, verifier_identity="vps2-ver"))
+    with pytest.raises(TransportError, match="own verification"):
+        t.claim(Channel.VERIFICATION, role=Role.VERIFIER, identity="VPS1-IMPL ")
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["src/x/../secret/k", "src/x/../../etc/p", "/etc/passwd", "src\\x\\a.py", "src/xy/a.py", ""],
+)
+def test_escaping_or_lookalike_paths_never_classify_as_repairable(path):
+    w = work(allowed_paths=("src/x",), forbidden_paths=("src/secret",))
+    f = Finding(finding_id="F", category=FindingCategory.DEFECT, paths=(path,))
+    assert classify_finding(f, w) is FindingClass.OWNER_AUTHORITY_REQUIRED
+
+
+def test_empty_allowed_scope_allows_no_finding_path():
+    w = work(allowed_paths=())
+    f = Finding(finding_id="F", category=FindingCategory.DEFECT, paths=("src/x/a.py",))
+    assert classify_finding(f, w) is FindingClass.OWNER_AUTHORITY_REQUIRED
+    ok = Finding(finding_id="F", category=FindingCategory.DEFECT)
+    assert classify_finding(ok, w) is FindingClass.REPAIRABLE_WITHIN_AUTHORITY
+
+
+def test_result_replay_and_phase_regression_are_refused():
+    t = InMemoryTransport()
+    p, req = _verifying(t)
+    t.publish(make_verdict(req, verdict=Verdict.PASS))
+    p.pump()
+    st = p.lineages["A"]
+    assert st.phase is Phase.INTEGRATION_READY
+    w = st.work
+    t.publish(make_result(w, executor_identity=IMPL, result_revision=REV2, result_tree=TREE2))
+    p.pump()
+    assert st.phase is Phase.INTEGRATION_READY and "A" in p.completed
+    assert any(q[0] == "RESULT" for q in p.quarantined)
+
+
+def test_one_bad_record_does_not_abort_the_pass_for_other_lineages():
+    t = InMemoryTransport()
+    p = planner(t)
+    p.dispatch(qi("A"), **FIELDS)
+    p.dispatch(qi("B"), **FIELDS)
+    stray = make_work(
+        **{
+            **dict(task_id="ZZ", execution_id="ZZ-E1", lineage_root="ZZ"),
+            **{k: v for k, v in FIELDS.items()},
+        }
+    )
+    t.publish(make_result(stray, executor_identity=IMPL, result_revision=REV1, result_tree=TREE1))
+    wb = p.lineages["B"].work
+    t.publish(make_result(wb, executor_identity=IMPL, result_revision=REV2, result_tree=TREE2))
+    p.pump()
+    assert p.lineages["B"].phase is Phase.VERIFYING
+    assert len(p.quarantined) == 1
+
+
+def test_attempt_beyond_ceiling_is_not_a_valid_work_item():
+    with pytest.raises(ContractError):
+        work(attempt=5, max_attempts=3)
+
+
+def test_sha_fields_reject_a_trailing_newline():
+    with pytest.raises(ContractError):
+        work(base_revision=BASE + "\n")

@@ -29,6 +29,7 @@ from project_atlas.orchestration.autonomy.dev_contracts import (
     VerdictRecord,
     VerificationRequest,
     WorkItem,
+    same_identity,
 )
 
 _MODEL_FOR_KIND: dict[RecordKind, Any] = {
@@ -117,9 +118,9 @@ class InMemoryTransport:
             rec = decode(wire)
             if channel is Channel.VERIFICATION:
                 assert isinstance(rec, VerificationRequest)
-                if identity == rec.executor_identity:
+                if same_identity(identity, rec.executor_identity):
                     raise TransportError("executor identity may not claim its own verification")
-                if identity != rec.verifier_identity:
+                if not same_identity(identity, rec.verifier_identity):
                     continue  # addressed to a different verifier; leave it queued
             del q[idx]
             self.claims.append((channel, rec.seal, identity))

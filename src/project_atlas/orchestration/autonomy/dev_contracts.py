@@ -18,15 +18,46 @@ Invariants enforced here (and tested):
 
 from __future__ import annotations
 
+import posixpath
 import re
 from enum import StrEnum
 from typing import Any, ClassVar
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from project_atlas.orchestration.autonomy.evidence import hash_payload
 
 _SHA = re.compile(r"^[0-9a-f]{40}$")
+_IDENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@/-]*$")
+
+
+def same_identity(a: str, b: str) -> bool:
+    """Identity comparison is case/whitespace-insensitive so variants can never be 'different'."""
+    return a.strip().casefold() == b.strip().casefold()
+
+
+def _identity(v: str) -> str:
+    if not _IDENT.fullmatch(v):
+        raise ValueError("identity must be canonical (no whitespace/control, [A-Za-z0-9._:@/-])")
+    return v
+
+
+def norm_path(p: str) -> str | None:
+    """Canonical repo-relative posix path, or None when it is absolute/escaping/ill-formed."""
+    if not p or "\\" in p or "\x00" in p or p.startswith("/"):
+        return None
+    parts = p.split("/")
+    if ".." in parts:
+        return None
+    n = posixpath.normpath(p)
+    return None if n in (".", "") or n.startswith("../") else n
 
 
 class ContractError(ValueError):
@@ -104,7 +135,7 @@ class _Sealed(BaseModel):
 
 
 def _sha(v: str, name: str) -> str:
-    if not _SHA.match(v):
+    if not _SHA.fullmatch(v):
         raise ValueError(f"{name} must be a 40-hex lowercase sha")
     return v
 
@@ -133,6 +164,12 @@ class WorkItem(_Sealed):
     def _base(cls, v: str) -> str:
         return _sha(v, "base_revision")
 
+    @model_validator(mode="after")
+    def _attempt_within_ceiling(self) -> WorkItem:
+        if self.attempt > self.max_attempts:
+            raise ValueError("attempt exceeds max_attempts")
+        return self
+
 
 class ResultRecord(_Sealed):
     """What the implementation role produced. Carries identity, never a verdict."""
@@ -154,6 +191,11 @@ class ResultRecord(_Sealed):
     @classmethod
     def _shas(cls, v: str) -> str:
         return _sha(v, "sha field")
+
+    @field_validator("executor_identity")
+    @classmethod
+    def _who(cls, v: str) -> str:
+        return _identity(v)
 
 
 class VerificationRequest(_Sealed):
@@ -177,6 +219,11 @@ class VerificationRequest(_Sealed):
     @classmethod
     def _shas(cls, v: str) -> str:
         return _sha(v, "sha field")
+
+    @field_validator("executor_identity", "verifier_identity")
+    @classmethod
+    def _who(cls, v: str) -> str:
+        return _identity(v)
 
 
 class Finding(BaseModel):
@@ -204,6 +251,11 @@ class VerdictRecord(_Sealed):
     @classmethod
     def _shas(cls, v: str) -> str:
         return _sha(v, "sha field")
+
+    @field_validator("verifier_identity")
+    @classmethod
+    def _who(cls, v: str) -> str:
+        return _identity(v)
 
 
 def _err(exc: ValidationError) -> ContractError:
@@ -242,7 +294,7 @@ def make_verification_request(
     result.verify_seal()
     if result.work_seal != work.seal or result.task_id != work.task_id:
         raise ContractError("result does not answer this work item")
-    if verifier_identity == result.executor_identity:
+    if same_identity(verifier_identity, result.executor_identity):
         raise ContractError("verifier identity must differ from executor identity")
     try:
         req = VerificationRequest(
@@ -309,11 +361,11 @@ def classify_finding(finding: Finding, work: WorkItem) -> FindingClass:
         # scope widened is an authority question
         return FindingClass.REPAIRABLE_WITHIN_AUTHORITY
     if finding.category in {FindingCategory.DEFECT, FindingCategory.TEST_GAP}:
+        # fail closed: ill-formed/escaping paths, paths in forbidden scope and paths outside the
+        # allowed scope (an EMPTY allowed scope allows nothing) all need the owner
         forbidden = tuple(p for p in finding.paths if _matches(p, work.forbidden_paths))
-        outside = (
-            tuple(p for p in finding.paths if not _matches(p, work.allowed_paths))
-            if work.allowed_paths
-            else ()
+        outside = tuple(
+            p for p in finding.paths if norm_path(p) is None or not _matches(p, work.allowed_paths)
         )
         if forbidden or outside:
             return FindingClass.OWNER_AUTHORITY_REQUIRED
@@ -322,7 +374,15 @@ def classify_finding(finding: Finding, work: WorkItem) -> FindingClass:
 
 
 def _matches(path: str, prefixes: tuple[str, ...]) -> bool:
-    return any(path == p or path.startswith(p.rstrip("/") + "/") for p in prefixes)
+    """True when the normalised path equals a prefix or lies under it (directory boundary)."""
+    n = norm_path(path)
+    if n is None:
+        return False
+    for p in prefixes:
+        q = norm_path(p.rstrip("/"))
+        if q is not None and (n == q or n.startswith(q + "/")):
+            return True
+    return False
 
 
 class RepairDecision(BaseModel):
@@ -351,6 +411,7 @@ def materialize_repair(
         or result.task_id != work.task_id
         or verdict.result_revision != result.result_revision
         or verdict.result_tree != result.result_tree
+        or verdict.execution_id != work.execution_id
     ):
         raise ContractError("verdict does not judge this task's result")
     classes = tuple(classify_finding(f, work).value for f in verdict.findings)
