@@ -46,6 +46,7 @@ from project_atlas.estate_path_index import (
     phase_timer,
     reset_discovery_perf,
 )
+from project_atlas.secrets import scan_text
 from project_atlas.source_identity import (
     load_allocation_project_uuids,
     load_allocation_uuid_owners,
@@ -656,6 +657,16 @@ def _git_remote_url(directory: Path) -> str | None:
     return sanitize_git_remote_url(chosen)
 
 
+def _identity_is_secret_shaped(value: str) -> bool:
+    """True when a decoded identity token matches secret scanners.
+
+    Findings stay metadata-only (NFR-004). Used after YAML/JSON decode so
+    quoted ``\\u`` / ``\\x`` escapes cannot persist as fingerprint identity.
+    AS-SEC-SCAN-ESTATE-DISCOVERY-YAML-001.
+    """
+    return bool(scan_text(value))
+
+
 def _package_name(directory: Path) -> str | None:
     pkg = directory / "package.json"
     if pkg.is_file() and not _is_reparse_or_symlink(pkg):
@@ -668,14 +679,20 @@ def _package_name(directory: Path) -> str | None:
             if isinstance(data, dict):
                 name = data.get("name")
                 if isinstance(name, str) and name.strip():
-                    return name.strip()
+                    cleaned = name.strip()
+                    if _identity_is_secret_shaped(cleaned):
+                        return None
+                    return cleaned
     pyproject = directory / "pyproject.toml"
     if pyproject.is_file() and not _is_reparse_or_symlink(pyproject):
         text = _safe_read_text(pyproject)
         if text:
             match = re.search(r"(?m)^\s*name\s*=\s*[\"']([^\"']+)[\"']", text)
             if match:
-                return match.group(1).strip()
+                cleaned = match.group(1).strip()
+                if cleaned and _identity_is_secret_shaped(cleaned):
+                    return None
+                return cleaned
     return None
 
 
@@ -737,10 +754,17 @@ def _parse_marker_file(marker: Path, label: str) -> dict[str, Any]:
         }
     project = data.get("project")
     project_id: str | None = None
+    marker_status = "ok"
     if isinstance(project, dict):
         raw_id = project.get("id")
         if isinstance(raw_id, str) and raw_id.strip():
             project_id = raw_id.strip()
+            # YAML has already decoded quoted \u / \x escapes. Scan the
+            # decoded token before it becomes fingerprint.atlas_project_id.
+            # AS-SEC-SCAN-ESTATE-DISCOVERY-YAML-001.
+            if _identity_is_secret_shaped(project_id):
+                project_id = None
+                marker_status = "invalid"
     raw_uuid = data.get("project_uuid")
     uuid_status = "absent"
     project_uuid: str | None = None
@@ -754,7 +778,7 @@ def _parse_marker_file(marker: Path, label: str) -> dict[str, Any]:
             except ValueError:
                 uuid_status = "invalid"
     return {
-        "marker_status": "ok",
+        "marker_status": marker_status,
         "uuid_status": uuid_status,
         "atlas_project_id": project_id,
         "atlas_project_uuid": project_uuid,
