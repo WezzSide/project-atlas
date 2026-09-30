@@ -1,4 +1,5 @@
 """AS-2.2-KCI-ENGINE-DEEPEN-PREP-001 - docs/contracts/fixtures only."""
+
 from __future__ import annotations
 
 import json
@@ -12,8 +13,10 @@ CONTRACTS = PREP / "contracts"
 FIXTURES = PREP / "fixtures"
 BASE = ROOT / "docs" / "atlas-2.2" / "AS-2.2-KCI-ENGINE-PREP-001.md"
 
+
 def _load(path: Path) -> object:
     return json.loads(path.read_text(encoding="utf-8"))
+
 
 def test_kci_engine_deepen_docs_present() -> None:
     for name in (
@@ -31,11 +34,13 @@ def test_kci_engine_deepen_docs_present() -> None:
     for text in (package, invariants):
         assert "ATLAS_2_1_RELEASE_CERTIFIED" in text or "RELEASE" in text.upper()
 
+
 def test_kci_engine_deepen_extends_base() -> None:
     assert BASE.is_file()
     package = (PREP / "AS-2.2-KCI-ENGINE-DEEPEN-PREP-001.md").read_text(encoding="utf-8")
     assert "AS-2.2-KCI-ENGINE-PREP-001" in package
     assert "dual-own" in package.lower() or "dual-owning" in package.lower()
+
 
 def test_kci_forbidden_negatives() -> None:
     schema = _load(CONTRACTS / "kci-forbidden-action.schema.json")

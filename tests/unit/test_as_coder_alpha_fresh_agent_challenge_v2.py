@@ -182,8 +182,7 @@ def test_self_dogfood_catalog_is_not_authentic_pilot() -> None:
             "project_id": "project-atlas",
             "brief": {
                 "purpose": (
-                    "Project Atlas is the persistent brain for AI-native projects "
-                    "(Coder Alpha)."
+                    "Project Atlas is the persistent brain for AI-native projects (Coder Alpha)."
                 ),
                 "changed": "UNKNOWN",
                 "unknown": "UNKNOWN coverage gaps remain",

@@ -156,8 +156,7 @@ def test_missing_decisions_signal_preserved(tmp_path: Path) -> None:
     lens = build_next_lens(vault, project_id)
     assert any(item["kind"] == "missing_decisions" for item in lens["queue"])
     assert any(
-        "DECISIONS" in line or "decision" in line.lower()
-        for line in lens["suggested_next_work"]
+        "DECISIONS" in line or "decision" in line.lower() for line in lens["suggested_next_work"]
     )
 
 

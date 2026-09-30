@@ -103,9 +103,7 @@ def test_legacy_indexes_are_not_consumed(tmp_path: Path) -> None:
     vault = _vault(tmp_path)
     legacy = vault / "indexes"
     legacy.mkdir()
-    (legacy / "claims.json").write_text(
-        json.dumps({"ids": ["leaked"]}) + "\n", encoding="utf-8"
-    )
+    (legacy / "claims.json").write_text(json.dumps({"ids": ["leaked"]}) + "\n", encoding="utf-8")
     report = read_index_status(vault)
     assert report["status"] == "EMPTY"
     assert report["view"]["legacy_indexes_present"] is True
@@ -152,9 +150,7 @@ def test_symlink_artifact_fails_closed(tmp_path: Path) -> None:
 
 def test_module_does_not_write_or_materialize() -> None:
     root = Path(__file__).resolve().parents[2]
-    source = (root / "src/project_atlas/web_api/index_status.py").read_text(
-        encoding="utf-8"
-    )
+    source = (root / "src/project_atlas/web_api/index_status.py").read_text(encoding="utf-8")
     for name in (
         "from project_atlas.indexes",
         "build_indexes(",
@@ -187,11 +183,7 @@ def test_cli_help_is_ascii(capsys: pytest.CaptureFixture[str]) -> None:
         code = int(exc.code or 0)
     assert code == 0
     help_text = capsys.readouterr().out
-    assert (
-        "never writes" in help_text
-        or "read-only" in help_text
-        or "INDEX_STATUS" in help_text
-    )
+    assert "never writes" in help_text or "read-only" in help_text or "INDEX_STATUS" in help_text
     assert all(ord(char) < 128 for char in help_text)
     help_text.encode("cp1252")
 

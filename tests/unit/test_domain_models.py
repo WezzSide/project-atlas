@@ -56,8 +56,11 @@ class TestSourceRecord:
     def test_rejects_invalid_sha256(self) -> None:
         with pytest.raises(ValidationError):
             SourceRecord(
-                source_id="src-1", path="a.md", media_type="text/markdown",
-                size_bytes=1, sha256="not-a-hash",
+                source_id="src-1",
+                path="a.md",
+                media_type="text/markdown",
+                size_bytes=1,
+                sha256="not-a-hash",
             )
 
     def test_rejects_negative_size(self) -> None:
@@ -67,21 +70,30 @@ class TestSourceRecord:
     def test_excluded_requires_reason(self) -> None:
         with pytest.raises(ValidationError, match="exclusion_reason"):
             SourceRecord(
-                source_id="src-1", path="a.bin", media_type="application/octet-stream",
-                size_bytes=1, classification_state="excluded",
+                source_id="src-1",
+                path="a.bin",
+                media_type="application/octet-stream",
+                size_bytes=1,
+                classification_state="excluded",
             )
 
     def test_reason_only_valid_when_excluded(self) -> None:
         with pytest.raises(ValidationError, match="exclusion_reason"):
             SourceRecord(
-                source_id="src-1", path="a.md", media_type="text/markdown",
-                size_bytes=1, exclusion_reason="binary",
+                source_id="src-1",
+                path="a.md",
+                media_type="text/markdown",
+                size_bytes=1,
+                exclusion_reason="binary",
             )
 
     def test_excluded_with_reason_passes(self) -> None:
         record = SourceRecord(
-            source_id="src-1", path="a.bin", media_type="application/octet-stream",
-            size_bytes=1, classification_state="excluded",
+            source_id="src-1",
+            path="a.bin",
+            media_type="application/octet-stream",
+            size_bytes=1,
+            classification_state="excluded",
             exclusion_reason="unsupported media type",
         )
         assert record.exclusion_reason == "unsupported media type"
@@ -90,8 +102,11 @@ class TestSourceRecord:
 class TestClaimAndProvenance:
     def test_valid_claim(self) -> None:
         claim = Claim(
-            claim_id="clm-1", subject="PRJ-NEBULA", field="status",
-            value="active", provenance=[_provenance()],
+            claim_id="clm-1",
+            subject="PRJ-NEBULA",
+            field="status",
+            value="active",
+            provenance=[_provenance()],
         )
         assert claim.verification is ReviewState.UNREVIEWED
 
@@ -99,8 +114,11 @@ class TestClaimAndProvenance:
         """No claim without a traceable source (FR-007)."""
         with pytest.raises(ValidationError):
             Claim(
-                claim_id="clm-1", subject="PRJ-NEBULA", field="status",
-                value="active", provenance=[],
+                claim_id="clm-1",
+                subject="PRJ-NEBULA",
+                field="status",
+                value="active",
+                provenance=[],
             )
 
     def test_provenance_requires_source_id_and_resource(self) -> None:
@@ -142,7 +160,9 @@ class TestConflictRecord:
     def test_rejects_unknown_conflict_type(self) -> None:
         with pytest.raises(ValidationError):
             ConflictRecord(
-                conflict_id="conf-1", subject="PRJ-NEBULA", field="redis_version",
+                conflict_id="conf-1",
+                subject="PRJ-NEBULA",
+                field="redis_version",
                 claims=[
                     {"source_id": "s-1", "claim": "Redis 7"},
                     {"source_id": "s-2", "claim": "Redis 8"},
@@ -153,14 +173,18 @@ class TestConflictRecord:
     def test_requires_two_claims(self) -> None:
         with pytest.raises(ValidationError):
             ConflictRecord(
-                conflict_id="conf-1", subject="PRJ-NEBULA", field="redis_version",
+                conflict_id="conf-1",
+                subject="PRJ-NEBULA",
+                field="redis_version",
                 claims=[{"source_id": "s-1", "claim": "Redis 7"}],
             )
 
     def test_unresolved_must_not_have_resolution(self) -> None:
         with pytest.raises(ValidationError, match="resolution"):
             ConflictRecord(
-                conflict_id="conf-1", subject="PRJ-NEBULA", field="redis_version",
+                conflict_id="conf-1",
+                subject="PRJ-NEBULA",
+                field="redis_version",
                 claims=[
                     {"source_id": "s-1", "claim": "Redis 7"},
                     {"source_id": "s-2", "claim": "Redis 8"},
@@ -171,7 +195,9 @@ class TestConflictRecord:
     def test_resolved_requires_resolution(self) -> None:
         with pytest.raises(ValidationError, match="resolution"):
             ConflictRecord(
-                conflict_id="conf-1", subject="PRJ-NEBULA", field="redis_version",
+                conflict_id="conf-1",
+                subject="PRJ-NEBULA",
+                field="redis_version",
                 claims=[
                     {"source_id": "s-1", "claim": "Redis 7"},
                     {"source_id": "s-2", "claim": "Redis 8"},
@@ -183,14 +209,21 @@ class TestConflictRecord:
 class TestValidationFinding:
     def test_valid(self) -> None:
         finding = ValidationFinding(
-            finding_id="fnd-1", rule_id="link-unresolved", severity=Severity.ERROR,
-            gate=ValidationGate.STRUCTURAL, message="broken link", path="projects/x/project.md",
+            finding_id="fnd-1",
+            rule_id="link-unresolved",
+            severity=Severity.ERROR,
+            gate=ValidationGate.STRUCTURAL,
+            message="broken link",
+            path="projects/x/project.md",
         )
         assert finding.severity.value == "error"
 
     def test_rejects_unknown_severity(self) -> None:
         with pytest.raises(ValidationError):
             ValidationFinding(
-                finding_id="fnd-1", rule_id="r", severity="fatal",
-                gate="structural", message="m",
+                finding_id="fnd-1",
+                rule_id="r",
+                severity="fatal",
+                gate="structural",
+                message="m",
             )

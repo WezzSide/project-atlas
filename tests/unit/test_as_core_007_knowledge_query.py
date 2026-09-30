@@ -106,9 +106,7 @@ def _hash_tree(root: Path) -> dict[str, str]:
 def test_as_id_001_title_authoritative_value(tmp_path: Path) -> None:
     """AS-CORE-007-FR-003 / INV-005 — value from persisted authority, not recomputation."""
     vault = _materialize_vault(tmp_path)
-    answer = query_knowledge(
-        vault, "project-atlas", "wp:AS-ID-001", "title", kind="authoritative"
-    )
+    answer = query_knowledge(vault, "project-atlas", "wp:AS-ID-001", "title", kind="authoritative")
     assert answer.status is AnswerStatus.OK
     assert answer.kind is QueryKind.AUTHORITATIVE
     assert answer.authority_disposition == "authoritative"
@@ -132,9 +130,7 @@ def test_as_id_001_title_authoritative_value(tmp_path: Path) -> None:
 
 def test_authoritative_answer_envelope_fields(tmp_path: Path) -> None:
     vault = _materialize_vault(tmp_path)
-    answer = query_knowledge(
-        vault, "project-atlas", "wp:AS-ID-001", "title", kind="authoritative"
-    )
+    answer = query_knowledge(vault, "project-atlas", "wp:AS-ID-001", "title", kind="authoritative")
     assert answer.competing_claim_ids or answer.subordinate_claim_ids
     assert answer.authority_rationale
     assert "state/authoritative-state/project-atlas.json" in answer.inspected_artifacts
@@ -144,12 +140,8 @@ def test_authoritative_answer_envelope_fields(tmp_path: Path) -> None:
 
 def test_temporal_context_distinct_from_authority(tmp_path: Path) -> None:
     vault = _materialize_vault(tmp_path)
-    auth = query_knowledge(
-        vault, "project-atlas", "wp:AS-ID-001", "title", kind="authoritative"
-    )
-    temporal = query_knowledge(
-        vault, "project-atlas", "wp:AS-ID-001", "title", kind="temporal"
-    )
+    auth = query_knowledge(vault, "project-atlas", "wp:AS-ID-001", "title", kind="authoritative")
+    temporal = query_knowledge(vault, "project-atlas", "wp:AS-ID-001", "title", kind="temporal")
     assert temporal.kind is QueryKind.TEMPORAL
     assert temporal.value is None  # INV-005 / INV-004
     assert temporal.authority_disposition is None
@@ -160,9 +152,7 @@ def test_temporal_context_distinct_from_authority(tmp_path: Path) -> None:
 
 def test_explain_joins_layers_without_new_narrative(tmp_path: Path) -> None:
     vault = _materialize_vault(tmp_path)
-    answer = query_knowledge(
-        vault, "project-atlas", "wp:AS-ID-001", "title", kind="explain"
-    )
+    answer = query_knowledge(vault, "project-atlas", "wp:AS-ID-001", "title", kind="explain")
     assert answer.kind is QueryKind.EXPLAIN
     assert answer.value == "Durable Source Lineage Identity"
     assert answer.authority_rationale
@@ -317,9 +307,7 @@ def test_query_does_not_call_evaluators_or_write(
     monkeypatch.setattr(
         "project_atlas.authority_evaluator.evaluate_authority", _boom, raising=False
     )
-    monkeypatch.setattr(
-        "project_atlas.temporal_evaluator.evaluate_conflicts", _boom, raising=False
-    )
+    monkeypatch.setattr("project_atlas.temporal_evaluator.evaluate_conflicts", _boom, raising=False)
     # Import path used by knowledge_compiler — ensure query module never imports them at call
     query_knowledge(vault, "project-atlas", "wp:AS-ID-001", "title", kind="authoritative")
     query_knowledge(vault, "project-atlas", "wp:AS-ID-001", "title", kind="temporal")
@@ -336,9 +324,7 @@ def test_no_mutation_on_success_and_failure_queries(tmp_path: Path) -> None:
     query_knowledge(vault, "project-atlas", "wp:AS-ID-001", "title", kind="authoritative")
     query_knowledge(vault, "project-atlas", "wp:AS-ID-001", "title", kind="temporal")
     query_knowledge(vault, "project-atlas", "wp:AS-ID-001", "title", kind="explain")
-    query_knowledge(
-        vault, "project-atlas", "wp:DOES-NOT-EXIST", "title", kind="authoritative"
-    )
+    query_knowledge(vault, "project-atlas", "wp:DOES-NOT-EXIST", "title", kind="authoritative")
     assert _hash_tree(vault) == before
 
 
@@ -525,9 +511,7 @@ def test_forged_trust_root_query_fail_closed(tmp_path: Path) -> None:
     vault = _materialize_vault(tmp_path)
     _forge_authoritative_binding(vault)
     with pytest.raises(KnowledgeQueryError) as excinfo:
-        query_knowledge(
-            vault, "project-atlas", "wp:AS-ID-001", "title", kind="authoritative"
-        )
+        query_knowledge(vault, "project-atlas", "wp:AS-ID-001", "title", kind="authoritative")
     assert excinfo.value.code is KnowledgeQueryErrorCode.STATE_CORRUPT
     assert "forged-trust-root" not in str(excinfo.value).lower()
 
@@ -541,9 +525,7 @@ def test_forged_registry_version_only_fail_closed(tmp_path: Path) -> None:
         file_registry_version=AUTHORITY_REGISTRY_VERSION,
     )
     with pytest.raises(KnowledgeQueryError) as excinfo:
-        query_knowledge(
-            vault, "project-atlas", "wp:AS-ID-001", "title", kind="authoritative"
-        )
+        query_knowledge(vault, "project-atlas", "wp:AS-ID-001", "title", kind="authoritative")
     assert excinfo.value.code is KnowledgeQueryErrorCode.STATE_CORRUPT
 
 
@@ -556,9 +538,7 @@ def test_forged_file_level_registry_version_fail_closed(tmp_path: Path) -> None:
         file_registry_version=999,
     )
     with pytest.raises(KnowledgeQueryError) as excinfo:
-        query_knowledge(
-            vault, "project-atlas", "wp:AS-ID-001", "title", kind="authoritative"
-        )
+        query_knowledge(vault, "project-atlas", "wp:AS-ID-001", "title", kind="authoritative")
     assert excinfo.value.code is KnowledgeQueryErrorCode.STATE_CORRUPT
 
 
@@ -573,9 +553,7 @@ def test_bool_registry_version_on_record_fail_closed(tmp_path: Path) -> None:
         item["registry_version"] = True
     auth_path.write_text(json.dumps(raw, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     with pytest.raises(KnowledgeQueryError) as excinfo:
-        query_knowledge(
-            vault, "project-atlas", "wp:AS-ID-001", "title", kind="authoritative"
-        )
+        query_knowledge(vault, "project-atlas", "wp:AS-ID-001", "title", kind="authoritative")
     assert excinfo.value.code is KnowledgeQueryErrorCode.STATE_CORRUPT
 
 
@@ -593,18 +571,14 @@ def test_forged_evidence_trust_root_fail_closed(tmp_path: Path) -> None:
             ev["registry_version"] = 999
     auth_path.write_text(json.dumps(raw, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     with pytest.raises(KnowledgeQueryError) as excinfo:
-        query_knowledge(
-            vault, "project-atlas", "wp:AS-ID-001", "title", kind="authoritative"
-        )
+        query_knowledge(vault, "project-atlas", "wp:AS-ID-001", "title", kind="authoritative")
     assert excinfo.value.code is KnowledgeQueryErrorCode.STATE_CORRUPT
     assert "forged-trust-root" not in str(excinfo.value).lower()
 
 
 def test_legitimate_binding_still_queries(tmp_path: Path) -> None:
     vault = _materialize_vault(tmp_path)
-    answer = query_knowledge(
-        vault, "project-atlas", "wp:AS-ID-001", "title", kind="authoritative"
-    )
+    answer = query_knowledge(vault, "project-atlas", "wp:AS-ID-001", "title", kind="authoritative")
     assert answer.status is AnswerStatus.OK
     assert answer.trust_root == trust_root()
     assert answer.registry_version == AUTHORITY_REGISTRY_VERSION

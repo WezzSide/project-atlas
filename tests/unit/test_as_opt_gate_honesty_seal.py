@@ -100,9 +100,7 @@ def _expanded_evidence_arm():
 
 def _vacate_status(catalog: dict, status: str) -> None:
     catalog["cases"][:] = [
-        case
-        for case in catalog["cases"]
-        if str(case.get("expected_status", "")) != status
+        case for case in catalog["cases"] if str(case.get("expected_status", "")) != status
     ]
 
 
@@ -183,9 +181,10 @@ def test_semantic_catalog_mutation_invalidates_seal(mutate) -> None:
     assert verify_sealed_envelope(envelope) is True
     mutate(envelope.honesty_catalog)
     assert verify_sealed_envelope(envelope) is False
-    assert honesty_catalog_object_digest(envelope.honesty_catalog) != envelope.component_digests[
-        "honesty_catalog_object"
-    ]
+    assert (
+        honesty_catalog_object_digest(envelope.honesty_catalog)
+        != envelope.component_digests["honesty_catalog_object"]
+    )
 
 
 def test_replacing_catalog_object_invalidates_seal() -> None:
@@ -392,9 +391,7 @@ def test_zero_threshold_downgrade_redigest_fails_with_sealed_anchors() -> None:
         "min_public_rate_improvement_millis": 0,
         "require_holdout_scored": True,
     }
-    receipt["threshold_object_digest"] = _sha256_payload(
-        _sealed_thresholds(receipt["thresholds"])
-    )
+    receipt["threshold_object_digest"] = _sha256_payload(_sealed_thresholds(receipt["thresholds"]))
     receipt["threshold_digest"] = "c" * 64
     receipt["promotion_decision"] = "PROMOTE_ELIGIBLE"
     receipt["decision_reason"] = "all-conditions-met"

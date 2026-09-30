@@ -134,9 +134,7 @@ def test_nondeterministic_gain_rejected() -> None:
         replay_public_predictions=PUBLIC_PERFECT,
         replay_honesty_answers=replay,
     )
-    outcomes = evaluate_hard_gates(
-        arm=unstable, candidate_config=_CONFIG, catalog=_CATALOG
-    )
+    outcomes = evaluate_hard_gates(arm=unstable, candidate_config=_CONFIG, catalog=_CATALOG)
     assert outcomes["determinism"] == "FAIL"
     _reject_without_considering_score(outcomes)
 

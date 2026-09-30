@@ -65,8 +65,7 @@ def test_web_api_remains_read_only_import_boundary() -> None:
     import_lines = [
         line
         for line in text.splitlines()
-        if line.lstrip().startswith(("from ", "import "))
-        and "__future__" not in line
+        if line.lstrip().startswith(("from ", "import ")) and "__future__" not in line
     ]
     forbidden = (
         "knowledge_compiler",

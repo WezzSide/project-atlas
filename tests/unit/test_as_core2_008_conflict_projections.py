@@ -81,9 +81,7 @@ def _conflict(
             for sid, sline, value in sides
         ],
         claim_ids=[f"claim-{i}" for i in range(len(sides))],
-        source_lineage_ids=sorted(
-            {sline for _sid, sline, _value in sides if sline is not None}
-        ),
+        source_lineage_ids=sorted({sline for _sid, sline, _value in sides if sline is not None}),
         conflict_type=ConflictType.MATERIALLY_INCOMPATIBLE,
         provenance=[
             ProvenanceReference(
@@ -235,9 +233,7 @@ def test_c8_fr004_compile_hardens_conflict_review_queue(tmp_path: Path) -> None:
         ],
         tmp_path,
     )
-    conflict_reviews = [
-        item for item in bundle.reviews if item.category is ReviewCategory.CONFLICT
-    ]
+    conflict_reviews = [item for item in bundle.reviews if item.category is ReviewCategory.CONFLICT]
     assert conflict_reviews
     assert all(DUPLICATE_SOURCE_KIND in item.reason for item in conflict_reviews)
     for item in conflict_reviews:
@@ -318,9 +314,7 @@ def test_c8_fr008_no_graph_invent_api() -> None:
     import project_atlas.conflict_projections as mod
 
     forbidden = [
-        name
-        for name in dir(mod)
-        if "graph" in name.lower() or name.lower().startswith("from_edge")
+        name for name in dir(mod) if "graph" in name.lower() or name.lower().startswith("from_edge")
     ]
     assert forbidden == []
 

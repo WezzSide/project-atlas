@@ -646,6 +646,7 @@ def test_f12_the_fixpoint_fails_closed_rather_than_reporting_clean() -> None:
     so a reverse-ordered chain longer than that produced an empty result -- which
     the caller reads as "nothing executes this script". Verification found it.
     """
+
     def chain(hops: int) -> str:
         return (
             "import runpy\ndef f(): runpy.run_path(z)\n"
@@ -695,31 +696,24 @@ _MUST_DETECT = {
         '_M: str = "f8_near_miss_controls.py"\nimport runpy\ndef f(): runpy.run_path(_M)\n'
     ),
     "import_module by MODULE name": (
-        '_M = "f8_near_miss_controls"\nimport importlib\n'
-        "def f(): importlib.import_module(_M)\n"
+        '_M = "f8_near_miss_controls"\nimport importlib\ndef f(): importlib.import_module(_M)\n'
     ),
     "__import__ by module name": '_M = "f8_near_miss_controls"\ndef f(): __import__(_M)\n',
     "runpy.run_module by module name": (
         'import runpy\ndef f(): runpy.run_module("f8_near_miss_controls")\n'
     ),
     "dict-literal lookup": (
-        'import runpy\nN = {"m": "f8_near_miss_controls.py"}\n'
-        'def f(): runpy.run_path(N["m"])\n'
+        'import runpy\nN = {"m": "f8_near_miss_controls.py"}\ndef f(): runpy.run_path(N["m"])\n'
     ),
     "for-loop target": (
-        "import runpy\ndef f():\n"
-        '    for n in ["f8_near_miss_controls.py"]: runpy.run_path(n)\n'
+        'import runpy\ndef f():\n    for n in ["f8_near_miss_controls.py"]: runpy.run_path(n)\n'
     ),
     "class attribute": (
-        'import runpy\nclass C: M = "f8_near_miss_controls.py"\n'
-        "def f(): runpy.run_path(C.M)\n"
+        'import runpy\nclass C: M = "f8_near_miss_controls.py"\ndef f(): runpy.run_path(C.M)\n'
     ),
-    "parameter default": (
-        'import runpy\ndef f(n="f8_near_miss_controls.py"): runpy.run_path(n)\n'
-    ),
+    "parameter default": ('import runpy\ndef f(n="f8_near_miss_controls.py"): runpy.run_path(n)\n'),
     "walrus binding": (
-        "import runpy\ndef f():\n"
-        '    if (m := "f8_near_miss_controls.py"): runpy.run_path(m)\n'
+        'import runpy\ndef f():\n    if (m := "f8_near_miss_controls.py"): runpy.run_path(m)\n'
     ),
     "read_text then exec (transitive)": (
         'import pathlib\n_M = "f8_near_miss_controls.py"\n'
@@ -748,9 +742,7 @@ _MUST_DETECT = {
         "alias = C.M\ndef f(): runpy.run_path(alias)\n"
     ),
     "attribute use (requires attr matching)": (
-        "import runpy\nclass C:\n"
-        '    M = "f8_near_miss_controls.py"\n'
-        "def f(): runpy.run_path(C.M)\n"
+        'import runpy\nclass C:\n    M = "f8_near_miss_controls.py"\ndef f(): runpy.run_path(C.M)\n'
     ),
     "later rebinding must not hide it": (
         'import runpy\n_M = "f8_near_miss_controls.py"\n'
@@ -762,12 +754,9 @@ _MUST_DETECT = {
 _MUST_NOT_DETECT = {
     "a bare mention in a string": '_M = "f8_near_miss_controls.py"\n',
     "a non-executing call": (
-        "import pathlib\n"
-        'def f(): pathlib.Path("f8_near_miss_controls.py").read_text()\n'
+        'import pathlib\ndef f(): pathlib.Path("f8_near_miss_controls.py").read_text()\n'
     ),
-    "a different script": (
-        'import runpy\ndef f(): runpy.run_path("f9_diagnostic_parity.py")\n'
-    ),
+    "a different script": ('import runpy\ndef f(): runpy.run_path("f9_diagnostic_parity.py")\n'),
     "an unrelated exec": 'def f(): exec("print(1)", {})\n',
     "an unrelated subprocess": 'import subprocess\ndef f(): subprocess.run(["ls"])\n',
 }

@@ -58,7 +58,7 @@ def _claim(
     *,
     value: str = "PostgreSQL 16",
     field: str = "datastore",
-        subject: str = "project:harbor-api",
+    subject: str = "project:harbor-api",
     source_id: str = "src-adr",
     lineage: str | None = None,
     authority: AuthorityLevel = AuthorityLevel.PRIMARY,

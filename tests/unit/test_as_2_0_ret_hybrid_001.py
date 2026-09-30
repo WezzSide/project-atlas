@@ -123,9 +123,7 @@ def test_hybrid_plan_does_not_write_vault(tmp_path: Path) -> None:
     _seed_vault(vault)
     before = _vault_fingerprint(vault)
 
-    build_hybrid_retrieval_plan(
-        vault, kind="concept", value="demo-concept", project_id="demo"
-    )
+    build_hybrid_retrieval_plan(vault, kind="concept", value="demo-concept", project_id="demo")
 
     after = _vault_fingerprint(vault)
     assert after == before
@@ -157,15 +155,13 @@ def test_hybrid_plan_rejects_unknown_kind(tmp_path: Path) -> None:
     vault.mkdir()
     _seed_vault(vault)
     with pytest.raises(HybridRetrievalError, match="kind-unsupported"):
-        build_hybrid_retrieval_plan(
-            vault, kind="embedding", value="x", project_id="demo"
-        )
+        build_hybrid_retrieval_plan(vault, kind="embedding", value="x", project_id="demo")
 
 
 def test_hybrid_module_does_not_invent_embeddings() -> None:
-    text = (ROOT / "src" / "project_atlas" / "hybrid_retrieval.py").read_text(
-        encoding="utf-8"
-    ).lower()
+    text = (
+        (ROOT / "src" / "project_atlas" / "hybrid_retrieval.py").read_text(encoding="utf-8").lower()
+    )
     for forbidden in ("openai", "embedding_model", "vector_store", "nearest_neighbor"):
         assert forbidden not in text
 

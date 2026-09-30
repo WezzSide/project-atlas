@@ -349,9 +349,7 @@ def test_cli_pending_overwrite(tmp_path: Path, capsys: pytest.CaptureFixture[str
     second = tmp_path / "b.json"
     first.write_text(json.dumps(_payload()), encoding="utf-8")
     second.write_text(json.dumps(_payload(task={"id": "D-999", "attempt": 1})), encoding="utf-8")
-    first_code = main(
-        ["orchestrator", "cursor-stage-result", str(first), "--root", str(tmp_path)]
-    )
+    first_code = main(["orchestrator", "cursor-stage-result", str(first), "--root", str(tmp_path)])
     assert first_code == EXIT_OK
     capsys.readouterr()
     second_code = main(
@@ -432,9 +430,13 @@ def test_invalid_envelope_does_not_persist(tmp_path: Path) -> None:
 
 
 def test_bridge_source_has_no_dispatch() -> None:
-    text = Path(__file__).resolve().parents[2].joinpath(
-        "src/project_atlas/orchestration/cursor_bridge.py"
-    ).read_text(encoding="utf-8")
+    text = (
+        Path(__file__)
+        .resolve()
+        .parents[2]
+        .joinpath("src/project_atlas/orchestration/cursor_bridge.py")
+        .read_text(encoding="utf-8")
+    )
     for needle in (
         "cursor-agent",
         "spawn_agent",

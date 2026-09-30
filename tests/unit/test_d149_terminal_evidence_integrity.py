@@ -24,12 +24,7 @@ from project_atlas.portfolio import stale_knowledge
 
 
 def _load_d147():
-    path = (
-        Path(__file__).resolve().parents[2]
-        / "docs"
-        / "scripts"
-        / "d147_broker_reconcile.py"
-    )
+    path = Path(__file__).resolve().parents[2] / "docs" / "scripts" / "d147_broker_reconcile.py"
     spec = importlib.util.spec_from_file_location("d147_broker_reconcile", path)
     assert spec and spec.loader
     mod = importlib.util.module_from_spec(spec)
@@ -38,12 +33,7 @@ def _load_d147():
 
 
 def _load_d148():
-    path = (
-        Path(__file__).resolve().parents[2]
-        / "docs"
-        / "scripts"
-        / "d148_authentic_o2_runner.py"
-    )
+    path = Path(__file__).resolve().parents[2] / "docs" / "scripts" / "d148_authentic_o2_runner.py"
     spec = importlib.util.spec_from_file_location("d148_authentic_o2_runner", path)
     assert spec and spec.loader
     mod = importlib.util.module_from_spec(spec)

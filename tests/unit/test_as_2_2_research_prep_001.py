@@ -69,23 +69,17 @@ def test_contract_stubs_present() -> None:
         assert path.is_file(), name
         payload = json.loads(path.read_text(encoding="utf-8"))
         assert "PREP STUB" in payload["title"]
-        assert payload["$id"].startswith(
-            "https://project-atlas.local/prep/atlas-2.2/"
-        )
+        assert payload["$id"].startswith("https://project-atlas.local/prep/atlas-2.2/")
 
 
 def test_fixtures_pipeline_and_non_authority() -> None:
-    chain = json.loads(
-        (FIXTURES / "sample-workspace-chain.json").read_text(encoding="utf-8")
-    )
+    chain = json.loads((FIXTURES / "sample-workspace-chain.json").read_text(encoding="utf-8"))
     assert chain["pipeline"] == list(PIPELINE)
     assert chain["question"]["authentic_estate"] is False
     for hyp in chain["hypotheses"]:
         assert hyp["authority_promoted"] is False
 
-    complete = json.loads(
-        (FIXTURES / "expected-pack-complete.json").read_text(encoding="utf-8")
-    )
+    complete = json.loads((FIXTURES / "expected-pack-complete.json").read_text(encoding="utf-8"))
     assert complete["pipeline"] == list(PIPELINE)
     assert complete["status"] == "COMPLETE"
     assert complete["canonical_write"] is False
@@ -109,9 +103,7 @@ def test_fixtures_pipeline_and_non_authority() -> None:
 
 
 def test_ask_atlas_2_answer_shape() -> None:
-    answer = json.loads(
-        (FIXTURES / "expected-ask-atlas-2-answer.json").read_text(encoding="utf-8")
-    )
+    answer = json.loads((FIXTURES / "expected-ask-atlas-2-answer.json").read_text(encoding="utf-8"))
     for field in ASK_FIELDS:
         assert field in answer, field
     assert answer["canonical_write"] is False
@@ -122,9 +114,7 @@ def test_ask_atlas_2_answer_shape() -> None:
 
 def test_prep_does_not_claim_release_or_pilot() -> None:
     card = (DOCS / "AS-2.2-RESEARCH-001.md").read_text(encoding="utf-8")
-    adr = (DOCS / "adr" / "ADR-025-research-workspace-prep.md").read_text(
-        encoding="utf-8"
-    )
+    adr = (DOCS / "adr" / "ADR-025-research-workspace-prep.md").read_text(encoding="utf-8")
     for text in (card, adr):
         assert "PREP" in text
         assert "ATLAS_2_1_RELEASE_CERTIFIED" in text

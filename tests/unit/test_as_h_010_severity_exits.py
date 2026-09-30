@@ -36,8 +36,7 @@ def _write_manifest(vault: Path, sources: list[dict[str, object]]) -> None:
     path = vault / "sources" / "manifests" / "source-manifest.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        json.dumps({"schema_version": 1, "sources": sources}, indent=2, sort_keys=True)
-        + "\n",
+        json.dumps({"schema_version": 1, "sources": sources}, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
 

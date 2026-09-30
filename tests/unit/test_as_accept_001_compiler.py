@@ -104,8 +104,7 @@ def test_ax_cmp_003_graph_resolved_path_not_claim_evidence(tmp_path: Path) -> No
     auth_from_graph = [
         a
         for a in bundle.authoritative_states
-        if a.authoritative_claim_id
-        in {c.claim_id for c in graph_claims}
+        if a.authoritative_claim_id in {c.claim_id for c in graph_claims}
     ]
     assert auth_from_graph == []
     for claim in graph_claims:
@@ -137,9 +136,7 @@ def test_ax_cmp_004_no_auth_record_when_rule_skipped(tmp_path: Path) -> None:
     assert auth == []
     # Title rule still emits.
     title_auth = [
-        a
-        for a in bundle.authoritative_states
-        if a.subject == "wp:AS-ID-001" and a.field == "title"
+        a for a in bundle.authoritative_states if a.subject == "wp:AS-ID-001" and a.field == "title"
     ]
     assert title_auth
     assert title_auth[0].authoritative_value == "Durable Source Lineage Identity"

@@ -138,27 +138,24 @@ def test_demo_architecture_and_filename_cli_not_surface_authority(tmp_path: Path
     (root / "docs" / "demo").mkdir(parents=True)
     (root / "README.md").write_text("# Arch Demo Noise\n\nPurpose.\n", encoding="utf-8")
     (root / "docs" / "plan.md").write_text(
-        "# Plan\n\n## 2. Core architectural decision\n\n"
-        "I recommend a **three-layer vault**.\n",
+        "# Plan\n\n## 2. Core architectural decision\n\nI recommend a **three-layer vault**.\n",
         encoding="utf-8",
     )
     (root / "docs" / "demo" / "ARCHITECTURE.md").write_text(
-        "# Demo Architecture\n\n"
-        "Mentioned surfaces: CLI, Web, MCP, Obsidian (demo theatre).\n",
+        "# Demo Architecture\n\nMentioned surfaces: CLI, Web, MCP, Obsidian (demo theatre).\n",
         encoding="utf-8",
     )
     (root / "AGENTS.md").write_text(
-        "# Agents\n\n"
-        "- `cli.py` — argparse entry only; no surface prose here.\n",
+        "# Agents\n\n- `cli.py` — argparse entry only; no surface prose here.\n",
         encoding="utf-8",
     )
     report = connect_project(root)
     vault = Path(report["vault"])
     project_id = str(report["bound_project_id"])
     lens = json.loads(
-        (
-            vault / "generated" / "answers" / f"ans-architecture-{project_id}.json"
-        ).read_text(encoding="utf-8")
+        (vault / "generated" / "answers" / f"ans-architecture-{project_id}.json").read_text(
+            encoding="utf-8"
+        )
     )
     assert "docs/demo/ARCHITECTURE.md" not in (lens.get("evidence") or [])
     # Filename-only cli.py must not invent CLI/Web/MCP/Obsidian surfaces.
@@ -179,12 +176,9 @@ def test_readme_only_keeps_architecture_unknown(tmp_path: Path) -> None:
     vault = Path(report["vault"])
     project_id = str(report["bound_project_id"])
     lens = json.loads(
-        (
-            vault
-            / "generated"
-            / "answers"
-            / f"ans-architecture-{project_id}.json"
-        ).read_text(encoding="utf-8")
+        (vault / "generated" / "answers" / f"ans-architecture-{project_id}.json").read_text(
+            encoding="utf-8"
+        )
     )
     brief = build_project_brief(vault, project_id, refresh=False)
 

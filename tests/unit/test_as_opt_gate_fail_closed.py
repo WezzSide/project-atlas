@@ -293,9 +293,7 @@ def test_scoring_broker_partial_failure_not_promote_eligible() -> None:
         def manifest(self) -> list[BrokerCase]:
             return [BrokerCase("a" * 32, "exact", "q")]
 
-        def submit(
-            self, predictions: dict[str, str], candidate: object = None
-        ) -> BrokerResult:
+        def submit(self, predictions: dict[str, str], candidate: object = None) -> BrokerResult:
             self.calls += 1
             if self.calls >= 2:
                 raise ScoringBrokerError("broker-internal-error")

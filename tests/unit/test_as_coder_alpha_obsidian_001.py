@@ -42,9 +42,7 @@ def test_obsidian_living_note_and_human_preserve(tmp_path: Path) -> None:
         "<!-- BEGIN HUMAN: notes -->\nOwner: keep this sentence.\n<!-- END HUMAN: notes -->",
     )
     note.write_text(humanized, encoding="utf-8")
-    report = materialize_obsidian_projection(
-        vault, project_id=project_id, refresh_brief=False
-    )
+    report = materialize_obsidian_projection(vault, project_id=project_id, refresh_brief=False)
     assert report["status"] == "ok"
     refreshed = note.read_text(encoding="utf-8")
     assert "Owner: keep this sentence." in refreshed

@@ -29,12 +29,7 @@ def _write(path: Path, text: str) -> None:
 
 
 def _allocation(vault: Path, project_id: str, project_uuid: str) -> None:
-    path = (
-        vault
-        / "receipts"
-        / "source-lineage"
-        / f"project-{project_id}-allocation.json"
-    )
+    path = vault / "receipts" / "source-lineage" / f"project-{project_id}-allocation.json"
     _write(
         path,
         json.dumps(
@@ -373,9 +368,7 @@ def test_p11_cache_never_skips_identity(tmp_path: Path) -> None:
         f"project:\n  id: beta\nproject_uuid: {BETA_UUID}\n",
     )
     stale_cache = {"entries": report1.get("_cache_entries")}
-    report2 = discover_estate(
-        tmp_path / "estate", vault=vault, prior_cache=stale_cache
-    )
+    report2 = discover_estate(tmp_path / "estate", vault=vault, prior_cache=stale_cache)
     assert report2["incremental_foundation"]["cache_used_for_skip"] is False
     proj = report2["candidates"]["projects"][0]
     assert proj["fingerprint"]["atlas_project_id"] == "beta"
@@ -416,9 +409,7 @@ def test_p13_stale_report_connect_fail_closed(tmp_path: Path) -> None:
         f"project:\n  id: beta\nproject_uuid: {BETA_UUID}\n",
     )
     with pytest.raises(EstateDiscoveryError, match=r"stale report"):
-        connect_discovered_candidate(
-            report, cand["candidate_id"], vault=vault, dry_run=True
-        )
+        connect_discovered_candidate(report, cand["candidate_id"], vault=vault, dry_run=True)
 
 
 def test_p7_candidate_id_stable_and_case_policy(tmp_path: Path) -> None:
@@ -449,9 +440,7 @@ def test_web_api_parity_includes_scan(tmp_path: Path) -> None:
         max_project_candidates=0,
     )
     # max 0 → immediate truncation
-    write_discovery_report(
-        report, vault / "generated" / "ops" / "estate-discovery-report.json"
-    )
+    write_discovery_report(report, vault / "generated" / "ops" / "estate-discovery-report.json")
     view = load_estate_discovery_view(vault)
     assert view["present"] is True
     assert "scan" in view

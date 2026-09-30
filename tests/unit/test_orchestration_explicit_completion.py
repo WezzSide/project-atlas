@@ -326,9 +326,13 @@ def test_privilege_invariants_explicit_transport(tmp_path: Path) -> None:
 
 
 def test_explicit_completion_source_has_no_dispatch() -> None:
-    text = Path(__file__).resolve().parents[2].joinpath(
-        "src/project_atlas/orchestration/cursor_bridge.py"
-    ).read_text(encoding="utf-8")
+    text = (
+        Path(__file__)
+        .resolve()
+        .parents[2]
+        .joinpath("src/project_atlas/orchestration/cursor_bridge.py")
+        .read_text(encoding="utf-8")
+    )
     for needle in (
         "cursor-agent",
         "spawn_agent",

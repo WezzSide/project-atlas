@@ -53,9 +53,7 @@ def test_declared_inventory_is_derived(tmp_path: Path) -> None:
             "repositories": [
                 {"id": "harbor-api-repo", "evidence_refs": ["src:harbor-api/.atlas-project.yaml"]}
             ],
-            "components": [
-                {"id": "api", "evidence_refs": ["doc:architecture.md#api"]}
-            ],
+            "components": [{"id": "api", "evidence_refs": ["doc:architecture.md#api"]}],
         },
     )
     report = compile_inventory(vault, "harbor-api")

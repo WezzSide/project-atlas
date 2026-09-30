@@ -23,9 +23,7 @@ def _point(subject: str, field: str, *, kind: str = "authoritative") -> dict[str
     return {"shape": "point", "kind": kind, "subject": subject, "field": field}
 
 
-def _multifield(
-    subject: str, fields: list[str], *, kind: str = "authoritative"
-) -> dict[str, Any]:
+def _multifield(subject: str, fields: list[str], *, kind: str = "authoritative") -> dict[str, Any]:
     return {"shape": "multifield", "kind": kind, "subject": subject, "fields": fields}
 
 
@@ -134,9 +132,7 @@ def test_mixed_valid_invalid_no_silent_partial_success() -> None:
 
 def test_plan_is_not_answer_envelope() -> None:
     """QM-ADV-001 — plan ≠ answer."""
-    plan = build_query_plan(
-        [{"project_id": "p", "items": [_point("s", "f")]}]
-    )
+    plan = build_query_plan([{"project_id": "p", "items": [_point("s", "f")]}])
     assert "value" not in plan
     assert "answer" not in plan
     assert "answers" not in plan
@@ -195,9 +191,7 @@ def test_list_item_rejects_subject_fields() -> None:
             [
                 {
                     "project_id": "p",
-                    "items": [
-                        {"shape": "list", "kind": "authoritative", "subject": "nope"}
-                    ],
+                    "items": [{"shape": "list", "kind": "authoritative", "subject": "nope"}],
                 }
             ]
         )

@@ -146,9 +146,7 @@ def test_symlink_answer_fails_closed(tmp_path: Path) -> None:
 
 def test_module_does_not_write_or_materialize() -> None:
     root = Path(__file__).resolve().parents[2]
-    source = (root / "src/project_atlas/web_api/overview_read.py").read_text(
-        encoding="utf-8"
-    )
+    source = (root / "src/project_atlas/web_api/overview_read.py").read_text(encoding="utf-8")
     for name in (
         "from project_atlas.overview",
         "materialize_overview_lenses(",

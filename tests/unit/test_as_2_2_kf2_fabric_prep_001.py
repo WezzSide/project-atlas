@@ -114,12 +114,8 @@ def test_kf2_fabric_inventory_fixture_invariants() -> None:
         jsonschema.validate(instance=row, schema=scenario_schema)
     inventory_schema = _load_json(CONTRACTS / "kf2-estate-fabric-inventory.schema.json")
     assert isinstance(inventory_schema, dict)
-    assert inventory_schema["properties"]["package_id"]["const"] == (
-        "AS-2.2-KF2-FABRIC-PREP-001"
-    )
-    assert inventory_schema["properties"]["atlas_2_1_release_certified"][
-        "const"
-    ] is False
+    assert inventory_schema["properties"]["package_id"]["const"] == ("AS-2.2-KF2-FABRIC-PREP-001")
+    assert inventory_schema["properties"]["atlas_2_1_release_certified"]["const"] is False
     assert inventory_schema["properties"]["cross_promote"]["const"] is False
 
 

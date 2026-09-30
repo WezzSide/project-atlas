@@ -89,9 +89,7 @@ def _temporal(bundle, subject: str, field: str):
 
 
 def _auth(bundle, subject: str, field: str):
-    matches = [
-        d for d in bundle.authoritative_states if d.subject == subject and d.field == field
-    ]
+    matches = [d for d in bundle.authoritative_states if d.subject == subject and d.field == field]
     assert matches, f"missing authoritative disposition for {subject}/{field}"
     return matches[0]
 
@@ -150,9 +148,7 @@ def test_role_resolution_genesis_vs_remediation() -> None:
     rem = _entry("docs/evidence/AS-ID-001-governor-remediation-receipt.yaml")
     tip = _entry("docs/evidence/AS-ID-001-retired-slot-resolution-wiring-receipt.yaml")
     assert (
-        resolve_artifact_role(
-            path=genesis["path"], text=genesis["text"], subject="wp:AS-ID-001"
-        )
+        resolve_artifact_role(path=genesis["path"], text=genesis["text"], subject="wp:AS-ID-001")
         is ArtifactRole.PACKAGE_GENESIS_RECEIPT
     )
     assert (
@@ -195,9 +191,7 @@ def test_as_id_001_title_authority_acceptance(tmp_path: Path) -> None:
     assert "package_genesis_receipt" in auth.rationale
 
     conflict = next(
-        c
-        for c in bundle.conflicts
-        if c.subject == "wp:AS-ID-001" and c.field == "title"
+        c for c in bundle.conflicts if c.subject == "wp:AS-ID-001" and c.field == "title"
     )
     assert conflict.state is ConflictState.RESOLVED
     assert conflict.resolution is not None
@@ -228,20 +222,14 @@ def test_eight_group_matrix_authority_boundary(tmp_path: Path) -> None:
             assert val == expected
         # No authority rule → no authoritative_states entry for these fields
         assert not [
-            a
-            for a in bundle.authoritative_states
-            if a.subject == subject and a.field == field
+            a for a in bundle.authoritative_states if a.subject == subject and a.field == field
         ]
 
     # Roadmap remains unresolved temporally and has no authority winner
     roadmap = _temporal(bundle, f"doc:{_sid('docs/plan.md')}", "roadmap")
     assert roadmap.temporal_status is TemporalStatus.UNRESOLVED
     assert roadmap.current_claim_id is None
-    assert not [
-        a
-        for a in bundle.authoritative_states
-        if a.field == "roadmap"
-    ]
+    assert not [a for a in bundle.authoritative_states if a.field == "roadmap"]
 
     # Title authority-resolved
     auth = _auth(bundle, "wp:AS-ID-001", "title")
@@ -253,9 +241,7 @@ def test_adversarial_newer_remediation_rejected(tmp_path: Path) -> None:
     bundle = _bundle(tmp_path)
     auth = _auth(bundle, "wp:AS-ID-001", "title")
     tip = next(
-        c
-        for c in bundle.claims
-        if c.value == "Retired-slot resolution control-flow remediation"
+        c for c in bundle.claims if c.value == "Retired-slot resolution control-flow remediation"
     )
     assert tip.claim_id != auth.authoritative_claim_id
     assert tip.claim_id in auth.subordinate_claim_ids or tip.claim_id in auth.competing_claim_ids
@@ -278,12 +264,8 @@ def test_adversarial_equal_authority_conflict() -> None:
     text_a = "package: DEMO\ntitle: Alpha\nstatus: x\n"
     text_b = "package: DEMO\ntitle: Beta\nstatus: x\n"
     artifacts = {
-        "src-g1": SourceArtifact(
-            "src-g1", "docs/evidence/DEMO-receipt.yaml", text_a
-        ),
-        "src-g2": SourceArtifact(
-            "src-g2", "docs/evidence/DEMO-receipt.yaml", text_b
-        ),
+        "src-g1": SourceArtifact("src-g1", "docs/evidence/DEMO-receipt.yaml", text_a),
+        "src-g2": SourceArtifact("src-g2", "docs/evidence/DEMO-receipt.yaml", text_b),
     }
     # Same genesis path shape for both — both resolve as genesis; values conflict.
     result = evaluate_disposition(

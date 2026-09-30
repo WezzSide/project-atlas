@@ -188,9 +188,7 @@ def test_g4_fx_004_incremental_refresh_when_hash_changes(tmp_path: Path) -> None
     assert second.quarantined_count == 2
     written = write_quarantine_outputs(second, vault=vault)
     quarantine_records = [
-        path
-        for path in written
-        if "/quarantine/" in path and not path.endswith("/receipt.json")
+        path for path in written if "/quarantine/" in path and not path.endswith("/receipt.json")
     ]
     assert len(quarantine_records) == 2
     assert any(path.endswith("/receipt.json") for path in written)

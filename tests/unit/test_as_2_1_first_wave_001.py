@@ -93,9 +93,7 @@ def test_scheduler_supervised_version(tmp_path: Path) -> None:
     vault.mkdir()
     arm_scheduler(vault, arm_id="arm-a")
     op = elevated_operator("disp", extra={"scheduler.dispatch"})
-    report = dispatch_supervised_job(
-        vault, arm_id="arm-a", job="version", operator=op
-    )
+    report = dispatch_supervised_job(vault, arm_id="arm-a", job="version", operator=op)
     assert report["live_supervised_scheduler"] is True
     assert report["exit_code"] == 0
 

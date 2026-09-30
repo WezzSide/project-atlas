@@ -71,9 +71,7 @@ def test_governor_service_double_start_returns_error(tmp_path) -> None:
 def test_run_forever_honors_stop_file(tmp_path) -> None:
     acquire_supervisor_lock(tmp_path)
     clear_supervisor_stop(tmp_path)
-    supervisor = DurableAtlasSupervisor.create(
-        tmp_path, use_fake=True, poll_interval_sec=0.01
-    )
+    supervisor = DurableAtlasSupervisor.create(tmp_path, use_fake=True, poll_interval_sec=0.01)
     request_supervisor_stop(tmp_path)
     status = asyncio.run(supervisor.run_forever())
     release_supervisor_lock(tmp_path)
@@ -143,8 +141,7 @@ def test_live_foreign_pid_blocked(tmp_path) -> None:
     lock_path = host_state_dir(tmp_path) / SUPERVISOR_LOCK_NAME
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     lock_path.write_text(
-        '{"pid": 424242, "instance_id": "foreign-token", '
-        '"process_start_identity": "linux:1"}\n',
+        '{"pid": 424242, "instance_id": "foreign-token", "process_start_identity": "linux:1"}\n',
         encoding="utf-8",
     )
     with patch("project_atlas.orchestration.sdk.host.pid_is_alive", return_value=True):
@@ -155,8 +152,7 @@ def test_dead_owner_reclaimed(tmp_path) -> None:
     lock_path = host_state_dir(tmp_path) / SUPERVISOR_LOCK_NAME
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     lock_path.write_text(
-        '{"pid": 424242, "instance_id": "dead-token", '
-        '"process_start_identity": "linux:1"}\n',
+        '{"pid": 424242, "instance_id": "dead-token", "process_start_identity": "linux:1"}\n',
         encoding="utf-8",
     )
     with patch("project_atlas.orchestration.sdk.host.pid_is_alive", return_value=False):

@@ -64,21 +64,13 @@ def test_openai_fixture_rejected_secret_turns_are_redacted(tmp_path: Path) -> No
     assert report["secret_scan"]["findings_count"] >= 1
     assert all(turn["text"] == REDACTED_PLACEHOLDER for turn in report["turns"])
 
-    receipt_path = (
-        vault / "generated" / "ops" / "openai-import-fixtures" / "sec006-dirty.json"
-    )
+    receipt_path = vault / "generated" / "ops" / "openai-import-fixtures" / "sec006-dirty.json"
     receipt_blob = receipt_path.read_text(encoding="utf-8")
     _assert_secret_absent(receipt_blob, label="fixture receipt file")
     _assert_secret_absent(json.dumps(report, sort_keys=True), label="fixture receipt dict")
     _assert_secret_absent(stdout.getvalue(), label="stdout")
 
-    qpath = (
-        vault
-        / "generated"
-        / "ops"
-        / "provider-quarantine"
-        / "oai-import-sec006-dirty.json"
-    )
+    qpath = vault / "generated" / "ops" / "provider-quarantine" / "oai-import-sec006-dirty.json"
     assert qpath.is_file()
     qblob = qpath.read_text(encoding="utf-8")
     _assert_secret_absent(qblob, label="quarantine envelope")

@@ -31,9 +31,7 @@ from project_atlas.ask2 import (
 )
 from project_atlas.schema import validate_record
 
-_ASK2_SRC = (
-    Path(__file__).resolve().parents[2] / "src" / "project_atlas" / "ask2.py"
-)
+_ASK2_SRC = Path(__file__).resolve().parents[2] / "src" / "project_atlas" / "ask2.py"
 
 # Synthetic corpus subjects — invented for this matrix only.
 _CORPUS: tuple[tuple[str, str], ...] = (
@@ -194,9 +192,7 @@ def _assert_unsupported_stays_unknown(answer: dict[str, Any]) -> None:
 
 
 def test_d150_interrogative_scaffolding_ignored_in_claim_terms() -> None:
-    terms = _question_claim_terms(
-        "What is the Helix annual revenue forecast overview please?"
-    )
+    terms = _question_claim_terms("What is the Helix annual revenue forecast overview please?")
     assert "helix" in terms
     assert "annual" in terms
     assert "revenue" in terms
@@ -316,10 +312,7 @@ def test_d150_matrix_categories_cover_required_surface() -> None:
     present = {category for _, category in _UNSUPPORTED_CASES}
     # Collapse financial-overlap into the financial family for the coverage set.
     normalized = {
-        "nonexistent-financial"
-        if c.startswith("nonexistent-financial")
-        else c
-        for c in present
+        "nonexistent-financial" if c.startswith("nonexistent-financial") else c for c in present
     }
     assert normalized >= _REQUIRED_UNKNOWN_CATEGORIES
     assert len(_SUPPORTED_CASES) >= 4

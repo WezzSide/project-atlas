@@ -85,9 +85,7 @@ def test_unique_path_deepens_beyond_research_ask2() -> None:
     assert "deepen" in package.lower()
     # Deepen stubs must not collide with research stub filenames.
     for filename in SCHEMA_FILES.values():
-        assert not (
-            ROOT / "docs" / "atlas-2.2" / "contracts" / "research" / filename
-        ).exists()
+        assert not (ROOT / "docs" / "atlas-2.2" / "contracts" / "research" / filename).exists()
 
 
 def test_contract_stubs_exist_and_are_not_package_data() -> None:

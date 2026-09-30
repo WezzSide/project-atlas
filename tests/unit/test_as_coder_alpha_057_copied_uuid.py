@@ -31,9 +31,7 @@ def _marker(root: Path, project_id: str, project_uuid: str | None = None) -> Non
 def _snapshot_identity(vault: Path) -> dict[str, object]:
     registry = vault / "state" / "sources.json"
     manifest = vault / "generated" / "ops" / "connect-manifest.json"
-    receipts = sorted(
-        (vault / "receipts" / "source-lineage").glob("project-*-allocation.json")
-    )
+    receipts = sorted((vault / "receipts" / "source-lineage").glob("project-*-allocation.json"))
     return {
         "registry": registry.read_bytes() if registry.is_file() else None,
         "manifest": manifest.read_bytes() if manifest.is_file() else None,
@@ -57,9 +55,7 @@ def test_a_same_id_same_uuid_reconnect(tmp_path: Path) -> None:
     assert second["status"] == "connected"
     assert second["bound_project_id"] == project_id
     assert (
-        yaml.safe_load((root / ".atlas-project.yaml").read_text(encoding="utf-8"))[
-            "project_uuid"
-        ]
+        yaml.safe_load((root / ".atlas-project.yaml").read_text(encoding="utf-8"))["project_uuid"]
         == uuid
     )
     after = _snapshot_identity(shared)
@@ -76,9 +72,9 @@ def test_d_f_g_different_id_same_uuid_fail_closed_no_mutation(tmp_path: Path) ->
     _write(alpha / "README.md", "# Alpha body\n\nOriginal alpha content.\n")
     ra = connect_project(alpha, vault=shared)
     alpha_id = str(ra["bound_project_id"])
-    alpha_uuid = yaml.safe_load(
-        (alpha / ".atlas-project.yaml").read_text(encoding="utf-8")
-    )["project_uuid"]
+    alpha_uuid = yaml.safe_load((alpha / ".atlas-project.yaml").read_text(encoding="utf-8"))[
+        "project_uuid"
+    ]
     before = _snapshot_identity(shared)
     alpha_readme_before = (alpha / "README.md").read_text(encoding="utf-8")
 
@@ -133,12 +129,8 @@ def test_e_different_id_different_uuid_pass(tmp_path: Path) -> None:
     ra = connect_project(alpha, vault=shared)
     rb = connect_project(beta, vault=shared)
     assert ra["bound_project_id"] != rb["bound_project_id"]
-    ua = yaml.safe_load((alpha / ".atlas-project.yaml").read_text(encoding="utf-8"))[
-        "project_uuid"
-    ]
-    ub = yaml.safe_load((beta / ".atlas-project.yaml").read_text(encoding="utf-8"))[
-        "project_uuid"
-    ]
+    ua = yaml.safe_load((alpha / ".atlas-project.yaml").read_text(encoding="utf-8"))["project_uuid"]
+    ub = yaml.safe_load((beta / ".atlas-project.yaml").read_text(encoding="utf-8"))["project_uuid"]
     assert ua != ub
     owners = load_allocation_uuid_owners(shared)
     assert owners[ua] == ra["bound_project_id"]
@@ -206,9 +198,7 @@ def test_deleted_allocation_receipt_still_blocks_copied_uuid(tmp_path: Path) -> 
     uuid = yaml.safe_load((alpha / ".atlas-project.yaml").read_text(encoding="utf-8"))[
         "project_uuid"
     ]
-    receipt = next(
-        (shared / "receipts" / "source-lineage").glob("project-*-allocation.json")
-    )
+    receipt = next((shared / "receipts" / "source-lineage").glob("project-*-allocation.json"))
     receipt.unlink()
     registry_before = (shared / "state" / "sources.json").read_bytes()
     _marker(sibling, "sibling-receiptless", uuid)

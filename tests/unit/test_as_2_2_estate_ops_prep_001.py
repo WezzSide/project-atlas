@@ -85,11 +85,7 @@ def test_package_card_non_claims() -> None:
     assert "**NO**" in text
     assert "ATLAS_2_2_INTELLIGENCE_IMPLEMENTATION_UNLOCKED" in text
     assert "ops_health" in text or "ops health" in text.lower()
-    assert (
-        "do not mutate" in text.lower()
-        or "NONE" in text
-        or "NO OPS RUNTIME" in text
-    )
+    assert "do not mutate" in text.lower() or "NONE" in text or "NO OPS RUNTIME" in text
 
 
 def test_invariants_document_fail_closed_walls() -> None:

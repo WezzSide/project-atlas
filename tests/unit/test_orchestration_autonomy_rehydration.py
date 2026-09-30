@@ -52,9 +52,7 @@ _SRC = str(Path(__file__).resolve().parents[2] / "src")
 
 
 def _run_git(repo: Path, *args: str) -> str:
-    result = subprocess.run(
-        ["git", *args], cwd=repo, check=True, capture_output=True, text=True
-    )
+    result = subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True)
     return result.stdout.strip()
 
 
@@ -383,9 +381,7 @@ print(json.dumps({{
     # the real object that ran, not inferred.
     illegal = [t for t in rehydration_transitions + final_transitions if t["to"] == "LEASED"]
     for t in illegal:
-        assert t["from"] != "ACTIVE", (
-            f"an ACTIVE -> LEASED transition was actually recorded: {t}"
-        )
+        assert t["from"] != "ACTIVE", f"an ACTIVE -> LEASED transition was actually recorded: {t}"
 
     # C. Process N+1's own transition history is exactly the legal forward
     # sequence a fresh governor produces -- DISCOVERED -> READY (mark_ready)
@@ -1977,9 +1973,7 @@ def test_crash_recovery_refuses_to_resume_a_leased_revision_that_was_swapped_for
     )
 
     lease_row = next(
-        row
-        for row in load_lease_projection(lease_store).leases
-        if row.lease_id == lease.lease_id
+        row for row in load_lease_projection(lease_store).leases if row.lease_id == lease.lease_id
     )
     assert lease_row.status == "ACTIVE"
     assert lease_row.package_id == work_id

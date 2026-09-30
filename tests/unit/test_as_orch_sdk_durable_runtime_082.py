@@ -280,9 +280,7 @@ def test_role_lineage_collision_fail_closed(tmp_path: Path) -> None:
         stored = agents.get(run.agent_id)
         assert stored is not None
         with pytest.raises(SdkRuntimeError) as exc:
-            agents.upsert(
-                stored.model_copy(update={"role": AgentRole.INDEPENDENT_VERIFIER})
-            )
+            agents.upsert(stored.model_copy(update={"role": AgentRole.INDEPENDENT_VERIFIER}))
         assert exc.value.code == "ROLE_LINEAGE_COLLISION"
 
     asyncio.run(_run())

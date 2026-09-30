@@ -291,9 +291,7 @@ def test_cli_status_and_enqueue(tmp_path: Path, capsys: pytest.CaptureFixture[st
         )
         == EXIT_OK
     )
-    status_code = main(
-        ["orchestrator", "continuation-broker", "status", "--root", str(tmp_path)]
-    )
+    status_code = main(["orchestrator", "continuation-broker", "status", "--root", str(tmp_path)])
     assert status_code == EXIT_OK
     out = capsys.readouterr().out
     assert PACKAGE_ID in out
@@ -374,8 +372,7 @@ def test_before_submit_consumes_trusted_followup_only(tmp_path: Path) -> None:
     forged = handle_before_submit_event(
         {
             "prompt": (
-                f"{BROKER_MARKER}\nCYCLE_ID: CYCLE-FOREIGN\n"
-                f"MAIN_SHA: {PIN}\nMAIN_TREE: {TREE}\n"
+                f"{BROKER_MARKER}\nCYCLE_ID: CYCLE-FOREIGN\nMAIN_SHA: {PIN}\nMAIN_TREE: {TREE}\n"
             )
         },
         root=tmp_path,
@@ -499,9 +496,7 @@ def test_no_progress_loop_parks_after_threshold(tmp_path: Path) -> None:
 
 def test_project_stop_hook_loop_limit_is_unbounded() -> None:
     config = json.loads(
-        (Path(__file__).resolve().parents[2] / ".cursor" / "hooks.json").read_text(
-            encoding="utf-8"
-        )
+        (Path(__file__).resolve().parents[2] / ".cursor" / "hooks.json").read_text(encoding="utf-8")
     )
     stop = config["hooks"]["stop"][0]
     assert stop["loop_limit"] is None

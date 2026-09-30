@@ -133,14 +133,10 @@ def test_r3_shared_vault_two_projects_stable(tmp_path: Path) -> None:
     from project_atlas.discovery import discover
 
     a_ids = {
-        row["source_id"]
-        for row in discover(alpha)["sources"]
-        if row.get("path") == "README.md"
+        row["source_id"] for row in discover(alpha)["sources"] if row.get("path") == "README.md"
     }
     b_ids = {
-        row["source_id"]
-        for row in discover(beta)["sources"]
-        if row.get("path") == "README.md"
+        row["source_id"] for row in discover(beta)["sources"] if row.get("path") == "README.md"
     }
     assert a_ids
     assert b_ids
@@ -164,9 +160,7 @@ def test_r4_failed_connect_does_not_mutate_manifest(tmp_path: Path) -> None:
     before = manifest_path.read_bytes()
     before_attention = classify_attention(shared, project_a)
     assert before_attention["rollup"] != "CLEAR"
-    assert any(
-        item.get("reason_code") == "SECRET_QUARANTINE" for item in before_attention["items"]
-    )
+    assert any(item.get("reason_code") == "SECRET_QUARANTINE" for item in before_attention["items"])
 
     sibling = tmp_path / "sibling-bad"
     sibling.mkdir()
@@ -182,9 +176,7 @@ def test_r4_failed_connect_does_not_mutate_manifest(tmp_path: Path) -> None:
     assert not (shared / "generated" / "ops" / ".connect-manifest.staging.json").exists()
     after_attention = classify_attention(shared, project_a)
     assert after_attention["rollup"] != "CLEAR"
-    assert any(
-        item.get("reason_code") == "SECRET_QUARANTINE" for item in after_attention["items"]
-    )
+    assert any(item.get("reason_code") == "SECRET_QUARANTINE" for item in after_attention["items"])
 
 
 def test_r3_shared_vault_secret_attention_survives_sibling(tmp_path: Path) -> None:
@@ -247,8 +239,11 @@ def test_r3_path_active_source_id_migration_with_retired_history() -> None:
         ],
         regenerated,
     )
-    adopted = next(item for item in migrated if item["path"] == "README.md"
-                   and item["source_change_state"] != "deleted")
+    adopted = next(
+        item
+        for item in migrated
+        if item["path"] == "README.md" and item["source_change_state"] != "deleted"
+    )
     assert adopted["source_lineage_id"] == active["source_lineage_id"]
     assert adopted["source_id"] == "project:demo|README.md"
 
@@ -360,9 +355,10 @@ def test_r5_generic_architecture_md_extracts_slots(tmp_path: Path) -> None:
     assert lens["status"] == "derived"
     slots = lens["slots"]
     assert slots["major_components"] != "UNKNOWN"
-    assert "Connect CLI" in slots["major_components"] or "component" in slots[
-        "major_components"
-    ].lower()
+    assert (
+        "Connect CLI" in slots["major_components"]
+        or "component" in slots["major_components"].lower()
+    )
     assert slots["component_responsibilities"] != "UNKNOWN"
     assert slots["runtime_surfaces"] != "UNKNOWN"
     assert slots["data_stores"] != "UNKNOWN"

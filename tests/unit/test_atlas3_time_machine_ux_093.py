@@ -77,9 +77,7 @@ def test_wall_clock_fails_closed(tmp_path: Path) -> None:
         vault,
         {
             "project_id": "harbor-api",
-            "snapshots": [
-                {"valid_time": "2024-01-01T00:00:00Z", "wall_clock_is_valid_time": True}
-            ],
+            "snapshots": [{"valid_time": "2024-01-01T00:00:00Z", "wall_clock_is_valid_time": True}],
         },
     )
     with pytest.raises(Atlas3Error) as exc:

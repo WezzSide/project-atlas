@@ -66,9 +66,7 @@ def test_windows_cmd_wrapper_uses_trusted_comspec(tmp_path) -> None:
 def test_windows_cmd_wrapper_createprocess_starts_agent(tmp_path: Path) -> None:
     launcher = tmp_path / "agent.cmd"
     launcher.write_text(
-        "@echo off\r\n"
-        'echo {"type":"result","result":"ok","session_id":"s1"}\r\n'
-        "exit /b 0\r\n",
+        '@echo off\r\necho {"type":"result","result":"ok","session_id":"s1"}\r\nexit /b 0\r\n',
         encoding="utf-8",
     )
     resolved = resolve_cursor_transport(str(launcher))

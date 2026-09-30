@@ -124,9 +124,7 @@ def test_adv_meta_cors_origin_follows_webport_env(
             headers={"Origin": "http://127.0.0.1:18241", **auth},
         )
         with urlopen(req, timeout=2) as resp:
-            assert resp.headers.get("Access-Control-Allow-Origin") == (
-                "http://127.0.0.1:18241"
-            )
+            assert resp.headers.get("Access-Control-Allow-Origin") == ("http://127.0.0.1:18241")
             meta = json.loads(resp.read().decode("utf-8"))
         assert meta["cors_origin"] == "http://127.0.0.1:18241"
         assert meta["cors_origin"] != "http://127.0.0.1:5173"

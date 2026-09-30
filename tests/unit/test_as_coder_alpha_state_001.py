@@ -97,10 +97,7 @@ def test_cli_state_writes_lens(tmp_path: Path) -> None:
     project_id = str(connected["bound_project_id"])
     answer = vault / "generated" / "answers" / f"ans-state-{project_id}.json"
     answer.unlink()
-    assert (
-        main(["state", "--vault", str(vault), "--project", project_id, "--json"])
-        == EXIT_OK
-    )
+    assert main(["state", "--vault", str(vault), "--project", project_id, "--json"]) == EXIT_OK
     assert answer.is_file()
     payload = json.loads(answer.read_text(encoding="utf-8"))
     assert payload["package"] == "AS-CODER-ALPHA-STATE-001"

@@ -117,10 +117,7 @@ def test_authority_downgrade_requires_explicit_review() -> None:
 
 def test_conflicting_explicit_claims_remain_visible_and_queue_review(tmp_path: Path) -> None:
     # AS-CORE-004: true conflicts require the same semantic subject + field.
-    shared = (
-        "semantic_subject: deployment-target\n"
-        "semantic_kind: doc\n"
-    )
+    shared = "semantic_subject: deployment-target\nsemantic_kind: doc\n"
     entries = [
         _entry(
             "source-a",

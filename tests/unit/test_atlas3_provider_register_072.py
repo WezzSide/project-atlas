@@ -88,9 +88,7 @@ def test_cli_help_is_ascii(capsys: pytest.CaptureFixture[str]) -> None:
 
 def test_module_does_not_write() -> None:
     root = Path(__file__).resolve().parents[2]
-    source = (root / "src/project_atlas/atlas3/provider_register.py").read_text(
-        encoding="utf-8"
-    )
+    source = (root / "src/project_atlas/atlas3/provider_register.py").read_text(encoding="utf-8")
     for name in (
         "write_json_atomic",
         "write_text(",

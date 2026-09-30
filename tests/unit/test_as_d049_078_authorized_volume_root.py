@@ -130,9 +130,7 @@ def test_d_system_volume_with_explicit_mode_refuses(
 
 def test_e_home_refuses_even_with_volume_mode() -> None:
     with pytest.raises(EstateDiscoveryError, match="HOME_DIRECTORY_NOT_ALLOWED"):
-        authorize_discovery_root(
-            Path.home(), root_mode=ROOT_MODE_OWNER_AUTHORIZED_VOLUME
-        )
+        authorize_discovery_root(Path.home(), root_mode=ROOT_MODE_OWNER_AUTHORIZED_VOLUME)
 
 
 @pytest.mark.skipif(
@@ -200,9 +198,7 @@ def test_h_external_reparse_escape_not_followed(
     assert report["security"]["unsafe_path_escapes_allowed"] == 0
 
 
-def test_i_symlink_loop_no_crash_no_escape(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_i_symlink_loop_no_crash_no_escape(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     volume = tmp_path / "D"
     a = volume / "loop-a"
     b = volume / "loop-b"
@@ -227,9 +223,7 @@ def test_j_volume_letter_case_aliases_are_deterministic() -> None:
 def test_k_non_root_directory_with_volume_mode_refuses(tmp_path: Path) -> None:
     estate = tmp_path / "estate"
     estate.mkdir()
-    with pytest.raises(
-        EstateDiscoveryError, match="VOLUME_MODE_REQUIRES_WINDOWS_VOLUME_ROOT"
-    ):
+    with pytest.raises(EstateDiscoveryError, match="VOLUME_MODE_REQUIRES_WINDOWS_VOLUME_ROOT"):
         discover_estate(estate, root_mode=ROOT_MODE_OWNER_AUTHORIZED_VOLUME)
 
 
@@ -240,12 +234,8 @@ def test_l_cli_api_web_parity(
     vault = tmp_path / "vault"
     _make_proj(volume / "alpha")
     _fake_windows_volume(monkeypatch, volume)
-    report = discover_estate(
-        volume, vault=vault, root_mode=ROOT_MODE_OWNER_AUTHORIZED_VOLUME
-    )
-    write_discovery_report(
-        report, vault / "generated" / "ops" / "estate-discovery-report.json"
-    )
+    report = discover_estate(volume, vault=vault, root_mode=ROOT_MODE_OWNER_AUTHORIZED_VOLUME)
+    write_discovery_report(report, vault / "generated" / "ops" / "estate-discovery-report.json")
     view = load_estate_discovery_view(vault)
     assert view["authorized_root"] == report["authorized_root"]
     assert view["authorized_root_mode"] == "OWNER_AUTHORIZED_VOLUME_ROOT"
@@ -283,9 +273,7 @@ def test_normalize_root_mode_rejects_force_aliases() -> None:
         normalize_root_mode("unsafe")
     with pytest.raises(EstateDiscoveryError, match="UNKNOWN_ROOT_MODE"):
         normalize_root_mode("force")
-    assert normalize_root_mode("owner-authorized-volume") == (
-        ROOT_MODE_OWNER_AUTHORIZED_VOLUME
-    )
+    assert normalize_root_mode("owner-authorized-volume") == (ROOT_MODE_OWNER_AUTHORIZED_VOLUME)
 
 
 def test_unc_classifier_detects_unc_strings() -> None:
@@ -309,12 +297,8 @@ def test_unknown_system_drive_on_windows_fails_closed(
     volume.mkdir()
     monkeypatch.setattr(ed, "is_windows_drive_volume_root", lambda path, host_os=None: True)
     monkeypatch.setattr(ed, "_windows_volume_letter", lambda path: "D")
-    assert is_windows_system_volume_root(
-        volume, host_os="nt", environ={}
-    )
-    assert not is_windows_system_volume_root(
-        volume, host_os="posix", environ={}
-    )
+    assert is_windows_system_volume_root(volume, host_os="nt", environ={})
+    assert not is_windows_system_volume_root(volume, host_os="posix", environ={})
 
 
 def test_discover_help_names_volume_policy(capsys: pytest.CaptureFixture[str]) -> None:

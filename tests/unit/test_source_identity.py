@@ -75,9 +75,7 @@ def test_canonical_source_hash_normalizes_crlf_split_across_chunk_boundary(
 
 def test_lineage_id_uses_amended_formula() -> None:
     project_uuid = "00000000-0000-4000-8000-000000000001"
-    material = (
-        "atlas/source-lineage/v1|" + project_uuid + "|docs/README.md|" + "a" * 64 + "|1"
-    )
+    material = "atlas/source-lineage/v1|" + project_uuid + "|docs/README.md|" + "a" * 64 + "|1"
     expected = "sline-" + hashlib.sha256(material.encode("utf-8")).hexdigest()[:20]
     assert lineage_id(project_uuid, "docs/README.md", "a" * 64, 1) == expected
 
@@ -172,12 +170,8 @@ def test_migration_builds_chain_receipt_and_is_order_independent() -> None:
         "document_lifecycle": "verified",
         "source_change_state": "unchanged",
     }
-    migrated, receipts = migrate_v1_records_with_receipts(
-        [moved, first], project_uuid
-    )
-    migrated_again, receipts_again = migrate_v1_records_with_receipts(
-        [first, moved], project_uuid
-    )
+    migrated, receipts = migrate_v1_records_with_receipts([moved, first], project_uuid)
+    migrated_again, receipts_again = migrate_v1_records_with_receipts([first, moved], project_uuid)
     assert migrated == migrated_again
     assert receipts == receipts_again
     assert len(migrated) == 1

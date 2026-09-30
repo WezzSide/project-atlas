@@ -51,18 +51,14 @@ def test_ax2_atf_004_ops_and_diag_do_not_rewrite_truth_planes(
     before_mtime = {path: path.stat().st_mtime_ns for path in probes}
     before_tree = hash_tree(vault / "state")
 
-    answer = query_knowledge(
-        vault, "project-atlas", "wp:AS-ID-001", "title", kind="authoritative"
-    )
+    answer = query_knowledge(vault, "project-atlas", "wp:AS-ID-001", "title", kind="authoritative")
     query_diagnostic_from_answer(answer)
     snapshot = build_health_snapshot(vault)
     assert snapshot["authority_plane"] == "none"
     assert snapshot["truth_plane"] == "operational"
     emit_health_snapshot(vault, persist=True)
 
-    code = cli_main(
-        ["ops", "health", "--vault", str(vault), "--json", "--no-write"]
-    )
+    code = cli_main(["ops", "health", "--vault", str(vault), "--json", "--no-write"])
     assert code == 0
     # Drain stdout so later tests are not polluted.
     _ = capsys.readouterr()

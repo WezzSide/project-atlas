@@ -60,9 +60,7 @@ def test_as_prod_onboard_001_docs_present() -> None:
 
 
 def test_as_prod_onboard_001_docs_honesty_and_chain_tokens() -> None:
-    joined = "\n".join(
-        (_DOCS / name).read_text(encoding="utf-8") for name in _REQUIRED_DOCS
-    )
+    joined = "\n".join((_DOCS / name).read_text(encoding="utf-8") for name in _REQUIRED_DOCS)
     for token in _DOC_TOKENS:
         assert token in joined, f"onboard docs missing token {token!r}"
     # Docs may mention forbidden stamps only as negatives; never affirm them.

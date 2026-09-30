@@ -111,9 +111,7 @@ def _hash_tree(root: Path) -> dict[str, str]:
 
 def test_t01_point_ok_classifier_and_success_json_unchanged(tmp_path: Path) -> None:
     vault = _materialize_vault(tmp_path)
-    answer = query_knowledge(
-        vault, "project-atlas", "wp:AS-ID-001", "title", kind="authoritative"
-    )
+    answer = query_knowledge(vault, "project-atlas", "wp:AS-ID-001", "title", kind="authoritative")
     success_json = answer_to_json(answer)
     diagnostic = query_diagnostic_from_answer(answer)
     assert diagnostic.outcome_class is QueryOutcomeClass.ANSWER
@@ -137,8 +135,7 @@ def test_t02_point_nonanswers_not_integrity(tmp_path: Path) -> None:
     assert classify_query_outcome(AnswerStatus.AUTHORITY_CONFLICT) is QueryOutcomeClass.NONANSWER
     assert classify_query_outcome(AnswerStatus.UNRESOLVED) is QueryOutcomeClass.NONANSWER
     assert (
-        classify_query_outcome(AnswerStatus.TEMPORAL_STATE_MISSING)
-        is QueryOutcomeClass.NONANSWER
+        classify_query_outcome(AnswerStatus.TEMPORAL_STATE_MISSING) is QueryOutcomeClass.NONANSWER
     )
 
 
@@ -208,19 +205,18 @@ def test_t05_request_invalid_empty_and_unsupported_kind(tmp_path: Path) -> None:
     with pytest.raises(KnowledgeQueryError) as exc:
         query_knowledge(vault, "project-atlas", "wp:AS-ID-001", "", kind="authoritative")
     assert exc.value.code is KnowledgeQueryErrorCode.INVALID_INPUT
-    assert (
-        query_diagnostic_from_error(exc.value).outcome_class
-        is QueryOutcomeClass.REQUEST_INVALID
-    )
+    assert query_diagnostic_from_error(exc.value).outcome_class is QueryOutcomeClass.REQUEST_INVALID
 
     with pytest.raises(KnowledgeQueryError) as exc2:
         query_knowledge(
-            vault, "project-atlas", "wp:AS-ID-001", "title", kind="not-a-kind"  # type: ignore[arg-type]
+            vault,
+            "project-atlas",
+            "wp:AS-ID-001",
+            "title",
+            kind="not-a-kind",  # type: ignore[arg-type]
         )
     assert exc2.value.code is KnowledgeQueryErrorCode.UNSUPPORTED_KIND
-    assert (
-        classify_query_outcome(exc2.value.code) is QueryOutcomeClass.REQUEST_INVALID
-    )
+    assert classify_query_outcome(exc2.value.code) is QueryOutcomeClass.REQUEST_INVALID
 
 
 # --- T06 multi-field item classes; no rollup value -----------------------------
@@ -284,9 +280,7 @@ def test_t07_diagnostic_dumps_deterministic(tmp_path: Path) -> None:
 def test_t08_diagnostic_path_read_only(tmp_path: Path) -> None:
     vault = _materialize_vault(tmp_path)
     before = _hash_tree(vault)
-    answer = query_knowledge(
-        vault, "project-atlas", "wp:AS-ID-001", "title", kind="authoritative"
-    )
+    answer = query_knowledge(vault, "project-atlas", "wp:AS-ID-001", "title", kind="authoritative")
     query_diagnostic_from_answer(answer)
     with pytest.raises(KnowledgeQueryError) as exc:
         query_knowledge(vault, "", "wp:AS-ID-001", "title")
@@ -299,9 +293,7 @@ def test_t08_diagnostic_path_read_only(tmp_path: Path) -> None:
 
 def test_t09_success_path_answer_to_json_still_core_packages(tmp_path: Path) -> None:
     vault = _materialize_vault(tmp_path)
-    point = query_knowledge(
-        vault, "project-atlas", "wp:AS-ID-001", "title", kind="authoritative"
-    )
+    point = query_knowledge(vault, "project-atlas", "wp:AS-ID-001", "title", kind="authoritative")
     multi = query_knowledge_fields(
         vault, "project-atlas", "wp:AS-ID-001", ["title"], kind="authoritative"
     )

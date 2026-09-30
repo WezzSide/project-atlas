@@ -190,9 +190,7 @@ def test_conversation_mismatch_fails_closed() -> None:
     assert exc.value.code == "INCREMENTAL_CONVERSATION_MISMATCH"
 
 
-def test_cli_capability_and_apply(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_cli_capability_and_apply(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command")
     register_atlas3_parsers(sub)
@@ -248,9 +246,7 @@ def test_cli_help_is_ascii(capsys: pytest.CaptureFixture[str]) -> None:
 
 def test_module_does_not_touch_2x_bridges() -> None:
     root = Path(__file__).resolve().parents[2]
-    source = (root / "src/project_atlas/atlas3/memory/incremental.py").read_text(
-        encoding="utf-8"
-    )
+    source = (root / "src/project_atlas/atlas3/memory/incremental.py").read_text(encoding="utf-8")
     for name in (
         "from project_atlas.chatgpt_bridge",
         "from project_atlas.chatgpt_capture",

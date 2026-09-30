@@ -24,11 +24,14 @@ def test_claim_identity_v2_algorithm_source_unchanged() -> None:
             "proj", "sline-1", "roadmap-status", "package_status", "yamlpath:status"
         ).encode()
     ).hexdigest()
-    assert claim_id_from_key(
-        canonical_identity_key(
-            "proj", "sline-1", "roadmap-status", "package_status", "yamlpath:status"
+    assert (
+        claim_id_from_key(
+            canonical_identity_key(
+                "proj", "sline-1", "roadmap-status", "package_status", "yamlpath:status"
+            )
         )
-    ) == f"claim-{digest[:20]}"
+        == f"claim-{digest[:20]}"
+    )
 
 
 def test_canonical_claims_carry_refined_subjects(tmp_path: Path) -> None:

@@ -91,9 +91,7 @@ def test_b03_sidecar_from_relationship() -> None:
         },
     )
     expected = {"graphify-out/nodes.jsonl": "a" * 64}
-    sidecar = build_sidecar_from_relationship(
-        record, expected_artifact_hashes=expected
-    )
+    sidecar = build_sidecar_from_relationship(record, expected_artifact_hashes=expected)
     validate_record(sidecar, "explain-graph-sidecar")
     assert sidecar["sidecar_kind"] == "relationship"
     assert sidecar["disposition"] == "present"

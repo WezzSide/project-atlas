@@ -24,9 +24,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 _NEW_HOLDOUT_IDS = ("EV-HOLD-101", "EV-HOLD-102")
 _RETIRED_HOLDOUT_IDS = ("EV-HOLD-001", "EV-HOLD-002")
-_EXPECTED_MAP_RE = re.compile(
-    r"(eval.*expected|holdout.*expected).*\.json$", re.IGNORECASE
-)
+_EXPECTED_MAP_RE = re.compile(r"(eval.*expected|holdout.*expected).*\.json$", re.IGNORECASE)
 
 
 def _tracked_files() -> list[str]:
@@ -66,9 +64,7 @@ def test_glob_finds_no_committed_expected_answer_map() -> None:
     inside = [
         p
         for p in REPO_ROOT.rglob("*.json")
-        if ".venv" not in p.parts
-        and ".git" not in p.parts
-        and _EXPECTED_MAP_RE.search(p.name)
+        if ".venv" not in p.parts and ".git" not in p.parts and _EXPECTED_MAP_RE.search(p.name)
     ]
     assert inside == [], f"expected answer map materialised inside repo: {inside}"
 

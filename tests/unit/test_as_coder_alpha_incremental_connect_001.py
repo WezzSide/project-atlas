@@ -395,9 +395,7 @@ def test_cross_project_skip_does_not_leak(tmp_path: Path) -> None:
     leaked = [
         row
         for row in json.loads(
-            (shared / "sources" / "manifests" / "source-manifest.json").read_text(
-                encoding="utf-8"
-            )
+            (shared / "sources" / "manifests" / "source-manifest.json").read_text(encoding="utf-8")
         ).get("sources")
         or []
         if isinstance(row, dict)

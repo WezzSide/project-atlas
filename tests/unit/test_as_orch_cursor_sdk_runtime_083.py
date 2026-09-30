@@ -156,9 +156,7 @@ def test_independence_roles_cannot_reuse_implementer(tmp_path: Path) -> None:
     agents = CloudAgentRegistry(tmp_path)
     pool = AgentRolePool(agents)
     with pytest.raises(Exception, match="independence") as exc:
-        pool.require_new_agent(
-            AgentRole.INDEPENDENT_VERIFIER, reason="followup_from_implementer"
-        )
+        pool.require_new_agent(AgentRole.INDEPENDENT_VERIFIER, reason="followup_from_implementer")
     assert exc.value.code == "INDEPENDENCE_REQUIRED"
 
 

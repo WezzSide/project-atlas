@@ -98,9 +98,7 @@ def test_as_int_010_dry_run_retention_no_tombstones(tmp_path: Path) -> None:
     vault.mkdir()
     for event in ("AE-001", "AE-002"):
         _write_unit(vault, "proj-a", event)
-    report = apply_event_retention(
-        vault, max_packages=1, max_bytes=10_000_000, dry_run=True
-    )
+    report = apply_event_retention(vault, max_packages=1, max_bytes=10_000_000, dry_run=True)
     assert report["status"] == "dry-run"
     assert list_tombstones(vault) == []
 

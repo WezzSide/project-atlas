@@ -107,9 +107,7 @@ def test_d006_fr006_dispatch_evidence_yaml() -> None:
             "source_id": "src-1",
         },
     )
-    assert classify_source("docs/evidence/as-d-006.yaml", text).parser_id == (
-        "evidence-yaml"
-    )
+    assert classify_source("docs/evidence/as-d-006.yaml", text).parser_id == ("evidence-yaml")
     assert result.candidate.outcome in {
         CompilationOutcome.COMPLETE_CANDIDATE,
         CompilationOutcome.PARTIAL_CANDIDATE,
@@ -135,9 +133,7 @@ def test_d006_fr006_dispatch_kv_markdown() -> None:
             "source_id": "src-b",
         },
     )
-    assert classify_source("docs/backlog.md", "# Backlog\n").parser_id == (
-        "kv-markdown"
-    )
+    assert classify_source("docs/backlog.md", "# Backlog\n").parser_id == ("kv-markdown")
     assert result.candidate.outcome in {
         CompilationOutcome.COMPLETE_CANDIDATE,
         CompilationOutcome.PARTIAL_CANDIDATE,

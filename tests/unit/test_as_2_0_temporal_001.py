@@ -45,9 +45,7 @@ def test_normalize_and_catalog(tmp_path: Path) -> None:
     assert catalog["window_count"] == 1
     assert catalog["compat_snapshot_id"] == "atlas-1.0.0-compat"
     validate_record(catalog, "claim-validity-catalog")
-    assert (
-        vault / "generated" / "ops" / "bitemporal" / "pilot-validity-catalog.json"
-    ).is_file()
+    assert (vault / "generated" / "ops" / "bitemporal" / "pilot-validity-catalog.json").is_file()
 
 
 def test_as_of_selects_single_window() -> None:
@@ -91,9 +89,7 @@ def test_rejects_wall_clock_and_inverted() -> None:
     with pytest.raises(BitemporalError, match="wall-clock"):
         normalize_validity_window(_window("claim.a", "now"))
     with pytest.raises(BitemporalError, match="inverted"):
-        normalize_validity_window(
-            _window("claim.a", "2024-06-01", valid_to="2024-01-01")
-        )
+        normalize_validity_window(_window("claim.a", "2024-06-01", valid_to="2024-01-01"))
 
 
 def test_temporal_docs_and_schemas() -> None:

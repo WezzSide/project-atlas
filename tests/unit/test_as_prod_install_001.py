@@ -116,10 +116,9 @@ def test_as_prod_install_001_cors_matches_webport_contract() -> None:
     """PROD-ADV-011: launcher must set ATLAS_CORS_ORIGIN from -WebPort and verify meta."""
     text = (_SCRIPTS / "atlas-start.ps1").read_text(encoding="utf-8")
     assert (
-        "ATLAS_CORS_ORIGIN = $corsOrigin" in text
-        or "$env:ATLAS_CORS_ORIGIN = $corsOrigin" in text
+        "ATLAS_CORS_ORIGIN = $corsOrigin" in text or "$env:ATLAS_CORS_ORIGIN = $corsOrigin" in text
     )
-    assert 'http://127.0.0.1:$WebPort' in text
+    assert "http://127.0.0.1:$WebPort" in text
     assert "cors_origin_mismatch" in text
     assert "PROD-ADV-011" in text
     # Must not pin CORS solely to literal 5173 after WebPort is known.
@@ -219,9 +218,7 @@ def test_as_prod_install_001_docs_include_adv_findings_when_present() -> None:
 
 
 def test_as_prod_install_001_docs_honesty_and_stranger_tokens() -> None:
-    joined = "\n".join(
-        (_DOCS / name).read_text(encoding="utf-8") for name in _REQUIRED_DOCS
-    )
+    joined = "\n".join((_DOCS / name).read_text(encoding="utf-8") for name in _REQUIRED_DOCS)
     for token in _DOC_TOKENS:
         assert token in joined, f"install docs missing token {token!r}"
     assert "NOT PILOT" in joined or "NOT PILOT PASS" in joined

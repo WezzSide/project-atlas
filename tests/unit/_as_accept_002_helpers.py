@@ -85,9 +85,7 @@ def entries() -> list[dict[str, Any]]:
 def write_json(path: Path, payload: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if isinstance(payload, (dict, list)):
-        path.write_text(
-            json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-        )
+        path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     else:
         path.write_text(str(payload), encoding="utf-8")
 

@@ -19,17 +19,13 @@ from project_atlas.compile_cache import (
 
 _ROOT = Path(__file__).resolve().parents[2]
 _MODULE = _ROOT / "src" / "project_atlas" / "compile_cache.py"
-_SCHEMA = (
-    _ROOT / "src" / "project_atlas" / "schemas" / "compile-cache-receipt.schema.json"
-)
+_SCHEMA = _ROOT / "src" / "project_atlas" / "schemas" / "compile-cache-receipt.schema.json"
 _FP_A = "a" * 64
 _FP_B = "b" * 64
 
 
 def test_ic_adv_001_stale_never_reported_as_hit() -> None:
-    old_key = compute_invalidation_key(
-        scope_id="s1", input_fingerprints={"model": _FP_A}
-    )
+    old_key = compute_invalidation_key(scope_id="s1", input_fingerprints={"model": _FP_A})
     result = evaluate_compile_refresh(
         scope_id="s1",
         input_fingerprints={"model": _FP_B},
@@ -200,9 +196,7 @@ def test_ic_adv_014_rel001_must_not_open() -> None:
     src = _MODULE.read_text(encoding="utf-8")
     assert "release_certified" not in src.lower()
     assert "AS-REL-001" not in src
-    docs = (
-        _ROOT / "docs" / "AS-INCR-COMPILE-001-compile-cache.md"
-    ).read_text(encoding="utf-8")
+    docs = (_ROOT / "docs" / "AS-INCR-COMPILE-001-compile-cache.md").read_text(encoding="utf-8")
     assert "AS-REL-001 MUST NOT OPEN" in docs
 
 

@@ -102,9 +102,11 @@ def test_package_card_non_claims() -> None:
     assert "ATLAS_2_1_RELEASE_CERTIFIED" in text
     assert "**NO**" in text
     assert "ATLAS_2_2_INTELLIGENCE_IMPLEMENTATION_UNLOCKED" in text
-    assert "compat_anchor" in text or "PREP ≠ ANCHOR" in text or "PREP ≠ ANCHOR" in (
-        PREP / "INVARIANTS.md"
-    ).read_text(encoding="utf-8")
+    assert (
+        "compat_anchor" in text
+        or "PREP ≠ ANCHOR" in text
+        or "PREP ≠ ANCHOR" in (PREP / "INVARIANTS.md").read_text(encoding="utf-8")
+    )
 
 
 def test_invariants_document_fail_closed_walls() -> None:

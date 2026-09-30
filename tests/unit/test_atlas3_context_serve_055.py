@@ -128,9 +128,7 @@ def test_cli_serve_flag(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> N
 
 def test_module_does_not_touch_certified_surfaces() -> None:
     root = Path(__file__).resolve().parents[2]
-    source = (root / "src/project_atlas/atlas3/memory/context_serve.py").read_text(
-        encoding="utf-8"
-    )
+    source = (root / "src/project_atlas/atlas3/memory/context_serve.py").read_text(encoding="utf-8")
     for name in (
         "from project_atlas.runtime_22",
         "from project_atlas.chatgpt_bridge",

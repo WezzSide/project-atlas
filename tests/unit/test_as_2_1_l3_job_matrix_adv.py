@@ -22,9 +22,7 @@ from project_atlas.scheduler_live import arm_scheduler
 
 
 def _op():
-    return elevated_operator(
-        "l3-adv-op", extra={"autonomy.l3", "scheduler.dispatch"}
-    )
+    return elevated_operator("l3-adv-op", extra={"autonomy.l3", "scheduler.dispatch"})
 
 
 def _armed_policy(
@@ -65,9 +63,7 @@ def test_adv_scope_expansion_tampered_max_jobs(tmp_path: Path) -> None:
     _armed_policy(vault, max_jobs=2)
     _rewrite_policy(vault, max_jobs_per_arm=99)
     with pytest.raises(AutonomyL3Error, match="scope-expansion:max-jobs"):
-        run_bounded_l3_loop(
-            vault, policy_id="pol-adv", jobs=["version"], operator=_op()
-        )
+        run_bounded_l3_loop(vault, policy_id="pol-adv", jobs=["version"], operator=_op())
 
 
 def test_adv_scope_expansion_tampered_allowed_jobs(tmp_path: Path) -> None:
@@ -79,9 +75,7 @@ def test_adv_scope_expansion_tampered_allowed_jobs(tmp_path: Path) -> None:
         allowed_jobs=["validate", "build-indexes", "version", "ingest"],
     )
     with pytest.raises(AutonomyL3Error, match="scope-expansion:ingest"):
-        run_bounded_l3_loop(
-            vault, policy_id="pol-adv", jobs=["version"], operator=_op()
-        )
+        run_bounded_l3_loop(vault, policy_id="pol-adv", jobs=["version"], operator=_op())
 
 
 def test_adv_scope_expansion_l4_l5_forbidden(tmp_path: Path) -> None:
@@ -100,9 +94,7 @@ def test_adv_scope_expansion_l4_l5_forbidden(tmp_path: Path) -> None:
         },
     )
     with pytest.raises(AutonomyL3Error, match="l4-l5-forbidden"):
-        run_bounded_l3_loop(
-            vault, policy_id="pol-adv", jobs=["version"], operator=_op()
-        )
+        run_bounded_l3_loop(vault, policy_id="pol-adv", jobs=["version"], operator=_op())
     _rewrite_policy(
         vault,
         level=5,
@@ -116,9 +108,7 @@ def test_adv_scope_expansion_l4_l5_forbidden(tmp_path: Path) -> None:
         },
     )
     with pytest.raises(AutonomyL3Error, match="l4-l5-forbidden"):
-        run_bounded_l3_loop(
-            vault, policy_id="pol-adv", jobs=["version"], operator=_op()
-        )
+        run_bounded_l3_loop(vault, policy_id="pol-adv", jobs=["version"], operator=_op())
 
 
 def test_adv_arm_overlap_second_policy_denied(tmp_path: Path) -> None:
@@ -126,13 +116,9 @@ def test_adv_arm_overlap_second_policy_denied(tmp_path: Path) -> None:
     vault.mkdir()
     arm_scheduler(vault, arm_id="arm-shared")
     op = _op()
-    enable_bounded_l3(
-        vault, policy_id="pol-a", arm_id="arm-shared", operator=op
-    )
+    enable_bounded_l3(vault, policy_id="pol-a", arm_id="arm-shared", operator=op)
     with pytest.raises(AutonomyL3Error, match="arm-overlap"):
-        enable_bounded_l3(
-            vault, policy_id="pol-b", arm_id="arm-shared", operator=op
-        )
+        enable_bounded_l3(vault, policy_id="pol-b", arm_id="arm-shared", operator=op)
 
 
 def test_adv_destructive_jobs_denied(tmp_path: Path) -> None:
@@ -141,9 +127,7 @@ def test_adv_destructive_jobs_denied(tmp_path: Path) -> None:
     _armed_policy(vault)
     for job in ("ingest", "discover", "init", "promote", "migrate", "sync"):
         with pytest.raises(AutonomyL3Error, match=f"job-forbidden:{job}"):
-            run_bounded_l3_loop(
-                vault, policy_id="pol-adv", jobs=[job], operator=_op()
-            )
+            run_bounded_l3_loop(vault, policy_id="pol-adv", jobs=[job], operator=_op())
 
 
 def test_adv_stale_context_disarmed_arm(tmp_path: Path) -> None:
@@ -159,9 +143,7 @@ def test_adv_stale_context_disarmed_arm(tmp_path: Path) -> None:
         newline="\n",
     )
     with pytest.raises(AutonomyL3Error, match="stale-context"):
-        run_bounded_l3_loop(
-            vault, policy_id="pol-adv", jobs=["version"], operator=_op()
-        )
+        run_bounded_l3_loop(vault, policy_id="pol-adv", jobs=["version"], operator=_op())
 
 
 def test_adv_receipt_mismatch_package_and_arm(tmp_path: Path) -> None:
@@ -170,9 +152,7 @@ def test_adv_receipt_mismatch_package_and_arm(tmp_path: Path) -> None:
     _armed_policy(vault, arm_id="arm-rx")
     _rewrite_policy(vault, package_id="AS-EVIL-PACKAGE")
     with pytest.raises(AutonomyL3Error, match="receipt-mismatch:package"):
-        run_bounded_l3_loop(
-            vault, policy_id="pol-adv", jobs=["version"], operator=_op()
-        )
+        run_bounded_l3_loop(vault, policy_id="pol-adv", jobs=["version"], operator=_op())
     _rewrite_policy(
         vault,
         package_id="AS-2.1-AUTONOMY-L3-001",
@@ -187,9 +167,7 @@ def test_adv_receipt_mismatch_package_and_arm(tmp_path: Path) -> None:
         newline="\n",
     )
     with pytest.raises(AutonomyL3Error, match="receipt-mismatch:arm-receipt"):
-        run_bounded_l3_loop(
-            vault, policy_id="pol-adv", jobs=["version"], operator=_op()
-        )
+        run_bounded_l3_loop(vault, policy_id="pol-adv", jobs=["version"], operator=_op())
 
 
 def test_adv_duplicate_dispatch_denied(tmp_path: Path) -> None:
@@ -209,9 +187,7 @@ def test_adv_happy_path_keeps_l4_l5_disabled(tmp_path: Path) -> None:
     vault = tmp_path / "v"
     vault.mkdir()
     _armed_policy(vault)
-    report = run_bounded_l3_loop(
-        vault, policy_id="pol-adv", jobs=["version"], operator=_op()
-    )
+    report = run_bounded_l3_loop(vault, policy_id="pol-adv", jobs=["version"], operator=_op())
     assert report["promoted"] is False
     assert report["vault_write_enabled"] is False
     assert report["levels_enabled"]["4"] is False

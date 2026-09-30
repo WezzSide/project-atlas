@@ -76,9 +76,7 @@ def _item(**kwargs: object) -> ReadyWorkItem:
 
 
 def _plant_route(tmp_path: Path, *, head: str = HEAD, generation: int = GEN) -> None:
-    update_package_route_on_head_move(
-        tmp_path, head=head, tree=TREE, dag_generation=generation
-    )
+    update_package_route_on_head_move(tmp_path, head=head, tree=TREE, dag_generation=generation)
 
 
 def test_l_a_mutating_without_lease_never_calls_backend(tmp_path: Path) -> None:

@@ -45,16 +45,12 @@ def test_import_messages_fixture(tmp_path: Path) -> None:
         + "\n",
         encoding="utf-8",
     )
-    envelopes = import_codex_export(
-        path, conversation_id="c-codex", project_id="harbor-api"
-    )
+    envelopes = import_codex_export(path, conversation_id="c-codex", project_id="harbor-api")
     assert len(envelopes) == 2
     assert envelopes[0]["provider"] == "codex"
     assert envelopes[0]["import_mode"] == "STRUCTURED_SUBMISSION"
     assert envelopes[0]["project_id"] == "harbor-api"
-    items = codex_export_to_items(
-        path, conversation_id="c-codex", project_id="harbor-api"
-    )
+    items = codex_export_to_items(path, conversation_id="c-codex", project_id="harbor-api")
     assert items
     assert all(item.get("promoted_to_truth_core") is not True for item in items)
 

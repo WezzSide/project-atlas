@@ -113,9 +113,7 @@ def test_as_int_009_dry_run_does_not_delete(tmp_path: Path) -> None:
     vault.mkdir()
     for event in ("AE-001", "AE-002", "AE-003"):
         _write_unit(vault, "proj-a", event)
-    report = apply_event_retention(
-        vault, max_packages=1, max_bytes=10_000_000, dry_run=True
-    )
+    report = apply_event_retention(vault, max_packages=1, max_bytes=10_000_000, dry_run=True)
     assert report["status"] == "dry-run"
     assert report["applied"] is False
     assert report["counts"]["units_removed"] == 2
@@ -214,12 +212,8 @@ def test_as_int_009_deterministic_report_bytes(tmp_path: Path) -> None:
     vault.mkdir()
     for event in ("AE-001", "AE-002", "AE-003"):
         _write_unit(vault, "proj-a", event)
-    first = apply_event_retention(
-        vault, max_packages=2, max_bytes=10_000_000, dry_run=True
-    )
-    second = apply_event_retention(
-        vault, max_packages=2, max_bytes=10_000_000, dry_run=True
-    )
+    first = apply_event_retention(vault, max_packages=2, max_bytes=10_000_000, dry_run=True)
+    second = apply_event_retention(vault, max_packages=2, max_bytes=10_000_000, dry_run=True)
     assert first == second
     raw = (vault / "generated" / "ops" / "retention-report.json").read_bytes()
     assert raw == (json.dumps(first, indent=2, sort_keys=True) + "\n").encode("utf-8")

@@ -108,9 +108,7 @@ def test_xp4_fx_001_version_conflict_and_index_rebuild(tmp_path: Path) -> None:
     kinds = {item.kind for item in first.conflicts}
     assert "version-divergence" in kinds
 
-    version_report = next(
-        item for item in first.conflicts if item.kind == "version-divergence"
-    )
+    version_report = next(item for item in first.conflicts if item.kind == "version-divergence")
     payload = version_report.as_dict()
     assert payload["authority"]["level"] == "derived"
     assert payload["truth_boundary"] == TRUTH_BOUNDARY
@@ -139,8 +137,7 @@ def test_xp4_fx_001_version_conflict_and_index_rebuild(tmp_path: Path) -> None:
     claims_dir.mkdir(parents=True)
     claim_path = claims_dir / "claims.json"
     claim_bytes = (
-        b'{"claims":[{"claim_id":"clm-stable","subject":"c1",'
-        b'"field":"status","value":"active"}]}\n'
+        b'{"claims":[{"claim_id":"clm-stable","subject":"c1","field":"status","value":"active"}]}\n'
     )
     claim_path.write_bytes(claim_bytes)
     before_mtime = claim_path.stat().st_mtime_ns
@@ -164,13 +161,12 @@ def test_xp4_fx_002_explicit_conflicts_with_edge() -> None:
     )
     kinds = {item.kind for item in result.conflicts}
     assert "explicit-conflicts-with" in kinds
-    explicit = next(
-        item for item in result.conflicts if item.kind == "explicit-conflicts-with"
-    )
+    explicit = next(item for item in result.conflicts if item.kind == "explicit-conflicts-with")
     assert "xe-conflict-sharedlib" in explicit.edge_ids
-    assert "winning_choice" not in explicit.as_dict() or explicit.as_dict()[
-        "resolution"
-    ]["winning_choice"] is None
+    assert (
+        "winning_choice" not in explicit.as_dict()
+        or explicit.as_dict()["resolution"]["winning_choice"] is None
+    )
     validate_record(explicit.as_dict(), "xproj-conflict-report")
 
     relationships = next(doc for doc in result.indexes if doc.bucket == "relationships")
@@ -259,9 +255,7 @@ def test_xp4_adv_path_escape_and_forbidden_prefixes() -> None:
     with pytest.raises(XprojIndexError, match="write-prefix-forbidden"):
         promote_xproj_index_path_forbidden("generated/graph/projections/x.md")
     with pytest.raises(XprojIndexError, match="write-prefix-forbidden"):
-        promote_xproj_index_path_forbidden(
-            "generated/xproj/duplicate-candidates/dup.json"
-        )
+        promote_xproj_index_path_forbidden("generated/xproj/duplicate-candidates/dup.json")
     with pytest.raises(XprojIndexError, match="write-prefix-forbidden"):
         promote_xproj_index_path_forbidden("claims/claims.json")
     # Owned path accepted by policy helper

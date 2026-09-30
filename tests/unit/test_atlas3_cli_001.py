@@ -59,9 +59,12 @@ def test_help_lists_atlas3_and_keeps_core() -> None:
 def test_pulse_and_start_and_proof_and_memory(tmp_path: Path, capsys: object) -> None:
     vault = _vault(tmp_path)
     assert main(["pulse", "--vault", str(vault), "--project", "harbor-api", "--json"]) == EXIT_OK
-    assert main(
-        ["start", "--vault", str(vault), "--project", "harbor-api", "--budget", "64", "--json"]
-    ) == EXIT_OK
+    assert (
+        main(
+            ["start", "--vault", str(vault), "--project", "harbor-api", "--budget", "64", "--json"]
+        )
+        == EXIT_OK
+    )
     assert (
         main(
             [

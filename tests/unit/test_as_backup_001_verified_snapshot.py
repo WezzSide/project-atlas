@@ -190,11 +190,7 @@ def test_digest_mismatch_fail_closed(tmp_path: Path) -> None:
     vault = _fixture_vault(tmp_path)
     bundle = tmp_path / "bundle"
     create_snapshot(vault, bundle)
-    member = next(
-        p
-        for p in (bundle / "domains" / "d2-vault").rglob("*.md")
-        if p.is_file()
-    )
+    member = next(p for p in (bundle / "domains" / "d2-vault").rglob("*.md") if p.is_file())
     member.write_bytes(member.read_bytes() + b"\n# tamper\n")
     with pytest.raises(BackupError, match="digest mismatch"):
         verify_bundle(bundle)

@@ -130,9 +130,7 @@ def test_symlink_catalog_fails_closed(tmp_path: Path) -> None:
 
 def test_module_does_not_write_or_materialize() -> None:
     root = Path(__file__).resolve().parents[2]
-    source = (root / "src/project_atlas/web_api/bitemporal_read.py").read_text(
-        encoding="utf-8"
-    )
+    source = (root / "src/project_atlas/web_api/bitemporal_read.py").read_text(encoding="utf-8")
     for name in (
         "from project_atlas.bitemporal",
         "from project_atlas.bitemporal_catalog",

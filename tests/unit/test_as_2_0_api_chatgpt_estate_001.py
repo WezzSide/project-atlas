@@ -48,9 +48,7 @@ def test_chatgpt_reject_live(tmp_path: Path) -> None:
     vault = tmp_path / "v"
     vault.mkdir()
     with pytest.raises(ChatgptCaptureError, match="live-api-forbidden"):
-        build_chatgpt_capture_receipt(
-            vault, record_id="cap-1", enable_live_api=True
-        )
+        build_chatgpt_capture_receipt(vault, record_id="cap-1", enable_live_api=True)
 
 
 def test_estate(tmp_path: Path) -> None:
@@ -66,9 +64,7 @@ def test_estate_reject_pilot_claim(tmp_path: Path) -> None:
     vault = tmp_path / "v"
     vault.mkdir()
     with pytest.raises(EstateIntelFixtureError, match="pilot-pass-forbidden"):
-        build_estate_intel_fixture(
-            vault, record_id="est-1", claim_pilot_passed=True
-        )
+        build_estate_intel_fixture(vault, record_id="est-1", claim_pilot_passed=True)
 
 
 def test_docs() -> None:

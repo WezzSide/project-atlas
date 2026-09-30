@@ -22,8 +22,7 @@ def _write_manifest(vault: Path, sources: list[dict[str, object]]) -> None:
     path = vault / "sources" / "manifests" / "source-manifest.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        json.dumps({"schema_version": 1, "sources": sources}, indent=2, sort_keys=True)
-        + "\n",
+        json.dumps({"schema_version": 1, "sources": sources}, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
 
@@ -224,9 +223,7 @@ def test_future_tolerance_boundary(tmp_path: Path) -> None:
 
 def test_timestamp_equal_to_reference_is_fresh(tmp_path: Path) -> None:
     """The reference instant itself is age zero, not a future stamp."""
-    assert _freshness(tmp_path / "vault", [_source("src-now", REFERENCE)]) == {
-        "src-now": "fresh"
-    }
+    assert _freshness(tmp_path / "vault", [_source("src-now", REFERENCE)]) == {"src-now": "fresh"}
 
 
 def test_normal_fresh_and_stale_are_unchanged(tmp_path: Path) -> None:

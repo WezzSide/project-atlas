@@ -200,9 +200,7 @@ def test_cloud_attr_escape_rejects_before_terminal(tmp_path: Path) -> None:
         _provider(heads={BRANCH: H1}, diffs={(PIN, H1): ["docs/evil.md"]})
     )
     backend.runs_reg.upsert(_run("run-escape"))
-    backend._handles["run:run-escape"] = _GitWaitHandle(
-        repo=CANONICAL_REPO_URL, branches=[BRANCH]
-    )
+    backend._handles["run:run-escape"] = _GitWaitHandle(repo=CANONICAL_REPO_URL, branches=[BRANCH])
     with pytest.raises(SdkRuntimeError) as exc:
         asyncio.run(backend.wait_run("run-escape", agent_id=AGENT))
     assert exc.value.code == "REJECTED_SCOPE_ESCAPE"
@@ -234,9 +232,7 @@ def test_cloud_attr_local_decoy_ignored(tmp_path: Path) -> None:
         _provider(heads={BRANCH: H1}, diffs={(PIN, H1): ["docs/evil.md"]})
     )
     backend.runs_reg.upsert(_run("run-decoy"))
-    backend._handles["run:run-decoy"] = _GitWaitHandle(
-        repo=CANONICAL_REPO_URL, branches=[BRANCH]
-    )
+    backend._handles["run:run-decoy"] = _GitWaitHandle(repo=CANONICAL_REPO_URL, branches=[BRANCH])
     with pytest.raises(SdkRuntimeError) as exc:
         asyncio.run(backend.wait_run("run-decoy", agent_id=AGENT))
     assert exc.value.code == "REJECTED_SCOPE_ESCAPE"
@@ -262,9 +258,7 @@ def test_cloud_attr_followup_chains_baselines(tmp_path: Path) -> None:
         )
     )
     backend.runs_reg.upsert(_run("run-1"))
-    backend._handles["run:run-1"] = _GitWaitHandle(
-        repo=CANONICAL_REPO_URL, branches=[BRANCH]
-    )
+    backend._handles["run:run-1"] = _GitWaitHandle(repo=CANONICAL_REPO_URL, branches=[BRANCH])
     asyncio.run(backend.wait_run("run-1", agent_id=AGENT))
     assert load_agent_remote_high_water(tmp_path, AGENT) == H1
 
@@ -293,9 +287,7 @@ def test_cloud_attr_followup_chains_baselines(tmp_path: Path) -> None:
         )
     )
     backend.runs_reg.upsert(_run("run-2"))
-    backend._handles["run:run-2"] = _GitWaitHandle(
-        repo=CANONICAL_REPO_URL, branches=[BRANCH]
-    )
+    backend._handles["run:run-2"] = _GitWaitHandle(repo=CANONICAL_REPO_URL, branches=[BRANCH])
     asyncio.run(backend.wait_run("run-2", agent_id=AGENT))
     assert seen["pre"] == H1
     assert seen["post"] == H2
@@ -409,9 +401,7 @@ def test_cloud_attr_divergence_fail_closed(tmp_path: Path) -> None:
         )
     )
     backend.runs_reg.upsert(_run("run-div"))
-    backend._handles["run:run-div"] = _GitWaitHandle(
-        repo=CANONICAL_REPO_URL, branches=[BRANCH]
-    )
+    backend._handles["run:run-div"] = _GitWaitHandle(repo=CANONICAL_REPO_URL, branches=[BRANCH])
     with pytest.raises(SdkRuntimeError) as exc:
         asyncio.run(backend.wait_run("run-div", agent_id=AGENT))
     assert exc.value.code == "REMOTE_ATTRIBUTION_UNDETERMINED"
@@ -442,9 +432,7 @@ def test_cloud_attr_rename_delete_included(tmp_path: Path) -> None:
         )
     )
     backend.runs_reg.upsert(_run("run-rename"))
-    backend._handles["run:run-rename"] = _GitWaitHandle(
-        repo=CANONICAL_REPO_URL, branches=[BRANCH]
-    )
+    backend._handles["run:run-rename"] = _GitWaitHandle(repo=CANONICAL_REPO_URL, branches=[BRANCH])
     updated = asyncio.run(backend.wait_run("run-rename", agent_id=AGENT))
     assert updated.status == RunStatus.FINISHED
 
@@ -602,9 +590,7 @@ def test_branch_switch_fail_closed(tmp_path: Path) -> None:
         _provider(heads={BRANCH: H1, "other": H1}, diffs={(PIN, H1): []})
     )
     backend.runs_reg.upsert(_run("run-switch"))
-    backend._handles["run:run-switch"] = _GitWaitHandle(
-        repo=CANONICAL_REPO_URL, branches=["other"]
-    )
+    backend._handles["run:run-switch"] = _GitWaitHandle(repo=CANONICAL_REPO_URL, branches=["other"])
     with pytest.raises(SdkRuntimeError) as exc:
         asyncio.run(backend.wait_run("run-switch", agent_id=AGENT))
     assert exc.value.code == "REMOTE_ATTRIBUTION_UNDETERMINED"
@@ -618,9 +604,7 @@ def test_missing_baseline_fail_closed(tmp_path: Path) -> None:
         _provider(heads={BRANCH: H1}, diffs={(PIN, H1): []})
     )
     backend.runs_reg.upsert(_run("run-nobase"))
-    backend._handles["run:run-nobase"] = _GitWaitHandle(
-        repo=CANONICAL_REPO_URL, branches=[BRANCH]
-    )
+    backend._handles["run:run-nobase"] = _GitWaitHandle(repo=CANONICAL_REPO_URL, branches=[BRANCH])
     with pytest.raises(SdkRuntimeError) as exc:
         asyncio.run(backend.wait_run("run-nobase", agent_id=AGENT))
     assert exc.value.code == "REMOTE_ATTRIBUTION_UNDETERMINED"
@@ -657,9 +641,7 @@ def test_rename_outside_lease_rejected(tmp_path: Path) -> None:
         )
     )
     backend.runs_reg.upsert(_run("run-ren-out"))
-    backend._handles["run:run-ren-out"] = _GitWaitHandle(
-        repo=CANONICAL_REPO_URL, branches=[BRANCH]
-    )
+    backend._handles["run:run-ren-out"] = _GitWaitHandle(repo=CANONICAL_REPO_URL, branches=[BRANCH])
     with pytest.raises(SdkRuntimeError) as exc:
         asyncio.run(backend.wait_run("run-ren-out", agent_id=AGENT))
     assert exc.value.code == "REJECTED_SCOPE_ESCAPE"
@@ -686,9 +668,7 @@ def test_delete_outside_lease_rejected(tmp_path: Path) -> None:
         )
     )
     backend.runs_reg.upsert(_run("run-del-out"))
-    backend._handles["run:run-del-out"] = _GitWaitHandle(
-        repo=CANONICAL_REPO_URL, branches=[BRANCH]
-    )
+    backend._handles["run:run-del-out"] = _GitWaitHandle(repo=CANONICAL_REPO_URL, branches=[BRANCH])
     with pytest.raises(SdkRuntimeError) as exc:
         asyncio.run(backend.wait_run("run-del-out", agent_id=AGENT))
     assert exc.value.code == "REJECTED_SCOPE_ESCAPE"
@@ -756,18 +736,14 @@ def test_run_scoped_sha_preferred_over_branch_tip(tmp_path: Path) -> None:
     cloud = CloudRemoteGitAttributionProvider(
         resolve_remote_head=resolve_head,
         resolve_remote_diff=lambda _r, pre, post: (
-            ["src/project_atlas/orchestration/sdk/x.py"]
-            if (pre, post) == (PIN, H1)
-            else None
+            ["src/project_atlas/orchestration/sdk/x.py"] if (pre, post) == (PIN, H1) else None
         ),
     )
     paths = collect_run_changed_paths(
         tmp_path,
         runtime=AgentRuntime.CLOUD,
         attribution=baseline,
-        terminal_git=RunGitInfo(
-            repo_url=CANONICAL_REPO_URL, branches=(BRANCH,), head_sha=H1
-        ),
+        terminal_git=RunGitInfo(repo_url=CANONICAL_REPO_URL, branches=(BRANCH,), head_sha=H1),
         local_pre_head=None,
         cloud_provider=cloud,
     )
@@ -795,9 +771,7 @@ def test_branch_tip_used_when_run_scoped_sha_absent(tmp_path: Path) -> None:
     )
     cloud = CloudRemoteGitAttributionProvider(
         resolve_remote_head=lambda _r, _b: H1,
-        resolve_remote_diff=lambda _r, _pre, _post: [
-            "src/project_atlas/orchestration/sdk/x.py"
-        ],
+        resolve_remote_diff=lambda _r, _pre, _post: ["src/project_atlas/orchestration/sdk/x.py"],
     )
     paths = collect_run_changed_paths(
         tmp_path,
@@ -939,9 +913,7 @@ def test_recovery_preserves_nonterminal_on_wait_exception(tmp_path: Path) -> Non
 
         async def wait_run(self, run_id: str, *, agent_id: str) -> RunRecord:
             del run_id, agent_id
-            raise SdkRuntimeError(
-                "attribution failed", code="REMOTE_ATTRIBUTION_UNDETERMINED"
-            )
+            raise SdkRuntimeError("attribution failed", code="REMOTE_ATTRIBUTION_UNDETERMINED")
 
     report = asyncio.run(
         recover_runtime(
@@ -975,9 +947,7 @@ def test_hw_only_after_successful_enforce(tmp_path: Path) -> None:
         _provider(heads={BRANCH: H1}, diffs={(PIN, H1): ["docs/evil.md"]})
     )
     backend.runs_reg.upsert(_run("run-hw-gap"))
-    backend._handles["run:run-hw-gap"] = _GitWaitHandle(
-        repo=CANONICAL_REPO_URL, branches=[BRANCH]
-    )
+    backend._handles["run:run-hw-gap"] = _GitWaitHandle(repo=CANONICAL_REPO_URL, branches=[BRANCH])
     with pytest.raises(SdkRuntimeError):
         asyncio.run(backend.wait_run("run-hw-gap", agent_id=AGENT))
     assert load_agent_remote_high_water(tmp_path, AGENT) is None
@@ -999,9 +969,7 @@ def test_extract_run_git_reads_branch_repo_url() -> None:
     )
     info = extract_run_git(result)
     assert info is not None
-    assert normalize_repo_identity(info.repo_url) == normalize_repo_identity(
-        CANONICAL_REPO_URL
-    )
+    assert normalize_repo_identity(info.repo_url) == normalize_repo_identity(CANONICAL_REPO_URL)
     assert BRANCH in info.branches
     assert info.head_sha == H1
 
@@ -1024,9 +992,7 @@ def test_escape_leaves_status_running_ordering(tmp_path: Path) -> None:
         _provider(heads={BRANCH: H1}, diffs={(PIN, H1): ["secrets/key.pem"]})
     )
     backend.runs_reg.upsert(_run("run-order"))
-    backend._handles["run:run-order"] = _GitWaitHandle(
-        repo=CANONICAL_REPO_URL, branches=[BRANCH]
-    )
+    backend._handles["run:run-order"] = _GitWaitHandle(repo=CANONICAL_REPO_URL, branches=[BRANCH])
     with pytest.raises(SdkRuntimeError) as exc:
         asyncio.run(backend.wait_run("run-order", agent_id=AGENT))
     assert exc.value.code == "REJECTED_SCOPE_ESCAPE"

@@ -68,8 +68,7 @@ def test_second_connect_reports_added_and_modified(tmp_path: Path) -> None:
     assert any(row["answer_id"] == f"ans-changed-{project_id}" for row in rows)
     live = ask_atlas_live(vault, query="What changed?")
     assert any(
-        row.get("answer_id") == f"ans-changed-{project_id}"
-        for row in live["matches"]["knowledge"]
+        row.get("answer_id") == f"ans-changed-{project_id}" for row in live["matches"]["knowledge"]
     )
 
 
@@ -107,9 +106,7 @@ def test_second_connect_reports_removed_and_self_churn_not_dominating(
     assert not any(
         path.startswith(".atlas-vault/")
         for path in (
-            payload["delta"]["added"]
-            + payload["delta"]["removed"]
-            + payload["delta"]["modified"]
+            payload["delta"]["added"] + payload["delta"]["removed"] + payload["delta"]["modified"]
         )
     )
 
@@ -119,10 +116,7 @@ def test_cli_changed_reads_existing_inventory(tmp_path: Path) -> None:
     connected = connect_project(project)
     vault = Path(connected["vault"])
     project_id = str(connected["bound_project_id"])
-    assert (
-        main(["changed", "--vault", str(vault), "--project", project_id, "--json"])
-        == EXIT_OK
-    )
+    assert main(["changed", "--vault", str(vault), "--project", project_id, "--json"]) == EXIT_OK
     report = materialize_changed_lenses(vault, project_ids=[project_id])
     assert report["package"] == "AS-CODER-ALPHA-CHANGED-001"
     assert "generated_at" not in report

@@ -142,11 +142,14 @@ def test_ic_fr_010_ambiguous_invalidation_fail_closed() -> None:
     with pytest.raises(CompileCacheError) as exc:
         compute_invalidation_key(scope_id="s1", input_fingerprints={})
     assert exc.value.code == "ambiguous_invalidation"
-    assert decide_cache_action(
-        recomputed_key="not-a-hash",
-        recorded_key=_FP_A,
-        artifact_present=True,
-    ) == "ambiguous"
+    assert (
+        decide_cache_action(
+            recomputed_key="not-a-hash",
+            recorded_key=_FP_A,
+            artifact_present=True,
+        )
+        == "ambiguous"
+    )
     with pytest.raises(CompileCacheError):
         evaluate_compile_refresh(
             scope_id="s1",

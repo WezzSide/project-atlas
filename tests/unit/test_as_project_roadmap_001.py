@@ -282,9 +282,7 @@ def test_unknown_prerequisite_blocks_unlock(tmp_path: Path) -> None:
 
 
 def test_checked_in_harbor_slice_fixture() -> None:
-    fixture = (
-        Path(__file__).resolve().parents[1] / "fixtures" / "roadmap" / "v1" / "harbor-slice"
-    )
+    fixture = Path(__file__).resolve().parents[1] / "fixtures" / "roadmap" / "v1" / "harbor-slice"
     lens = build_roadmap_lens(fixture, "harbor-slice")
     validate_record(lens, "project-roadmap")
     assert lens["you_are_here"]["item_id"] == "pkg-roadmap"

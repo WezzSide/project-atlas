@@ -34,9 +34,7 @@ def test_federation_join_inventory_happy_path(tmp_path: Path) -> None:
     assert report["status"] == "joined"
     assert report["compat_snapshot_id"] == "atlas-1.0.0-compat"
     validate_record(report, "federation-join-inventory")
-    assert (
-        out / "generated" / "federation" / "estate-alpha-join-inventory.json"
-    ).is_file()
+    assert (out / "generated" / "federation" / "estate-alpha-join-inventory.json").is_file()
 
 
 def test_federation_refuses_missing_primary(tmp_path: Path) -> None:

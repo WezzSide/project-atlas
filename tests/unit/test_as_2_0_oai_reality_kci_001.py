@@ -33,9 +33,7 @@ def test_oai_no_export(tmp_path: Path) -> None:
 def test_oai_with_export(tmp_path: Path) -> None:
     vault = tmp_path / "v"
     vault.mkdir()
-    report = build_openai_import_path_receipt(
-        vault, record_id="path-b", export_present=True
-    )
+    report = build_openai_import_path_receipt(vault, record_id="path-b", export_present=True)
     assert report["status"] == "ready-fixture"
     validate_record(report, "openai-import-path-receipt")
 
@@ -44,9 +42,7 @@ def test_oai_rejects_live(tmp_path: Path) -> None:
     vault = tmp_path / "v"
     vault.mkdir()
     with pytest.raises(OpenaiImportPathError, match="live-api-forbidden"):
-        build_openai_import_path_receipt(
-            vault, record_id="path-a", enable_live_api=True
-        )
+        build_openai_import_path_receipt(vault, record_id="path-a", enable_live_api=True)
 
 
 def test_reality_gap_ui(tmp_path: Path) -> None:
@@ -61,9 +57,7 @@ def test_reality_gap_ui_rejects_writes(tmp_path: Path) -> None:
     vault = tmp_path / "v"
     vault.mkdir()
     with pytest.raises(RealityGapUiError, match="canonical-writes-forbidden"):
-        build_reality_gap_ui_catalog(
-            vault, record_id="rg-ui", allow_canonical_writes=True
-        )
+        build_reality_gap_ui_catalog(vault, record_id="rg-ui", allow_canonical_writes=True)
 
 
 def test_kci_harness(tmp_path: Path) -> None:
@@ -78,9 +72,7 @@ def test_kci_harness_rejects_promote(tmp_path: Path) -> None:
     vault = tmp_path / "v"
     vault.mkdir()
     with pytest.raises(KnowledgeCiHarnessError, match="authority-promote-forbidden"):
-        build_knowledge_ci_harness(
-            vault, record_id="harness-a", promote_authority=True
-        )
+        build_knowledge_ci_harness(vault, record_id="harness-a", promote_authority=True)
 
 
 def test_docs() -> None:

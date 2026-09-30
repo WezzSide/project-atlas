@@ -153,10 +153,7 @@ def test_c8_adv010_knowledge_compiler_hooks_are_minimal() -> None:
     tree = ast.parse(compiler)
     imported_helpers: set[str] = set()
     for node in ast.walk(tree):
-        if (
-            isinstance(node, ast.ImportFrom)
-            and node.module == "project_atlas.conflict_projections"
-        ):
+        if isinstance(node, ast.ImportFrom) and node.module == "project_atlas.conflict_projections":
             imported_helpers.update(alias.name for alias in node.names)
     assert "conflict_review_reason" in imported_helpers
     assert "conflict_markdown_line" in imported_helpers

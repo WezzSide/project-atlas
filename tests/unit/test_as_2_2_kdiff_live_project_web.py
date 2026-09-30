@@ -23,7 +23,7 @@ def test_hook_scopes_and_encodes_project() -> None:
     assert "/v1/conflicts?project=${project}" in text
     assert "/v1/kdiff?project=${project}&as_of=" in text
     assert "/v1/kdiff?project=${project}&from=" in text
-    assert "method: \"POST\"" not in text
+    assert 'method: "POST"' not in text
     assert "method: 'POST'" not in text
 
 
@@ -37,9 +37,9 @@ def test_hook_does_not_label_live_failure_as_demo_stub() -> None:
 
 def test_page_binds_url_and_does_not_call_empty_error_unknown() -> None:
     text = PAGE.read_text(encoding="utf-8")
-    assert "params.get(\"project\")" in text
-    assert "params.get(\"from\")" in text
-    assert "params.get(\"to\")" in text
+    assert 'params.get("project")' in text
+    assert 'params.get("from")' in text
+    assert 'params.get("to")' in text
     assert "kdiff≠authority" in text
     assert "liveReady" in text
     assert "Unavailable — not an empty conflict catalog." in text

@@ -92,8 +92,7 @@ def test_symlink_escape_not_descended(tmp_path: Path) -> None:
     assert not any("outside-secret" in p for p in project_paths)
     ignored_reasons = {row["reason"] for row in report["categories"]["IGNORED"]}
     assert (
-        "symlink_or_reparse_escape" in ignored_reasons
-        or "symlink_not_descended" in ignored_reasons
+        "symlink_or_reparse_escape" in ignored_reasons or "symlink_not_descended" in ignored_reasons
     )
     assert report["security"]["unsafe_path_escapes_detected"] >= 1
 
@@ -197,9 +196,7 @@ def test_cli_legacy_source_output_still_works(
     assert "discovered" in capsys.readouterr().out.lower()
 
 
-def test_cli_discover_review(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_cli_discover_review(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     estate = tmp_path / "estate"
     proj = estate / "marked"
     _write(
@@ -210,10 +207,7 @@ def test_cli_discover_review(
     (vault / "projects" / "other").mkdir(parents=True)
     # Plant governed allocation receipt so uuid conflicts with a different owner id.
     _write(
-        vault
-        / "receipts"
-        / "source-lineage"
-        / "project-other-allocation.json",
+        vault / "receipts" / "source-lineage" / "project-other-allocation.json",
         json.dumps(
             {
                 "schema_version": 1,
@@ -258,9 +252,7 @@ def test_web_discovery_view_absent_and_present(tmp_path: Path) -> None:
     _write(estate / "package.json", '{"name":"p"}\n')
     (estate / "src").mkdir(parents=True)
     report = discover_estate(tmp_path / "estate", vault=vault)
-    write_discovery_report(
-        report, vault / "generated" / "ops" / "estate-discovery-report.json"
-    )
+    write_discovery_report(report, vault / "generated" / "ops" / "estate-discovery-report.json")
     view = load_estate_discovery_view(vault)
     assert view["present"] is True
     assert view["counts"]["projects"] >= 1
@@ -302,10 +294,7 @@ def test_conflicting_candidate_connect_refused(tmp_path: Path) -> None:
         f"---\nproject_uuid: {uuid}\n---\n",
     )
     _write(
-        vault
-        / "receipts"
-        / "source-lineage"
-        / "project-owner-allocation.json",
+        vault / "receipts" / "source-lineage" / "project-owner-allocation.json",
         json.dumps(
             {
                 "schema_version": 1,
@@ -320,18 +309,12 @@ def test_conflicting_candidate_connect_refused(tmp_path: Path) -> None:
     )
 
     report = discover_estate(estate, vault=vault)
-    conflict = [
-        p
-        for p in report["candidates"]["projects"]
-        if Path(p["path"]).name == "impostor"
-    ]
+    conflict = [p for p in report["candidates"]["projects"] if Path(p["path"]).name == "impostor"]
     assert conflict, "impostor candidate missing"
     assert conflict[0]["match_state"] == "CONFLICTING"
     assert conflict[0]["required_review"] is True
     with pytest.raises(EstateDiscoveryError, match="CONFLICTING"):
-        connect_discovered_candidate(
-            report, conflict[0]["candidate_id"], vault=vault, dry_run=True
-        )
+        connect_discovered_candidate(report, conflict[0]["candidate_id"], vault=vault, dry_run=True)
 
 
 def test_obsidian_connect_refused_without_policy(tmp_path: Path) -> None:
@@ -342,11 +325,7 @@ def test_obsidian_connect_refused_without_policy(tmp_path: Path) -> None:
     _write(estate / "b.md", "b\n")
     _write(estate / "c.md", "c\n")
     report = discover_estate(tmp_path / "estate")
-    obs = [
-        k
-        for k in report["candidates"]["knowledge"]
-        if k.get("kind") == "obsidian_vault"
-    ]
+    obs = [k for k in report["candidates"]["knowledge"] if k.get("kind") == "obsidian_vault"]
     assert obs
     with pytest.raises(EstateDiscoveryError, match="non-project"):
         connect_discovered_candidate(report, obs[0]["candidate_id"], dry_run=True)

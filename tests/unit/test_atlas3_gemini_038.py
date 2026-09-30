@@ -43,16 +43,12 @@ def test_import_messages_fixture(tmp_path: Path) -> None:
         + "\n",
         encoding="utf-8",
     )
-    envelopes = import_gemini_export(
-        path, conversation_id="c-gemini", project_id="harbor-api"
-    )
+    envelopes = import_gemini_export(path, conversation_id="c-gemini", project_id="harbor-api")
     assert len(envelopes) == 2
     assert envelopes[0]["provider"] == "gemini"
     assert envelopes[0]["import_mode"] == "EXPORT"
     assert envelopes[0]["project_id"] == "harbor-api"
-    items = gemini_export_to_items(
-        path, conversation_id="c-gemini", project_id="harbor-api"
-    )
+    items = gemini_export_to_items(path, conversation_id="c-gemini", project_id="harbor-api")
     assert items
     assert all(item.get("promoted_to_truth_core") is not True for item in items)
 

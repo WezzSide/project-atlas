@@ -42,9 +42,7 @@ from project_atlas.orchestration.autonomy.trust import seal_anchor
 
 
 def _git(repo: Path, *args: str) -> str:
-    result = subprocess.run(
-        ["git", *args], cwd=repo, check=True, capture_output=True, text=True
-    )
+    result = subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True)
     return result.stdout.strip()
 
 
@@ -462,10 +460,7 @@ def test_shallow_repo_on_own_dirty_successor_branch_does_not_false_block(
 
     # Must NOT raise -- no ancestry query is ever needed for this ref.
     inventory = collect_live_inventory(clone)
-    assert (
-        "refs/heads/feat/as-orch-001e-my-in-progress-work"
-        in inventory.active_successor_packages
-    )
+    assert "refs/heads/feat/as-orch-001e-my-in-progress-work" in inventory.active_successor_packages
     assert inventory.as_orch_001e_started == "YES"
 
 

@@ -154,9 +154,7 @@ def test_3_and_4_late_strong_projects_survive_noisy_first_subtree(
 ) -> None:
     estate = tmp_path / "estate"
     late = _starvation_estate(estate, copies=80)
-    report = discover_estate(
-        estate, max_project_candidates=8, enumeration_order="name_asc"
-    )
+    report = discover_estate(estate, max_project_candidates=8, enumeration_order="name_asc")
     names = _names(report)
     for name in late:
         assert name in names, name
@@ -170,12 +168,8 @@ def test_3_and_4_late_strong_projects_survive_noisy_first_subtree(
 def test_5_candidate_set_stable_under_reversed_enumeration(tmp_path: Path) -> None:
     estate = tmp_path / "estate"
     late = _starvation_estate(estate, copies=80)
-    first = discover_estate(
-        estate, max_project_candidates=8, enumeration_order="name_asc"
-    )
-    second = discover_estate(
-        estate, max_project_candidates=8, enumeration_order="name_desc"
-    )
+    first = discover_estate(estate, max_project_candidates=8, enumeration_order="name_asc")
+    second = discover_estate(estate, max_project_candidates=8, enumeration_order="name_desc")
     assert set(_paths(first)) == set(_paths(second))
     assert _names(first) == _names(second)
     for name in late:
@@ -187,7 +181,9 @@ def test_6_authorized_volume_root_never_emitted_as_project(
 ) -> None:
     volume = tmp_path / "D"
     (volume / ".git").mkdir(parents=True)
-    _write(volume / ".git" / "config", '[remote "origin"]\n\turl = https://example.invalid/vol.git\n')
+    _write(
+        volume / ".git" / "config", '[remote "origin"]\n\turl = https://example.invalid/vol.git\n'
+    )
     _write(volume / "README.md", "# volume\n")
     _make_proj(volume / "inside")
     _fake_windows_volume(monkeypatch, volume)
@@ -213,9 +209,10 @@ def test_7_root_level_knowledge_not_assigned_to_invented_root(
     knowledge = report["candidates"]["knowledge"]
     assert knowledge
     for row in knowledge:
-        assert row.get("matched_project_id") not in {"", "D", "D:", None} or row[
-            "knowledge_relation"
-        ] != "KNOWLEDGE_PROJECT_MATCHED"
+        assert (
+            row.get("matched_project_id") not in {"", "D", "D:", None}
+            or row["knowledge_relation"] != "KNOWLEDGE_PROJECT_MATCHED"
+        )
         if Path(row["path"]).resolve() == volume.resolve() or Path(row["path"]).name in {
             "docs",
             "D",
@@ -286,9 +283,7 @@ def test_11_d078_volume_authorization_still_pass(
     assert "alpha" in _names(report)
 
 
-def test_12_system_volume_still_refuses(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_12_system_volume_still_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import project_atlas.estate_discovery as ed
 
     volume = tmp_path / "C"
@@ -305,8 +300,7 @@ def test_12_system_volume_still_refuses(
     monkeypatch.setattr(
         ed,
         "is_windows_system_volume_root",
-        lambda path, host_os=None, environ=None: ed.canonical_path_key(Path(path))
-        == vol_key,
+        lambda path, host_os=None, environ=None: ed.canonical_path_key(Path(path)) == vol_key,
     )
     monkeypatch.setattr(ed, "is_unc_root", lambda path: False)
     with pytest.raises(EstateDiscoveryError, match="SYSTEM_VOLUME_ROOT_NOT_ALLOWED"):
@@ -315,9 +309,7 @@ def test_12_system_volume_still_refuses(
 
 def test_13_home_still_refuses() -> None:
     with pytest.raises(EstateDiscoveryError, match="HOME_DIRECTORY_NOT_ALLOWED"):
-        authorize_discovery_root(
-            Path.home(), root_mode=ROOT_MODE_OWNER_AUTHORIZED_VOLUME
-        )
+        authorize_discovery_root(Path.home(), root_mode=ROOT_MODE_OWNER_AUTHORIZED_VOLUME)
 
 
 def test_14_unc_still_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -326,17 +318,13 @@ def test_14_unc_still_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     volume = tmp_path / "unc"
     volume.mkdir()
     key = ed.canonical_path_key(volume)
-    monkeypatch.setattr(
-        ed, "is_unc_root", lambda path: ed.canonical_path_key(Path(path)) == key
-    )
+    monkeypatch.setattr(ed, "is_unc_root", lambda path: ed.canonical_path_key(Path(path)) == key)
     monkeypatch.setattr(ed, "is_windows_drive_volume_root", lambda path, host_os=None: False)
     with pytest.raises(EstateDiscoveryError, match="UNC_VOLUME_ROOT_NOT_ALLOWED"):
         discover_estate(volume, root_mode=ROOT_MODE_OWNER_AUTHORIZED_VOLUME)
 
 
-def test_15_reparse_escape_still_blocked(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_15_reparse_escape_still_blocked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     volume = tmp_path / "D"
     outside = tmp_path / "outside-secret"
     _make_proj(outside)
@@ -363,24 +351,18 @@ def test_16_d067_scan_honesty_remains(tmp_path: Path) -> None:
     assert "SCAN INCOMPLETE" in format_discovery_human(report)
 
 
-def test_17_cli_api_web_parity(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_17_cli_api_web_parity(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     estate = tmp_path / "estate"
     vault = tmp_path / "vault"
     _make_proj(estate / "alpha")
     report = discover_estate(estate, vault=vault, max_project_candidates=1)
-    write_discovery_report(
-        report, vault / "generated" / "ops" / "estate-discovery-report.json"
-    )
+    write_discovery_report(report, vault / "generated" / "ops" / "estate-discovery-report.json")
     view = load_estate_discovery_view(vault)
     assert view["scan"]["candidate_selection_policy"] == CANDIDATE_SELECTION_POLICY
-    assert view["scan"]["project_candidates_seen"] == report["scan"][
-        "project_candidates_seen"
-    ]
-    assert view["scan"]["project_candidates_emitted"] == report["scan"][
-        "project_candidates_emitted"
-    ]
+    assert view["scan"]["project_candidates_seen"] == report["scan"]["project_candidates_seen"]
+    assert (
+        view["scan"]["project_candidates_emitted"] == report["scan"]["project_candidates_emitted"]
+    )
     rc = main(["discover", "--root", str(estate), "--json"])
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
@@ -396,9 +378,7 @@ def test_family_grouping_is_not_identity_merge(tmp_path: Path) -> None:
             package="same",
         )
     report = discover_estate(estate, max_project_candidates=3)
-    families = {
-        row.get("candidate_family") for row in report["candidates"]["projects"]
-    }
+    families = {row.get("candidate_family") for row in report["candidates"]["projects"]}
     assert any(isinstance(item, str) and item.startswith("remote:") for item in families)
     assert report["scan"]["project_candidates_seen"] == 6
     assert report["scan"]["project_candidates_emitted"] <= 2

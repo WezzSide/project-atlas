@@ -44,9 +44,7 @@ def test_ax2_qok_001_point_success_quiet_no_diag_failure_stdout(
     """
     vault = materialize_knowledge_vault(tmp_path)
     lib = answer_to_json(
-        query_knowledge(
-            vault, "project-atlas", "wp:AS-ID-001", "title", kind="authoritative"
-        )
+        query_knowledge(vault, "project-atlas", "wp:AS-ID-001", "title", kind="authoritative")
     )
     code = cli_main(
         [
@@ -75,9 +73,7 @@ def test_ax2_qok_001_point_success_quiet_no_diag_failure_stdout(
     assert "error_code" not in payload
     # Library classifier is opt-in / off success stdout.
     diagnostic = query_diagnostic_from_answer(
-        query_knowledge(
-            vault, "project-atlas", "wp:AS-ID-001", "title", kind="authoritative"
-        )
+        query_knowledge(vault, "project-atlas", "wp:AS-ID-001", "title", kind="authoritative")
     )
     assert diagnostic.outcome_class is QueryOutcomeClass.ANSWER
     assert diagnostic.package == "AS-QUERY-DIAG-001"

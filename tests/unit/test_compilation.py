@@ -76,14 +76,17 @@ def test_invalid_edges_rejected() -> None:
 
 
 def test_terminal_outcome_set() -> None:
-    assert frozenset(
-        {
-            CompilationOutcome.COMPLETE,
-            CompilationOutcome.PARTIAL_CANDIDATE,
-            CompilationOutcome.FAILED,
-            CompilationOutcome.PROMOTION_FAILED,
-        }
-    ) == TERMINAL_OUTCOMES
+    assert (
+        frozenset(
+            {
+                CompilationOutcome.COMPLETE,
+                CompilationOutcome.PARTIAL_CANDIDATE,
+                CompilationOutcome.FAILED,
+                CompilationOutcome.PROMOTION_FAILED,
+            }
+        )
+        == TERMINAL_OUTCOMES
+    )
     for outcome in TERMINAL_OUTCOMES:
         for target in CompilationOutcome:
             assert not compilation_transition_allowed(outcome, target)

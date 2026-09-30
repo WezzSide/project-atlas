@@ -199,9 +199,7 @@ def test_ax_tmp_006_staging_partial_does_not_replace_canonical_tip() -> None:
             document_timestamp=datetime(2026, 12, 31),
         ),
     )
-    without_staging = evaluate_group(
-        [prior, tip], project_id="project-atlas", compilation_id="c1"
-    )
+    without_staging = evaluate_group([prior, tip], project_id="project-atlas", compilation_id="c1")
     with_staging = evaluate_group(
         [prior, tip, staging], project_id="project-atlas", compilation_id="c1"
     )

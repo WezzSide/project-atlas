@@ -340,9 +340,7 @@ def test_f6_cleanup_failure_does_not_mask_the_domain_error(
     with pytest.raises(ObsidianProjectionError) as caught:
         materialize_obsidian_projection(vault, project_id=project_id, refresh_brief=False)
 
-    assert "unwritable-note" in str(caught.value), (
-        "the cleanup failure masked the real error"
-    )
+    assert "unwritable-note" in str(caught.value), "the cleanup failure masked the real error"
     cause = caught.value.__cause__
     assert isinstance(cause, PermissionError)
     assert cause.errno == 5, (

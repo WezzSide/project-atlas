@@ -54,9 +54,7 @@ def test_synchronized_claim_fails_closed(monkeypatch: pytest.MonkeyPatch) -> Non
         del provider
         return {
             "package": "AT3-035",
-            "providers": {
-                "chatgpt": {**original, "state": "CONNECTED", "synchronized": True}
-            },
+            "providers": {"chatgpt": {**original, "state": "CONNECTED", "synchronized": True}},
         }
 
     monkeypatch.setattr(sync_mod, "provider_capabilities", _caps)

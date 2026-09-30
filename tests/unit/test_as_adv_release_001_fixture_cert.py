@@ -62,9 +62,7 @@ def test_as_adv_release_001_cli_certify(tmp_path: Path) -> None:
     assert code == 0
     assert (vault / "generated" / "ops" / "adv-release-cert-report.json").is_file()
     loaded = json.loads(
-        (vault / "generated" / "ops" / "adv-release-cert-report.json").read_text(
-            encoding="utf-8"
-        )
+        (vault / "generated" / "ops" / "adv-release-cert-report.json").read_text(encoding="utf-8")
     )
     assert "clean_clone_replay" in {row["case_id"] for row in loaded["cases"]}
     assert loaded["release_certified"] is False

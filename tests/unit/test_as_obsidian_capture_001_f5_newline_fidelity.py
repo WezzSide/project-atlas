@@ -132,9 +132,7 @@ def test_f5_read_text_is_the_defect_this_helper_avoids(label: str, tmp_path: Pat
 
 
 @pytest.mark.parametrize("label", sorted(LINE_ENDING_CASES))
-def test_f5_capture_retry_preserves_human_line_endings(
-    label: str, vault: Path
-) -> None:
+def test_f5_capture_retry_preserves_human_line_endings(label: str, vault: Path) -> None:
     result = capture(vault, build_capture_request(content=f"f5 {label}"))
     outputs = result["outputs"]
     assert isinstance(outputs, list) and outputs
@@ -151,9 +149,7 @@ def test_f5_capture_retry_preserves_human_line_endings(
     assert _sha(note) == before_sha, "an unchanged refresh must be byte-identical"
 
 
-def test_f5_capture_retry_is_stable_across_repeated_refresh(
-    vault: Path
-) -> None:
+def test_f5_capture_retry_is_stable_across_repeated_refresh(vault: Path) -> None:
     """Erosion check: a second refresh must not finish what the first started.
 
     Both halves are asserted deliberately. Idempotence alone is *not* a useful
@@ -182,9 +178,7 @@ def test_f5_capture_retry_is_stable_across_repeated_refresh(
 
 
 @pytest.mark.parametrize("label", sorted(LINE_ENDING_CASES))
-def test_f5_obsidian_projection_preserves_human_line_endings(
-    label: str, tmp_path: Path
-) -> None:
+def test_f5_obsidian_projection_preserves_human_line_endings(label: str, tmp_path: Path) -> None:
     root = tmp_path / "src-project"
     root.mkdir()
     (root / "README.md").write_text("# F5\n\nbody.\n", encoding="utf-8")
@@ -208,9 +202,7 @@ def test_f5_obsidian_projection_preserves_human_line_endings(
 
 
 @pytest.mark.parametrize("label", sorted(LINE_ENDING_CASES))
-def test_f5_graph_projection_preserves_human_line_endings(
-    label: str, tmp_path: Path
-) -> None:
+def test_f5_graph_projection_preserves_human_line_endings(label: str, tmp_path: Path) -> None:
     vault = tmp_path / "vault"
     vault.mkdir()
     bundle = materialize_projections(project_id="demo", relationships=(), health=None)
@@ -292,9 +284,7 @@ def test_f5_generated_span_still_refreshes_beside_crlf_human_content(
     empty = materialize_projections(project_id="demo", relationships=(), health=None)
     write_projection_outputs(empty, vault=vault)
     note = vault / "generated/graph/projections/demo/relationships.md"
-    note.write_bytes(
-        _humanize(read_note_text(note), LINE_ENDING_CASES["crlf"]).encode("utf-8")
-    )
+    note.write_bytes(_humanize(read_note_text(note), LINE_ENDING_CASES["crlf"]).encode("utf-8"))
     stale_marker = "No retained graph relationships are present for this project."
     assert stale_marker in read_note_text(note), "precondition: the empty render is present"
 

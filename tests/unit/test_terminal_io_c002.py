@@ -56,9 +56,11 @@ def _run_attention(
     argv = ["atlas", "attention", "--vault", "v", "--project", "p"]
     if as_json:
         argv.append("--json")
-    with patch("sys.argv", argv), patch(
-        "project_atlas.cli.classify_attention", return_value=report
-    ), patch("sys.stdout", buf):
+    with (
+        patch("sys.argv", argv),
+        patch("project_atlas.cli.classify_attention", return_value=report),
+        patch("sys.stdout", buf),
+    ):
         code = main()
     buf.seek(0)
     return code, buf.read()
@@ -99,9 +101,7 @@ def test_attention_redirected_stdout(encoding: str) -> None:
 
 def test_attention_json_cp1252_schema_unchanged() -> None:
     """F: --json under cp1252 => schema unchanged, arrow not substituted."""
-    code, out = _run_attention(
-        encoding="cp1252", report=_ATTENTION_REPORT, as_json=True, tty=False
-    )
+    code, out = _run_attention(encoding="cp1252", report=_ATTENTION_REPORT, as_json=True, tty=False)
     assert code == EXIT_OK
     payload = json.loads(out)
     assert payload["rollup"] == "ATTENTION"
@@ -121,9 +121,7 @@ def test_attention_empty_clear() -> None:
 
 def test_attention_nonascii_project_text_cp1252() -> None:
     """H: non-ASCII project/source text => no crash; content preserved when encodable."""
-    code, out = _run_attention(
-        encoding="cp1252", report=_ATTENTION_REPORT_NONASCII, tty=True
-    )
+    code, out = _run_attention(encoding="cp1252", report=_ATTENTION_REPORT_NONASCII, tty=True)
     assert code == EXIT_OK
     assert "caf" in out
 

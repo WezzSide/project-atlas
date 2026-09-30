@@ -80,7 +80,7 @@ def test_valid_single_contract_is_loaded(tmp_path: Path) -> None:
         "    source_path: docs/backlog.md\n"
         f"    evidence: [{evidence}]\n"
         "    proposed_scope: [src/thing.py]\n"
-        "    success_criteria: [\"The thing works\"]\n",
+        '    success_criteria: ["The thing works"]\n',
     )
     _write_project_marker(tmp_path, "docs/acceptance-contracts.yaml")
     contracts = load_acceptance_contracts(tmp_path)
@@ -143,7 +143,7 @@ def test_empty_proposed_scope_fails_closed(tmp_path: Path) -> None:
         "    source_path: docs/backlog.md\n"
         f"    evidence: [{evidence}]\n"
         "    proposed_scope: []\n"
-        "    success_criteria: [\"criteria\"]\n",
+        '    success_criteria: ["criteria"]\n',
     )
     _write_project_marker(tmp_path, "docs/acceptance-contracts.yaml")
     with pytest.raises(AcceptanceContractConfigError):
@@ -159,7 +159,7 @@ def test_missing_acceptance_evidence_fails_closed(tmp_path: Path) -> None:
         "    source_path: docs/backlog.md\n"
         "    evidence: []\n"
         "    proposed_scope: [src/thing.py]\n"
-        "    success_criteria: [\"criteria\"]\n",
+        '    success_criteria: ["criteria"]\n',
     )
     _write_project_marker(tmp_path, "docs/acceptance-contracts.yaml")
     with pytest.raises(AcceptanceContractConfigError):
@@ -192,7 +192,7 @@ def test_evidence_path_traversal_fails_closed(tmp_path: Path) -> None:
         "    source_path: docs/backlog.md\n"
         "    evidence: [../outside.py]\n"
         "    proposed_scope: [src/thing.py]\n"
-        "    success_criteria: [\"criteria\"]\n",
+        '    success_criteria: ["criteria"]\n',
     )
     _write_project_marker(tmp_path, "docs/acceptance-contracts.yaml")
     with pytest.raises(AcceptanceContractConfigError):
@@ -211,7 +211,7 @@ def test_evidence_path_outside_project_root_by_nonexistence_fails_closed(tmp_pat
         "    source_path: docs/backlog.md\n"
         "    evidence: [tests/does_not_exist.py]\n"
         "    proposed_scope: [src/thing.py]\n"
-        "    success_criteria: [\"criteria\"]\n",
+        '    success_criteria: ["criteria"]\n',
     )
     _write_project_marker(tmp_path, "docs/acceptance-contracts.yaml")
     with pytest.raises(AcceptanceContractConfigError):
@@ -228,12 +228,12 @@ def test_duplicate_contract_fails_closed(tmp_path: Path) -> None:
         "    source_path: docs/backlog.md\n"
         f"    evidence: [{evidence}]\n"
         "    proposed_scope: [src/thing.py]\n"
-        "    success_criteria: [\"criteria\"]\n"
+        '    success_criteria: ["criteria"]\n'
         "  - item_id: AAA-001\n"
         "    source_path: docs/backlog.md\n"
         f"    evidence: [{evidence}]\n"
         "    proposed_scope: [src/thing2.py]\n"
-        "    success_criteria: [\"criteria 2\"]\n",
+        '    success_criteria: ["criteria 2"]\n',
     )
     _write_project_marker(tmp_path, "docs/acceptance-contracts.yaml")
     with pytest.raises(AcceptanceContractConfigError):
@@ -252,12 +252,12 @@ def test_same_item_id_different_source_path_is_not_a_duplicate(tmp_path: Path) -
         "    source_path: docs/backlog.md\n"
         f"    evidence: [{evidence}]\n"
         "    proposed_scope: [src/a.py]\n"
-        "    success_criteria: [\"criteria a\"]\n"
+        '    success_criteria: ["criteria a"]\n'
         "  - item_id: AAA-001\n"
         "    source_path: docs/second.md\n"
         f"    evidence: [{evidence}]\n"
         "    proposed_scope: [src/b.py]\n"
-        "    success_criteria: [\"criteria b\"]\n",
+        '    success_criteria: ["criteria b"]\n',
     )
     _write_project_marker(tmp_path, "docs/acceptance-contracts.yaml")
     contracts = load_acceptance_contracts(tmp_path)
@@ -284,7 +284,7 @@ def test_dependencies_field_is_rejected_not_silently_accepted(tmp_path: Path) ->
         "    source_path: docs/backlog.md\n"
         f"    evidence: [{evidence}]\n"
         "    proposed_scope: [src/a.py]\n"
-        "    success_criteria: [\"criteria\"]\n"
+        '    success_criteria: ["criteria"]\n'
         "    dependencies: [BBB-001]\n",
     )
     _write_project_marker(tmp_path, "docs/acceptance-contracts.yaml")
@@ -302,7 +302,7 @@ def test_forbidden_paths_field_is_rejected_not_silently_accepted(tmp_path: Path)
         "    source_path: docs/backlog.md\n"
         f"    evidence: [{evidence}]\n"
         "    proposed_scope: [src/a.py]\n"
-        "    success_criteria: [\"criteria\"]\n"
+        '    success_criteria: ["criteria"]\n'
         "    forbidden_paths: [secrets/]\n",
     )
     _write_project_marker(tmp_path, "docs/acceptance-contracts.yaml")
@@ -316,11 +316,11 @@ def test_malformed_item_id_fails_closed(tmp_path: Path) -> None:
         tmp_path,
         "docs/acceptance-contracts.yaml",
         "contracts:\n"
-        "  - item_id: \"not a valid id!!\"\n"
+        '  - item_id: "not a valid id!!"\n'
         "    source_path: docs/backlog.md\n"
         f"    evidence: [{evidence}]\n"
         "    proposed_scope: [src/a.py]\n"
-        "    success_criteria: [\"criteria\"]\n",
+        '    success_criteria: ["criteria"]\n',
     )
     _write_project_marker(tmp_path, "docs/acceptance-contracts.yaml")
     with pytest.raises(AcceptanceContractConfigError):
@@ -340,7 +340,7 @@ def test_unknown_extra_field_fails_closed(tmp_path: Path) -> None:
         "    source_path: docs/backlog.md\n"
         f"    evidence: [{evidence}]\n"
         "    proposed_scope: [src/a.py]\n"
-        "    success_criteria: [\"criteria\"]\n"
+        '    success_criteria: ["criteria"]\n'
         "    owner_gate: FORCE_NONE\n",
     )
     _write_project_marker(tmp_path, "docs/acceptance-contracts.yaml")
@@ -481,7 +481,7 @@ def test_task_list_item_with_valid_contract_becomes_execution_ready(tmp_path: Pa
         "    source_path: docs/backlog.md\n"
         f"    evidence: [{evidence}]\n"
         "    proposed_scope: [src/thing.py]\n"
-        "    success_criteria: [\"The thing behaves correctly\"]\n",
+        '    success_criteria: ["The thing behaves correctly"]\n',
     )
     _write(
         tmp_path,
@@ -519,7 +519,7 @@ def test_contract_evidence_without_a_real_marker_still_fails_policy(tmp_path: Pa
         "    source_path: docs/backlog.md\n"
         "    evidence: [tests/test_plain.py]\n"
         "    proposed_scope: [src/thing.py]\n"
-        "    success_criteria: [\"criteria\"]\n",
+        '    success_criteria: ["criteria"]\n',
     )
     _write(
         tmp_path,
@@ -542,9 +542,7 @@ def test_blocked_task_list_item_stays_blocked_even_with_a_valid_contract(tmp_pat
     """Owner-gate preservation end to end: blocker language in the title
     still refuses execution_ready even once a contract supplies real
     evidence -- a contract can never clear a declared blocker."""
-    _backlog_item(
-        tmp_path, line="- [ ] GATE-001 Owner merge gate (not this package)\n"
-    )
+    _backlog_item(tmp_path, line="- [ ] GATE-001 Owner merge gate (not this package)\n")
     evidence = _skip_marked_test(tmp_path)
     _write(
         tmp_path,
@@ -554,7 +552,7 @@ def test_blocked_task_list_item_stays_blocked_even_with_a_valid_contract(tmp_pat
         "    source_path: docs/backlog.md\n"
         f"    evidence: [{evidence}]\n"
         "    proposed_scope: [src/thing.py]\n"
-        "    success_criteria: [\"criteria\"]\n",
+        '    success_criteria: ["criteria"]\n',
     )
     _write(
         tmp_path,
@@ -611,7 +609,7 @@ def test_external_blocked_item_stays_blocked_even_with_a_valid_contract(
         "    source_path: docs/backlog.md\n"
         f"    evidence: [{evidence}]\n"
         "    proposed_scope: [src/thing.py]\n"
-        "    success_criteria: [\"criteria\"]\n",
+        '    success_criteria: ["criteria"]\n',
     )
     _write(
         tmp_path,
@@ -648,7 +646,7 @@ def test_eligible_work_items_applies_contracts(tmp_path: Path) -> None:
         "    source_path: docs/backlog.md\n"
         f"    evidence: [{evidence}]\n"
         "    proposed_scope: [src/thing.py]\n"
-        "    success_criteria: [\"criteria\"]\n",
+        '    success_criteria: ["criteria"]\n',
     )
     _write(
         tmp_path,
@@ -719,7 +717,8 @@ def test_evidence_merge_exceeding_provenance_cap_fails_closed_not_a_raw_crash(
     for index in range(_MAX_EVIDENCE_ENTRIES):
         rel = f"tests/test_stub_{index}.py"
         _write(
-            tmp_path, rel,
+            tmp_path,
+            rel,
             'import pytest\n\npytestmark = pytest.mark.skip(reason="n/a")\n',
         )
         marks.append(rel)

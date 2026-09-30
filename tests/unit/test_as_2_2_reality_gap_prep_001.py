@@ -52,15 +52,15 @@ def test_reality_gap_prep_package_card_non_claims() -> None:
     )
     assert "ATLAS_2_2_INTELLIGENCE_IMPLEMENTATION_UNLOCKED" in text
     assert "reality_gap" in text
-    assert "do not mutate" in text.lower() or "Do not mutate" in text or (
-        "NONE" in text and "Production mutation" in text
+    assert (
+        "do not mutate" in text.lower()
+        or "Do not mutate" in text
+        or ("NONE" in text and "Production mutation" in text)
     )
 
 
 def test_reality_gap_prep_inventory_fixture_invariants() -> None:
-    payload = json.loads(
-        (FIXTURES / "inventory.fixture.json").read_text(encoding="utf-8")
-    )
+    payload = json.loads((FIXTURES / "inventory.fixture.json").read_text(encoding="utf-8"))
     assert payload["package_id"] == "AS-2.2-REALITY-GAP-PREP-001"
     assert payload["pilot_roots"] == 0
     assert payload["authentic_estate_pilot_passed"] is False
@@ -82,19 +82,13 @@ def test_reality_gap_prep_inventory_fixture_invariants() -> None:
 
 def test_reality_gap_prep_negative_fixtures_present() -> None:
     unknown = json.loads(
-        (FIXTURES / "negative-unknown-as-healthy.fixture.json").read_text(
-            encoding="utf-8"
-        )
+        (FIXTURES / "negative-unknown-as-healthy.fixture.json").read_text(encoding="utf-8")
     )
-    ui = json.loads(
-        (FIXTURES / "negative-ui-canonical.fixture.json").read_text(encoding="utf-8")
-    )
+    ui = json.loads((FIXTURES / "negative-ui-canonical.fixture.json").read_text(encoding="utf-8"))
     pilot = json.loads(
         (FIXTURES / "negative-pilot-invent.fixture.json").read_text(encoding="utf-8")
     )
-    assert unknown["expected_error"] == (
-        "reality-gap-prep-unknown-as-healthy-forbidden"
-    )
+    assert unknown["expected_error"] == ("reality-gap-prep-unknown-as-healthy-forbidden")
     assert ui["expected_error"] == "reality-gap-prep-ui-canonical-writes-forbidden"
     assert pilot["expected_error"] == "reality-gap-prep-pilot-invent-forbidden"
     assert ui["forbidden_catalog"]["canonical_writes"] is True

@@ -37,9 +37,7 @@ def test_as_int_011_operator_revoke_preserves_file(tmp_path: Path) -> None:
     concept.parent.mkdir(parents=True)
     concept.write_text("# keep\n", encoding="utf-8")
 
-    index = revoke_receipt(
-        vault, project_id="proj-a", event_id="AE-001", reason="operator"
-    )
+    index = revoke_receipt(vault, project_id="proj-a", event_id="AE-001", reason="operator")
     validate_record(index, "receipt-revocation-index")
     assert index["revocations"][0]["status"] == "revoked"
     assert index["revocations"][0]["reason"] == "operator"
@@ -64,21 +62,15 @@ def test_as_int_011_integrity_defaults_to_invalidated(tmp_path: Path) -> None:
     entry = index["revocations"][0]
     assert entry["status"] == "invalidated"
     assert entry["detail"] == "hash-mismatch-followup"
-    assert receipt_trust_disposition(vault, project_id="proj-b", event_id="AE-x") == (
-        "invalidated"
-    )
+    assert receipt_trust_disposition(vault, project_id="proj-b", event_id="AE-x") == ("invalidated")
 
 
 def test_as_int_011_skill_policy_revoke(tmp_path: Path) -> None:
     vault = tmp_path / "vault"
     vault.mkdir()
-    revoke_receipt(
-        vault, project_id="proj-a", event_id="AE-002", reason="skill_policy"
-    )
+    revoke_receipt(vault, project_id="proj-a", event_id="AE-002", reason="skill_policy")
     assert is_receipt_revoked(vault, project_id="proj-a", event_id="AE-002")
-    assert receipt_trust_disposition(vault, project_id="proj-a", event_id="AE-002") == (
-        "revoked"
-    )
+    assert receipt_trust_disposition(vault, project_id="proj-a", event_id="AE-002") == ("revoked")
 
 
 def test_as_int_011_assert_active_fail_closed(tmp_path: Path) -> None:

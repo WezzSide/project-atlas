@@ -807,9 +807,7 @@ def test_matrix_b_running_status_is_denied(tmp_path: Path) -> None:
     pre-flight receipt) -- genuinely unresolved, never failure evidence."""
     repo = _make_repo(tmp_path)
     main, tree = _repo_main_tree(repo)
-    _gov, lease = _lease_and_receipts(
-        repo, main, tree, receipt_statuses=(("RUNNING", None),)
-    )
+    _gov, lease = _lease_and_receipts(repo, main, tree, receipt_statuses=(("RUNNING", None),))
     _stopped_state(
         repo,
         main=main,

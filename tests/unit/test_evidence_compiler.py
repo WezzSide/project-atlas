@@ -45,9 +45,7 @@ def test_all_repo_receipts_complete_without_failure() -> None:
     outcomes = []
     for receipt in receipts:
         path = f"docs/evidence/{receipt.name}"
-        extraction = extract_source(
-            "project", _entry(path, receipt.read_text(encoding="utf-8"))
-        )
+        extraction = extract_source("project", _entry(path, receipt.read_text(encoding="utf-8")))
         outcomes.append(extraction.candidate.outcome)
         assert extraction.candidate.outcome is not CompilationOutcome.FAILED, path
         assert extraction.candidate.outcome is CompilationOutcome.COMPLETE_CANDIDATE, path
@@ -64,9 +62,7 @@ def test_receipt_claims_use_yamlpath_locators() -> None:
     assert all(record.locator.startswith("yamlpath:") for record in extraction.records)
     assert all(record.parser_id == "evidence-yaml" for record in extraction.records)
     assert {record.field for record in extraction.records} >= {"package_status"}
-    statuses = [
-        record for record in extraction.records if record.field == "package_status"
-    ]
+    statuses = [record for record in extraction.records if record.field == "package_status"]
     assert statuses and statuses[0].extraction_method.startswith("evidence-yaml:yamlpath:")
 
 
@@ -102,9 +98,7 @@ def test_duplicate_keys_fail_explicitly() -> None:
 
 
 def test_unknown_profile_receipt_completes_with_visibility() -> None:
-    entry = _fixture_entry(
-        "synthetic/unknown-receipt-profile.yaml", "docs/evidence/unknown.yaml"
-    )
+    entry = _fixture_entry("synthetic/unknown-receipt-profile.yaml", "docs/evidence/unknown.yaml")
     extraction = extract_source("project", entry)
     assert extraction.candidate.outcome is CompilationOutcome.COMPLETE_CANDIDATE
     codes = {diagnostic.code for diagnostic in extraction.diagnostics}
@@ -283,8 +277,7 @@ def test_repro_a_nfc_collided_locators_withheld_not_abort() -> None:
     assert extraction.candidate.claims_extracted == 0
     assert extraction.records == ()
     assert all(
-        diagnostic.code is DiagnosticCode.DUPLICATE_LOCATOR
-        for diagnostic in extraction.diagnostics
+        diagnostic.code is DiagnosticCode.DUPLICATE_LOCATOR for diagnostic in extraction.diagnostics
     )
     assert all(diagnostic.continued for diagnostic in extraction.diagnostics)
 
@@ -319,9 +312,7 @@ def test_identical_value_collision_keeps_first_statement() -> None:
 
 
 @pytest.mark.parametrize("collision_text", [REPRO_A_NFC_COLLISION, REPRO_B_SEQUENCE_KEY_COLLISION])
-def test_colliding_source_never_blocks_good_sibling(
-    tmp_path: Path, collision_text: str
-) -> None:
+def test_colliding_source_never_blocks_good_sibling(tmp_path: Path, collision_text: str) -> None:
     """§10 MUST: one bad source does not prevent extraction from independent
     good sources — the colliding source degrades to PARTIAL, the good source
     still promotes, and no exception escapes per-source isolation."""
@@ -332,8 +323,6 @@ def test_colliding_source_never_blocks_good_sibling(
     assert bundle.claims[0].field == "purpose"
     by_path = {candidate.source_path: candidate for candidate in bundle.candidates}
     assert by_path["docs/README.md"].outcome is CompilationOutcome.COMPLETE_CANDIDATE
-    assert by_path["docs/evidence/colliding.yaml"].outcome is (
-        CompilationOutcome.PARTIAL_CANDIDATE
-    )
+    assert by_path["docs/evidence/colliding.yaml"].outcome is (CompilationOutcome.PARTIAL_CANDIDATE)
     assert bundle.status["sources_partial"] == 1
     assert bundle.status["claims_withheld"] == 2

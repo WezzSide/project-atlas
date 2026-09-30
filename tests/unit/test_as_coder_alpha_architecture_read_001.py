@@ -170,9 +170,7 @@ def test_symlink_answer_fails_closed(tmp_path: Path) -> None:
 
 def test_module_does_not_write_or_materialize() -> None:
     root = Path(__file__).resolve().parents[2]
-    source = (root / "src/project_atlas/web_api/architecture_read.py").read_text(
-        encoding="utf-8"
-    )
+    source = (root / "src/project_atlas/web_api/architecture_read.py").read_text(encoding="utf-8")
     for name in (
         "from project_atlas.project_architecture",
         "materialize_architecture_lenses(",
@@ -206,11 +204,7 @@ def test_cli_help_is_ascii(capsys: pytest.CaptureFixture[str]) -> None:
     assert code == 0
     help_text = capsys.readouterr().out
     lowered = help_text.lower()
-    assert (
-        "never writes" in lowered
-        or "read-only" in lowered
-        or "ARCHITECTURE" in help_text
-    )
+    assert "never writes" in lowered or "read-only" in lowered or "ARCHITECTURE" in help_text
     assert all(ord(char) < 128 for char in help_text)
     help_text.encode("cp1252")
 

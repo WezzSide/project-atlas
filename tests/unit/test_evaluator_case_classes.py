@@ -61,9 +61,7 @@ FANOUT_FIELD = "fanoutmarker"
 
 def _write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def _matrix_vault(tmp_path: Path) -> Path:
@@ -188,9 +186,7 @@ def _scoped_candidates(
     """
     retriever = VaultRetriever(vault)
     slot = "lexical_prefix" if mode == "prefix" else "lexical_exact"
-    hits = retriever.lookup(
-        "claim", value, prefix=mode == "prefix", project_id=project_id
-    )
+    hits = retriever.lookup("claim", value, prefix=mode == "prefix", project_id=project_id)
     candidates: list[dict[str, Any]] = []
     for hit in hits:
         provenance: list[dict[str, str]] = []
@@ -322,17 +318,14 @@ def test_case_unknown_returns_nothing_and_refuses_invention(tmp_path: Path) -> N
 def test_case_multi_field_distinct_fields_same_subject(tmp_path: Path) -> None:
     """MULTI_FIELD: multiple distinct-field claims for a subject all package."""
     vault = _matrix_vault(tmp_path)
-    candidates = _scoped_candidates(
-        vault, "claim-known-", PROJECT_A, mode="prefix"
-    )
+    candidates = _scoped_candidates(vault, "claim-known-", PROJECT_A, mode="prefix")
     ids = sorted(c["record_id"] for c in candidates)
     assert ids == ["claim-known-owner", "claim-known-status"]
 
     # The underlying claims genuinely differ by field (MULTI_FIELD).
     retriever = VaultRetriever(vault)
     fields = {
-        retriever.lookup("claim", rid, project_id=PROJECT_A)[0].record["field"]
-        for rid in ids
+        retriever.lookup("claim", rid, project_id=PROJECT_A)[0].record["field"] for rid in ids
     }
     assert fields == {"owner", "status"}
 
@@ -503,9 +496,7 @@ def test_case_authority_difference_orders_by_full_rank(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("spoof", ["primary", "validated-execution", "maintained"])
-def test_case_authority_difference_rejects_upward_spoof(
-    tmp_path: Path, spoof: str
-) -> None:
+def test_case_authority_difference_rejects_upward_spoof(tmp_path: Path, spoof: str) -> None:
     """AUTHORITY_DIFFERENCE: caller cannot spoof to a privileged rung."""
     vault = _matrix_vault(tmp_path)
     with pytest.raises(Runtime22Error, match="authority-spoof"):
@@ -555,10 +546,7 @@ def test_case_graph_only_is_summary_and_never_authority(tmp_path: Path) -> None:
     )
     # Enabling the graph slot adds exactly zero retrieval candidates.
     assert with_graph["candidates"] == without_graph["candidates"]
-    assert all(
-        c["slot"] in ("lexical_exact", "lexical_prefix")
-        for c in with_graph["candidates"]
-    )
+    assert all(c["slot"] in ("lexical_exact", "lexical_prefix") for c in with_graph["candidates"])
     graph = with_graph["slots"]["graph"]
     assert graph["graph_authority"] is False
     assert graph["summary"]["graph_authority"] is False
@@ -719,9 +707,7 @@ def test_case_malformed_input_hygiene_and_query_bounds(tmp_path: Path) -> None:
             project_id=PROJECT_A,
         )
     with pytest.raises(HybridRetrievalError, match="value-empty"):
-        build_hybrid_rrf_fusion(
-            vault, kind="claim", value="   ", project_id=PROJECT_A
-        )
+        build_hybrid_rrf_fusion(vault, kind="claim", value="   ", project_id=PROJECT_A)
     with pytest.raises(Runtime22Error, match="context-budget-invalid"):
         compile_context(
             vault,
@@ -741,9 +727,7 @@ def test_case_replay_determinism_byte_identical(tmp_path: Path) -> None:
     vault = _matrix_vault(tmp_path)
 
     def _run() -> str:
-        candidates = _scoped_candidates(
-            vault, "claim-known-", PROJECT_A, mode="prefix"
-        )
+        candidates = _scoped_candidates(vault, "claim-known-", PROJECT_A, mode="prefix")
         package = compile_context(
             vault,
             project_id=PROJECT_A,

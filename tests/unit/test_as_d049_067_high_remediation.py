@@ -100,9 +100,7 @@ def test_existing_ignore_trees_remain_excluded(tmp_path: Path) -> None:
     report = discover_estate(estate, include_knowledge=False)
     paths = _paths(report)
     for name in hosts:
-        assert not any(
-            f"/{name}/" in p and "fake-proj" in p for p in paths
-        ), name
+        assert not any(f"/{name}/" in p and "fake-proj" in p for p in paths), name
     assert "fake-proj" not in _names(report)
 
 
@@ -202,9 +200,7 @@ def test_case_e_candidate_and_depth_limits_both_visible(tmp_path: Path) -> None:
         current = current / f"D{i + 1}"
         current.mkdir(parents=True, exist_ok=True)
     _make_proj(current / "deep-proj")
-    report = discover_estate(
-        estate, include_knowledge=False, max_project_candidates=2
-    )
+    report = discover_estate(estate, include_knowledge=False, max_project_candidates=2)
     assert report["scan"]["scan_complete"] is False
     assert report["scan"]["project_limit_reached"] is True
     assert report["scan"]["depth_limit_reached"] is True
@@ -260,9 +256,7 @@ def test_api_web_projects_depth_incompleteness(tmp_path: Path) -> None:
         current.mkdir(parents=True, exist_ok=True)
     _make_proj(current / "deep-proj")
     report = discover_estate(estate, vault=vault)
-    write_discovery_report(
-        report, vault / "generated" / "ops" / "estate-discovery-report.json"
-    )
+    write_discovery_report(report, vault / "generated" / "ops" / "estate-discovery-report.json")
     view = load_estate_discovery_view(vault)
     assert view["scan"]["scan_complete"] is False
     assert view["scan"]["depth_limit_reached"] is True
@@ -295,21 +289,15 @@ def test_discover_help_text_names_cwd_and_depth_bound(
 def test_sanitize_quoted_git_remote_strips_userinfo() -> None:
     planted = "D067_PLANTED_SECRET"
     assert (
-        sanitize_git_remote_url(
-            f'"https://user:{planted}@example.invalid/org/project.git"'
-        )
+        sanitize_git_remote_url(f'"https://user:{planted}@example.invalid/org/project.git"')
         == "https://example.invalid/org/project.git"
     )
     assert (
-        sanitize_git_remote_url(
-            f'"https://user:p%40ss{planted}@example.invalid/org/project.git"'
-        )
+        sanitize_git_remote_url(f'"https://user:p%40ss{planted}@example.invalid/org/project.git"')
         == "https://example.invalid/org/project.git"
     )
     assert (
-        sanitize_git_remote_url(
-            f"https://user:{planted}@example.invalid/org/project.git"
-        )
+        sanitize_git_remote_url(f"https://user:{planted}@example.invalid/org/project.git")
         == "https://example.invalid/org/project.git"
     )
     assert (

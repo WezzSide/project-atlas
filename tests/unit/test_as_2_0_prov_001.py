@@ -34,9 +34,7 @@ def test_provider_registry_disabled_by_default(tmp_path: Path) -> None:
     assert report["adapters_enabled"] is False
     assert report["adapters"][0]["enabled"] is False
     validate_record(report, "provider-adapter-registry")
-    assert (
-        vault / "generated" / "ops" / "provider-adapter-registry.json"
-    ).is_file()
+    assert (vault / "generated" / "ops" / "provider-adapter-registry.json").is_file()
 
 
 def test_provider_forbids_dangerous_capabilities(tmp_path: Path) -> None:
@@ -86,9 +84,9 @@ def test_quarantine_rejects_secrets_when_enabled(tmp_path: Path) -> None:
     assert "api-key-assignment" in report["secret_scan"]["finding_kinds"]
     # CODEX-SEC-006: metadata-only evidence; raw secret ABSENT.
     assert secret not in json.dumps(report, sort_keys=True)
-    blob = (
-        vault / "generated" / "ops" / "provider-quarantine" / "env-2.json"
-    ).read_text(encoding="utf-8")
+    blob = (vault / "generated" / "ops" / "provider-quarantine" / "env-2.json").read_text(
+        encoding="utf-8"
+    )
     assert secret not in blob
     assert "payload_text" not in report
 

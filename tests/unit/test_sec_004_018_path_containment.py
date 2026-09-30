@@ -200,9 +200,7 @@ def test_backup_assert_inside_symlink_escape(tmp_path: Path) -> None:
     "likely_project",
     ["C:foo", "CON", "foo:bar", "..", "../x", "a/b", "nul.txt"],
 )
-def test_ingest_rejects_unsafe_likely_project_ids(
-    tmp_path: Path, likely_project: str
-) -> None:
+def test_ingest_rejects_unsafe_likely_project_ids(tmp_path: Path, likely_project: str) -> None:
     """Public ingest boundary: unsafe project ids never create paths (SEC-014)."""
     from project_atlas.source_identity import canonical_source_sha256_bytes
 
@@ -223,9 +221,7 @@ def test_ingest_rejects_unsafe_likely_project_ids(
                         "source_id": "source-safe",
                         "path": "README.md",
                         "media_type": "text/markdown",
-                        "sha256": canonical_source_sha256_bytes(
-                            payload, relative_path="README.md"
-                        ),
+                        "sha256": canonical_source_sha256_bytes(payload, relative_path="README.md"),
                         "size_bytes": len(payload),
                         "modified_at": "2026-08-01T00:00:00Z",
                         "likely_project": likely_project,

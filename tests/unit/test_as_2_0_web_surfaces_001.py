@@ -26,9 +26,7 @@ def test_ask_rejects_writes(tmp_path: Path) -> None:
     vault = tmp_path / "v"
     vault.mkdir()
     with pytest.raises(WebAskAtlasError, match="canonical-writes-forbidden"):
-        build_web_ask_atlas_contract(
-            vault, record_id="ask-default", allow_canonical_writes=True
-        )
+        build_web_ask_atlas_contract(vault, record_id="ask-default", allow_canonical_writes=True)
 
 
 def test_surfaces(tmp_path: Path) -> None:
@@ -44,9 +42,7 @@ def test_surfaces_reject_rewrite(tmp_path: Path) -> None:
     vault = tmp_path / "v"
     vault.mkdir()
     with pytest.raises(WebSurfaceCatalogError, match="ui-rewrite-forbidden"):
-        build_web_surface_catalog(
-            vault, record_id="surfaces-default", allow_ui_rewrite=True
-        )
+        build_web_surface_catalog(vault, record_id="surfaces-default", allow_ui_rewrite=True)
 
 
 def test_docs() -> None:

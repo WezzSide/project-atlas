@@ -71,9 +71,7 @@ def test_dense_10k_and_representative_100k_counts() -> None:
 
     representative = [_claim(index, groups=20000) for index in range(100000)]
     started = time.perf_counter()
-    _empty, wide_stats = find_contradiction_candidates_report(
-        representative, materialize=False
-    )
+    _empty, wide_stats = find_contradiction_candidates_report(representative, materialize=False)
     wide_elapsed = time.perf_counter() - started
     assert wide_stats.claim_count == 100000
     assert wide_stats.group_count == 20000

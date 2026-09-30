@@ -75,12 +75,15 @@ def test_build_event_schema_and_planes() -> None:
     assert event["truth_plane"] == "operational"
     assert event["authority_plane"] == "none"
     assert "generated.at" not in event
-    assert event["event_uid"] == build_event(
-        event_id="OPS-EVT-CI-FAILED",
-        sequence=1,
-        payload={"workflow": "ci", "commit": "abc"},
-        evidence_refs=["generated/ops/evidence/ci-status.json"],
-    )["event_uid"]
+    assert (
+        event["event_uid"]
+        == build_event(
+            event_id="OPS-EVT-CI-FAILED",
+            sequence=1,
+            payload={"workflow": "ci", "commit": "abc"},
+            evidence_refs=["generated/ops/evidence/ci-status.json"],
+        )["event_uid"]
+    )
 
 
 def test_no_fabricated_event_without_evidence() -> None:
@@ -126,9 +129,7 @@ def test_append_and_replay_deterministic(tmp_path: Path) -> None:
     assert events[0]["sequence"] == 1
     assert events[1]["sequence"] == 2
     replay = read_events(vault)
-    assert [event_to_jsonl_line(e) for e in events] == [
-        event_to_jsonl_line(e) for e in replay
-    ]
+    assert [event_to_jsonl_line(e) for e in events] == [event_to_jsonl_line(e) for e in replay]
     manifest = json.loads(
         (vault / "generated" / "ops" / "events" / "stream-manifest.json").read_text(
             encoding="utf-8"

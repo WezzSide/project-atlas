@@ -579,6 +579,4 @@ def test_adv_g2_determinism_replay_and_truth_oracle(tmp_path: Path) -> None:
     assert first.to_json() == second.to_json()
     write_resolution_outputs(first, vault=vault)
     _assert_census_stable(vault, before)
-    assert any(
-        n.quarantine_category == "cross-project-resolution-forbidden" for n in first.nodes
-    )
+    assert any(n.quarantine_category == "cross-project-resolution-forbidden" for n in first.nodes)

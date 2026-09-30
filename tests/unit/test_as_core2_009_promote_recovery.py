@@ -156,8 +156,9 @@ def test_as_core2_009_restore_failure_preserves_artifacts(tmp_path: Path) -> Non
     def boom(source: Path, destination: Path) -> None:
         raise OSError("injected restore failure")
 
-    with patch("project_atlas.ingestion._replace_path", side_effect=boom), pytest.raises(
-        RuntimeError, match="fail-closed"
+    with (
+        patch("project_atlas.ingestion._replace_path", side_effect=boom),
+        pytest.raises(RuntimeError, match="fail-closed"),
     ):
         recover_promote_orphans(vault)
 
@@ -201,9 +202,7 @@ def test_as_core2_009_ingest_preflight_runs_recovery(tmp_path: Path) -> None:
             return_value={"schema_version": 1, "sources": []},
         ),
     ):
-        result = ingestion_module.ingest(
-            manifest, vault, authorized_source_root=source
-        )
+        result = ingestion_module.ingest(manifest, vault, authorized_source_root=source)
 
     assert called == [vault.resolve()]
     assert result["schema_version"] == 1
@@ -228,6 +227,4 @@ def test_as_core2_009_multi_txn_deterministic_receipt(tmp_path: Path) -> None:
     assert second.receipt_path.read_text(encoding="utf-8") == text_a
 
     payload = json.loads(text_a)
-    assert [t["transaction_id"] for t in payload["transactions"]] == sorted(
-        [TXN, TXN_B]
-    )
+    assert [t["transaction_id"] for t in payload["transactions"]] == sorted([TXN, TXN_B])

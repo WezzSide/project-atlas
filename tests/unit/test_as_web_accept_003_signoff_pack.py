@@ -23,8 +23,6 @@ def test_as_web_accept_003_readme_documents_smoke() -> None:
 
 
 def test_as_web_accept_003_checklist_item_11_documented() -> None:
-    checklist = (ROOT / "docs" / "AS-WEB-ACCEPT-001-checklist.md").read_text(
-        encoding="utf-8"
-    )
+    checklist = (ROOT / "docs" / "AS-WEB-ACCEPT-001-checklist.md").read_text(encoding="utf-8")
     assert "documented" in checklist
     assert "**WEB APPLICATION ACCEPTED** | **YES**" in checklist

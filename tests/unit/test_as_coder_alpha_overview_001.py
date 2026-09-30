@@ -116,10 +116,7 @@ def test_cli_overview_writes_lens(tmp_path: Path) -> None:
     # Remove auto-written answer then regenerate via CLI.
     answer = vault / "generated" / "answers" / f"ans-overview-{project_id}.json"
     answer.unlink()
-    assert (
-        main(["overview", "--vault", str(vault), "--project", project_id, "--json"])
-        == EXIT_OK
-    )
+    assert main(["overview", "--vault", str(vault), "--project", project_id, "--json"]) == EXIT_OK
     assert answer.is_file()
     payload = json.loads(answer.read_text(encoding="utf-8"))
     assert payload["package"] == "AS-CODER-ALPHA-OVERVIEW-001"

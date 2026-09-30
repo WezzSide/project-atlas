@@ -106,9 +106,7 @@ def test_adv_g4_001_no_authority_elevation(tmp_path: Path) -> None:
 def test_adv_g4_002_no_lww_promote_to_relationship() -> None:
     store = _orphan_store()
     result = materialize_quarantine_store(store)
-    with pytest.raises(
-        GraphQuarantineError, match="quarantine-relationship-promotion-forbidden"
-    ):
+    with pytest.raises(GraphQuarantineError, match="quarantine-relationship-promotion-forbidden"):
         promote_quarantine_to_relationship_forbidden(result.records[0])
 
 

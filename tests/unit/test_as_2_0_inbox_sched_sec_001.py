@@ -33,9 +33,7 @@ def test_inbox_reject_promote(tmp_path: Path) -> None:
     vault = tmp_path / "v"
     vault.mkdir()
     with pytest.raises(KnowledgeInboxError, match="authority-promote-forbidden"):
-        build_knowledge_inbox_receipt(
-            vault, record_id="in-1", promote_authority=True
-        )
+        build_knowledge_inbox_receipt(vault, record_id="in-1", promote_authority=True)
 
 
 def test_sched(tmp_path: Path) -> None:
@@ -50,17 +48,13 @@ def test_sched_reject_live(tmp_path: Path) -> None:
     vault = tmp_path / "v"
     vault.mkdir()
     with pytest.raises(SchedulerDryRunError, match="live-dispatch-forbidden"):
-        build_scheduler_dry_run(
-            vault, record_id="plan-1", enable_live_dispatch=True
-        )
+        build_scheduler_dry_run(vault, record_id="plan-1", enable_live_dispatch=True)
 
 
 def test_sec(tmp_path: Path) -> None:
     vault = tmp_path / "v"
     vault.mkdir()
-    report = build_security_continuous_receipt(
-        vault, record_id="sec-1", findings_count=0
-    )
+    report = build_security_continuous_receipt(vault, record_id="sec-1", findings_count=0)
     assert report["matched_content_logged"] is False
     validate_record(report, "security-continuous-receipt")
 
@@ -69,9 +63,7 @@ def test_sec_reject_log(tmp_path: Path) -> None:
     vault = tmp_path / "v"
     vault.mkdir()
     with pytest.raises(SecurityContinuousError, match="matched-content-log-forbidden"):
-        build_security_continuous_receipt(
-            vault, record_id="sec-1", log_matched_content=True
-        )
+        build_security_continuous_receipt(vault, record_id="sec-1", log_matched_content=True)
 
 
 def test_docs() -> None:

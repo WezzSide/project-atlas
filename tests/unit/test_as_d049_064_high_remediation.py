@@ -32,14 +32,10 @@ def test_sanitize_git_remote_url_strips_userinfo() -> None:
         == "https://github.com/org/repo.git"
     )
     assert (
-        sanitize_git_remote_url("https://example.com/clean.git")
-        == "https://example.com/clean.git"
+        sanitize_git_remote_url("https://example.com/clean.git") == "https://example.com/clean.git"
     )
     # scp-like form left unchanged (no password embedding convention)
-    assert (
-        sanitize_git_remote_url("git@github.com:org/repo.git")
-        == "git@github.com:org/repo.git"
-    )
+    assert sanitize_git_remote_url("git@github.com:org/repo.git") == "git@github.com:org/repo.git"
 
 
 def test_discover_estate_does_not_echo_git_remote_password(tmp_path: Path) -> None:
@@ -82,9 +78,7 @@ def test_discover_estate_survives_mutual_symlink_loop(tmp_path: Path) -> None:
     _write(real / ".git" / "config", '[remote "origin"]\n\turl = https://example.com/real.git\n')
 
     report = discover_estate(estate, include_knowledge=False)
-    assert report["scan"]["scan_complete"] is True or report["scan"].get(
-        "truncation_reason"
-    )
+    assert report["scan"]["scan_complete"] is True or report["scan"].get("truncation_reason")
     paths = {c["path"] for c in report["candidates"]["projects"]}
     assert any("real-proj" in p for p in paths)
     # Must not raise; loop edges counted as escapes / ignored, never allowed.

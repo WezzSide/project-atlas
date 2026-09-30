@@ -351,8 +351,6 @@ def test_adv_20_malformed_mixed_corrupt_ledger_rejected(tmp_path: Path) -> None:
     assert exc.value.code == "LEDGER_CORRUPT"
     parser = argparse.ArgumentParser()
     register_atlas3_parsers(parser.add_subparsers(dest="command"))
-    args = parser.parse_args(
-        ["ledger", "list", "--vault", str(vault), "--project", "harbor-api"]
-    )
+    args = parser.parse_args(["ledger", "list", "--vault", str(vault), "--project", "harbor-api"])
     assert dispatch_atlas3(args) == 1
     assert main(["compat", "verify"]) == 0

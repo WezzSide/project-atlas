@@ -33,9 +33,7 @@ def test_ux_rejects_ui_rewrite(tmp_path: Path) -> None:
     vault = tmp_path / "vault"
     vault.mkdir()
     with pytest.raises(UxModeCatalogError, match="ui-rewrite-forbidden"):
-        build_ux_mode_catalog(
-            vault, catalog_id="cc-default", allow_ui_rewrite=True
-        )
+        build_ux_mode_catalog(vault, catalog_id="cc-default", allow_ui_rewrite=True)
 
 
 def test_ux_docs_and_schema() -> None:

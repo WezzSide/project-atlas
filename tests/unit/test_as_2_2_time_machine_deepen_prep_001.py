@@ -49,11 +49,7 @@ def test_prep_docs_exist() -> None:
     for path in DOCS.values():
         assert path.is_file(), path
         text = path.read_text(encoding="utf-8")
-        assert (
-            "TIME-MACHINE" in text
-            or "time-machine" in text
-            or "Time Machine" in text
-        )
+        assert "TIME-MACHINE" in text or "time-machine" in text or "Time Machine" in text
         assert "PREP" in text.upper() or "prep" in text
 
 

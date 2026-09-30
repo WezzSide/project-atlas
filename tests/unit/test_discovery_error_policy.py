@@ -62,9 +62,7 @@ def _inject_metadata_probe(monkeypatch: pytest.MonkeyPatch, root: Path, exc: OSE
     monkeypatch.setattr(Path, "is_symlink", fake)
 
 
-def _inject_listability_probe(
-    monkeypatch: pytest.MonkeyPatch, root: Path, exc: OSError
-) -> None:
+def _inject_listability_probe(monkeypatch: pytest.MonkeyPatch, root: Path, exc: OSError) -> None:
     """`_is_listable` opens the directory with `os.scandir`."""
     real = os.scandir
 
@@ -76,9 +74,7 @@ def _inject_listability_probe(
     monkeypatch.setattr(os, "scandir", fake)
 
 
-def _inject_symlink_target_probe(
-    monkeypatch: pytest.MonkeyPatch, root: Path, exc: OSError
-) -> None:
+def _inject_symlink_target_probe(monkeypatch: pytest.MonkeyPatch, root: Path, exc: OSError) -> None:
     """`_uninventoried_symlink_target` probes the resolved target with `exists()`."""
     (root / "alias.md").symlink_to(root / "docs" / "a.md")
     real = Path.exists

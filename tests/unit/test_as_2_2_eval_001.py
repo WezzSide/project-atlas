@@ -45,9 +45,7 @@ def _generate_holdout_expected(repo_root: Path) -> dict[str, str]:
 
 
 @pytest.fixture
-def scoring_capability(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> dict[str, str]:
+def scoring_capability(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, str]:
     """Arm scoring capability against a runtime-generated, gitignored map.
 
     Returns the generated expected map so tests assert via the map, not literals.
@@ -56,9 +54,7 @@ def scoring_capability(
     private_dir = tmp_path / "private"
     private_dir.mkdir()
     map_path = private_dir / "eval_holdout_expected.json"
-    map_path.write_text(
-        json.dumps(expected, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
+    map_path.write_text(json.dumps(expected, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     monkeypatch.setenv(EVAL_SCORING_CAPABILITY_ENV, "1")
     monkeypatch.setenv(EVAL_HOLDOUT_EXPECTED_PATH_ENV, str(map_path))
     return expected

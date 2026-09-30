@@ -154,9 +154,7 @@ def test_f10_a_poisoned_field_cannot_brick_the_projection(tmp_path: pathlib.Path
 def test_f10_a_well_formed_render_is_still_accepted() -> None:
     """Positive control: the fix must not widen refusal."""
     rendered = f"{GENERATED_START}\nfresh\n{GENERATED_END}\n{HUMAN_OPEN}\nkept\n{HUMAN_CLOSE}\n"
-    merged = gp._merge_protected_regions(
-        existing=NO_HUMAN_PRIOR, rendered=rendered, path="n.md"
-    )
+    merged = gp._merge_protected_regions(existing=NO_HUMAN_PRIOR, rendered=rendered, path="n.md")
     assert "fresh" in merged
     assert "outer text" in merged, "the disclosed graph contract must still preserve outside text"
 
@@ -170,9 +168,9 @@ def test_f10_the_disclosed_f4_asymmetry_is_deliberate_and_remains() -> None:
     by someone "fixing the asymmetry" wholesale.
     """
     rendered = "no span at all\n"
-    assert merge_protected_regions(
-        existing=NO_HUMAN_PRIOR, rendered=rendered, path="n.md"
-    ) == rendered
+    assert (
+        merge_protected_regions(existing=NO_HUMAN_PRIOR, rendered=rendered, path="n.md") == rendered
+    )
     with pytest.raises(GraphProjectionError):
         gp._merge_protected_regions(existing=NO_HUMAN_PRIOR, rendered=rendered, path="n.md")
 

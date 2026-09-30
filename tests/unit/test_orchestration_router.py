@@ -127,9 +127,7 @@ def test_scenario_b_target_moved_recertification() -> None:
 
 
 def test_scenario_c_merge_eligible_owner_gate() -> None:
-    _envelope, decision, routed = _pipeline(
-        _payload(role="integration", state="MERGE_ELIGIBLE")
-    )
+    _envelope, decision, routed = _pipeline(_payload(role="integration", state="MERGE_ELIGIBLE"))
     assert decision.next_transition == NextTransition.OWNER_REQUIRED
     assert routed.route_kind == RouteKind.OWNER_GATE
     assert routed.owner_gate is True

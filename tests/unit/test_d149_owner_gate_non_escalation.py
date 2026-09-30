@@ -452,9 +452,7 @@ def test_existing_ready_node_stable(tmp_path: Path) -> None:
     assert _snapshot(load_nodes(root)["ready"]) == prior
 
 
-def test_cross_project_credential_rejected(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_cross_project_credential_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     estate_a = _init_estate(tmp_path / "estate-a", project_id="alpha")
     estate_b = _init_estate(tmp_path / "estate-b", project_id="beta")
     root = _init_atlas_repo(tmp_path, estate_a)
@@ -742,6 +740,7 @@ def test_reconciler_preserves_superseded_non_estate_credential(tmp_path: Path) -
     assert after.DEPENDENCIES == ["SOME_OTHER_CREDENTIAL"]
     assert "AUTHENTIC_ESTATE_ROOT" not in after.DEPENDENCIES
 
+
 # ---------------------------------------------------------------------------
 # D-176 / D149-001 — residual-dependency non-widening ADV matrix
 # ---------------------------------------------------------------------------
@@ -873,9 +872,7 @@ def test_d149_001_case_d_immutable_gates_unchanged(tmp_path: Path, gate: str) ->
 
 
 @pytest.mark.parametrize("status", ["SUPERSEDED", "DISPATCHED", "RUNNING", "COMPLETED"])
-def test_d149_001_case_f_terminal_statuses_not_resurrected(
-    tmp_path: Path, status: str
-) -> None:
+def test_d149_001_case_f_terminal_statuses_not_resurrected(tmp_path: Path, status: str) -> None:
     estate = _init_estate(tmp_path / "estate")
     root = _init_atlas_repo(tmp_path, estate)
     persist_nodes(
@@ -936,6 +933,7 @@ def test_d149_001_repeated_refresh_idempotent_with_residual(tmp_path: Path) -> N
     assert _snapshot(load_nodes(root)["id"]) == snap
     assert snap["OWNER_GATE"] == "CREDENTIAL"
     assert snap["DEPENDENCIES"] == ["HUMAN_APPROVAL"]
+
 
 def test_d149_001_none_gate_with_residual_restored_to_credential(tmp_path: Path) -> None:
     """Absolute invariant: residual deps must not leave OWNER_GATE as NONE."""

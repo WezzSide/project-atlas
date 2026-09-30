@@ -32,15 +32,11 @@ from project_atlas.schema import validate_record
 PROJECT_A = "proj-alpha"
 
 
-def hybrid_retrieve(
-    vault: Path, *, project_id: str = PROJECT_A, **kwargs: Any
-) -> dict[str, Any]:
+def hybrid_retrieve(vault: Path, *, project_id: str = PROJECT_A, **kwargs: Any) -> dict[str, Any]:
     return _hybrid_retrieve(vault, project_id=project_id, **kwargs)
 
 
-def compile_context(
-    vault: Path, *, project_id: str = PROJECT_A, **kwargs: Any
-) -> dict[str, Any]:
+def compile_context(vault: Path, *, project_id: str = PROJECT_A, **kwargs: Any) -> dict[str, Any]:
     return _compile_context(vault, project_id=project_id, **kwargs)
 
 
@@ -156,9 +152,7 @@ def test_compile_context_budget_and_write(tmp_path: Path) -> None:
     assert package["entry_count"] == 1
     assert package["truncated"] is True
     assert package["authority"]["estate_facts_invented"] is False
-    assert package["output_path"] == (
-        "generated/context-compiler/demo-pack-context-compiler.json"
-    )
+    assert package["output_path"] == ("generated/context-compiler/demo-pack-context-compiler.json")
     assert not Path(package["output_path"]).is_absolute()
     out = vault / "generated" / "context-compiler" / "demo-pack-context-compiler.json"
     assert out.is_file()
@@ -404,9 +398,7 @@ def test_compile_context_output_contract_golden(tmp_path: Path) -> None:
         "profile_id": "p0-readonly",
         "schema_version": 1,
         "truncated": False,
-        "truth_boundary": (
-            "CONTEXT COMPILER ≠ ESTATE FACTS / ≠ PILOT / ≠ LLM AUTHORITY"
-        ),
+        "truth_boundary": ("CONTEXT COMPILER ≠ ESTATE FACTS / ≠ PILOT / ≠ LLM AUTHORITY"),
     }
     assert package == expected
     assert package_to_json(package) == package_to_json(expected)
@@ -678,11 +670,9 @@ def test_compile_context_p2_freshness_conservative_multi_provenance(
                 "project_id": PROJECT_A,
                 "provenance": [{"ref": "sources/a.md"}],
             },
-            *json.loads(
-                (vault / "state" / "claims" / "claims.json").read_text(
-                    encoding="utf-8"
-                )
-            )["claims"],
+            *json.loads((vault / "state" / "claims" / "claims.json").read_text(encoding="utf-8"))[
+                "claims"
+            ],
         ]
     }
     (vault / "state" / "claims" / "claims.json").write_text(

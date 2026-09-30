@@ -133,16 +133,12 @@ def test_sec009_read_credential_read_only_no_mutate(tmp_path: Path) -> None:
     creds = session_credentials(server)
     try:
         assert creds.privileged_token is not None
-        code, body = _request(
-            host, port, "/v1/meta", headers=creds.auth_headers()
-        )
+        code, body = _request(host, port, "/v1/meta", headers=creds.auth_headers())
         assert code == 200
         assert body["session_auth"] is True
         assert body["operator_id"].endswith("-read")
         # Read principal must not carry privileged caps.
-        code_a, authz = _request(
-            host, port, "/v1/authz", headers=creds.auth_headers()
-        )
+        code_a, authz = _request(host, port, "/v1/authz", headers=creds.auth_headers())
         assert code_a == 200
         caps = set(authz["capabilities"])
         assert "api.read" in caps
@@ -233,9 +229,7 @@ def test_sec009_mint_high_entropy_distinct_tokens() -> None:
     assert ca.read_token != cb.read_token
     assert ca.privileged_token != cb.privileged_token
     assert set(ca.read_operator.capabilities).issubset(READ_ONLY_CAPABILITIES)
-    priv_caps = (
-        ca.privileged_operator.capabilities if ca.privileged_operator else set()
-    )
+    priv_caps = ca.privileged_operator.capabilities if ca.privileged_operator else set()
     assert "web.action" in priv_caps
 
 

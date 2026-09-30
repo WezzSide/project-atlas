@@ -51,15 +51,10 @@ def test_nested_receipt_recognized_with_addressable_nested_review() -> None:
     assert fields["yamlpath:package"].field_class is ReceiptFieldClass.USER_FACING_CLAIM
     assert "yamlpath:architecture.governor_review" in fields
     # Non-universal fields (merged_to_main_at in 2/31) are provenance, never assumed.
-    assert (
-        fields["yamlpath:merged_to_main_at"].field_class
-        is ReceiptFieldClass.PROVENANCE_METADATA
-    )
+    assert fields["yamlpath:merged_to_main_at"].field_class is ReceiptFieldClass.PROVENANCE_METADATA
     # Diagnostic-only detail blocks (P0 synthesis section 6).
     validation_fields = [
-        field
-        for locator, field in fields.items()
-        if locator.startswith("yamlpath:validation")
+        field for locator, field in fields.items() if locator.startswith("yamlpath:validation")
     ]
     assert validation_fields
     assert all(
@@ -82,9 +77,7 @@ def test_flat_receipt_field_classification() -> None:
     assert fields["yamlpath:merge_commit"].field_class is ReceiptFieldClass.PROVENANCE_METADATA
     assert fields["yamlpath:branch"].field_class is ReceiptFieldClass.PROVENANCE_METADATA
     validation_fields = [
-        field
-        for locator, field in fields.items()
-        if locator.startswith("yamlpath:validation")
+        field for locator, field in fields.items() if locator.startswith("yamlpath:validation")
     ]
     assert validation_fields
     assert all(

@@ -27,9 +27,7 @@ def _snapshot(vault: Path) -> dict[str, str]:
     out: dict[str, str] = {}
     for path in sorted(vault.rglob("*")):
         if path.is_file():
-            out[path.relative_to(vault).as_posix()] = hashlib.sha256(
-                path.read_bytes()
-            ).hexdigest()
+            out[path.relative_to(vault).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
     return out
 
 

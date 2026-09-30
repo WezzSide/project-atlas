@@ -27,9 +27,7 @@ from project_atlas.cli import EXIT_OK, main
 from project_atlas.discovery import discover
 from project_atlas.ingestion import ingest
 
-pytestmark = pytest.mark.skipif(
-    os.name == "nt", reason="POSIX-only filenames and permission modes"
-)
+pytestmark = pytest.mark.skipif(os.name == "nt", reason="POSIX-only filenames and permission modes")
 
 # `pytestmark` skips execution, not import: a decorator argument is still
 # evaluated at collection time on every platform, and `os.geteuid` does not
@@ -213,9 +211,9 @@ def test_non_utf8_filename_is_reported_not_fatal(
 
     assert "README.md" in records, "the rest of the tree still discovers"
     assert not any("bad-" in path for path in records), "never recorded as a source claim"
-    assert any(
-        "undecodable filename" in message for message in caplog.messages
-    ), "the skip must be reported, not silent"
+    assert any("undecodable filename" in message for message in caplog.messages), (
+        "the skip must be reported, not silent"
+    )
 
 
 def test_canonical_normalization_collision_is_reported_not_fatal(
@@ -333,9 +331,9 @@ def test_unreadable_directory_is_reported_not_silently_lost(
         dark.chmod(0o755)
 
     assert "dark/b.md" not in records, "contents were never read, so never claimed"
-    assert any(
-        "inaccessible discovery scope" in message for message in caplog.messages
-    ), "the lost scope must be observable, not silent"
+    assert any("inaccessible discovery scope" in message for message in caplog.messages), (
+        "the lost scope must be observable, not silent"
+    )
 
 
 def test_inventory_is_deterministic_across_creation_order(tmp_path: Path) -> None:
@@ -403,9 +401,9 @@ def test_unexpected_document_in_reserved_scope_is_not_silently_lost(
         manifest = _discover(tmp_path, source)
 
     records = _by_path(manifest)
-    assert not any(
-        ".atlas-inbox" in path for path in records
-    ), "reserved scope stays out of sources"
+    assert not any(".atlas-inbox" in path for path in records), (
+        "reserved scope stays out of sources"
+    )
 
     warned = [m for m in caplog.messages if "reserved agent-event scope" in m]
     assert any("agent-events/loose.md" in m for m in warned), "top-level drop must be observable"
@@ -535,9 +533,7 @@ def test_symlink_escaping_the_root_is_reported_not_silently_lost(
     assert any(str(outside / "buried") in m for m in escaped), "target must be named"
 
 
-def test_non_escaping_symlinks_stay_quiet(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_non_escaping_symlinks_stay_quiet(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     """The escape diagnostic must not fire where nothing is actually lost.
 
     An in-root target is already inventoried under its own real path, a
@@ -743,9 +739,9 @@ def test_event_inventory_reports_unreadable_scope_without_relying_on_the_walk(
     events = manifest["agent_events"]
     assert isinstance(events, list)
     assert [(e["project_id"], e["event_id"]) for e in events] == [("ok", "evt-2")]
-    assert any(
-        "agent-event scope not readable" in m and "locked" in m for m in caplog.messages
-    ), "the inventory must name the scope it could not read"
+    assert any("agent-event scope not readable" in m and "locked" in m for m in caplog.messages), (
+        "the inventory must name the scope it could not read"
+    )
 
 
 @pytest.mark.skipif(_IS_ROOT, reason="root reads regardless of mode bits")

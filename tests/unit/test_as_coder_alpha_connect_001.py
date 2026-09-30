@@ -98,11 +98,7 @@ def test_connect_compiles_project_and_is_idempotent(tmp_path: Path) -> None:
 
     # Rediscover must not treat in-tree vault files as active sources.
     rediscovered = discover(project)
-    active = [
-        row["path"]
-        for row in rediscovered["sources"]
-        if not row.get("exclusion_reason")
-    ]
+    active = [row["path"] for row in rediscovered["sources"] if not row.get("exclusion_reason")]
     assert all(".atlas-vault/" not in path for path in active)
     assert all(not path.startswith(".atlas/") for path in active)
     assert first["documents_discovered"] == len(active)

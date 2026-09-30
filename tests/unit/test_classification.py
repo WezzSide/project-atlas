@@ -60,9 +60,7 @@ def test_work_package_path_tier() -> None:
 def test_backlog_roadmap_worklog_tier() -> None:
     assert classify_source("docs/backlog.md", "# Backlog\n").source_kind == "backlog"
     assert classify_source("WORKLOG.md", "# Log\n").source_kind == "worklog"
-    assert (
-        classify_source("docs/implementation-roadmap.md", "# R\n").source_kind == "roadmap"
-    )
+    assert classify_source("docs/implementation-roadmap.md", "# R\n").source_kind == "roadmap"
     assert classify_source("docs/master-roadmap.md", "# R\n").source_kind == "roadmap"
 
 

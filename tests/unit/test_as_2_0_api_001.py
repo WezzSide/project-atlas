@@ -151,9 +151,7 @@ def test_valid_empty_claims_file_is_not_no_data(tmp_path: Path) -> None:
 def test_no_match_filter_is_distinct_from_no_data(tmp_path: Path) -> None:
     vault = tmp_path / "vault"
     _write_claims(vault, "harbor-api", [_row("claim-a", "PostgreSQL 16")])
-    evidence = read_intelligence_evidence(
-        vault, "harbor-api", claim_id="claim-missing"
-    )
+    evidence = read_intelligence_evidence(vault, "harbor-api", claim_id="claim-missing")
     assert evidence["honesty"] == "NO_MATCH"
     assert evidence["assessments"] == []
 
@@ -298,7 +296,7 @@ def test_api_server_registers_get_only_intelligence_routes() -> None:
     assert 'if path == "/v1/conflicts":' in text
     assert "replaces_v1_conflicts" not in text.split('if path == "/v1/conflicts":')[1][:400]
     assert 'path not in {"/v1/actions", "/v1/captures/conversation"}' in text
-    assert "require(\"api.write\")" not in text
+    assert 'require("api.write")' not in text
     assert "vault.write" not in text
 
 

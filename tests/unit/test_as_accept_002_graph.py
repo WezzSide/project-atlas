@@ -131,9 +131,7 @@ def _module_source_imports_graph(module_name: str) -> list[str]:
                 ):
                     hits.append(alias.name)
         elif isinstance(node, ast.ImportFrom) and node.module:
-            if node.module in _GRAPH_MODULE_NAMES or node.module.startswith(
-                "project_atlas.graph_"
-            ):
+            if node.module in _GRAPH_MODULE_NAMES or node.module.startswith("project_atlas.graph_"):
                 hits.append(node.module)
             elif node.module == "project_atlas":
                 for alias in node.names:
@@ -154,9 +152,7 @@ def test_ax_grf_001_graph_not_authority_query_and_bytes_stable(tmp_path: Path) -
     assert "AUTHORITY" in TRUTH_BOUNDARY
 
     before_answer = answer_to_json(
-        query_knowledge(
-            vault, "project-atlas", "wp:AS-ID-001", "title", kind="authoritative"
-        )
+        query_knowledge(vault, "project-atlas", "wp:AS-ID-001", "title", kind="authoritative")
     )
     before_truth = {p.as_posix(): _sha256(p) for p in truth_plane_paths(vault)}
     before_tree = hash_tree(vault / "state")
@@ -174,9 +170,7 @@ def test_ax_grf_001_graph_not_authority_query_and_bytes_stable(tmp_path: Path) -
         assert relative.startswith("generated/graph/")
 
     after_answer = answer_to_json(
-        query_knowledge(
-            vault, "project-atlas", "wp:AS-ID-001", "title", kind="authoritative"
-        )
+        query_knowledge(vault, "project-atlas", "wp:AS-ID-001", "title", kind="authoritative")
     )
     assert after_answer == before_answer
     after_truth = {p.as_posix(): _sha256(p) for p in truth_plane_paths(vault)}
@@ -248,9 +242,7 @@ def test_ax_grf_007_consumer_isolation_core_graph_optional(tmp_path: Path) -> No
     # Fresh vault — no generated/graph artifacts — Core query still works.
     vault = materialize_knowledge_vault(tmp_path)
     assert not (vault / "generated" / "graph").exists()
-    answer = query_knowledge(
-        vault, "project-atlas", "wp:AS-ID-001", "title", kind="authoritative"
-    )
+    answer = query_knowledge(vault, "project-atlas", "wp:AS-ID-001", "title", kind="authoritative")
     payload = answer_to_json(answer)
     assert '"package": "AS-CORE-007"' in payload or '"package":"AS-CORE-007"' in payload
     assert '"status": "ok"' in payload
@@ -284,9 +276,7 @@ print("AX-GRF-007-OK")
 def test_ax_grf_008_resolve_replay_byte_identical(tmp_path: Path) -> None:
     """AX-GRF-008: resolve replay — byte-identical emits x2 (NFR-001)."""
     nodes = _resolve_fixture_nodes()
-    first = resolve_nodes(
-        nodes, project_id="project-atlas", source_artifact_refs=_refs()
-    )
+    first = resolve_nodes(nodes, project_id="project-atlas", source_artifact_refs=_refs())
     second = resolve_nodes(
         list(reversed(nodes)),
         project_id="project-atlas",

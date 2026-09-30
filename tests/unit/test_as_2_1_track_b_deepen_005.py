@@ -47,9 +47,7 @@ def test_api_mission_workspace_routes(tmp_path: Path) -> None:
             meta = json.loads(resp.read().decode("utf-8"))
         assert meta["mission_live"] is True
         assert meta["workspace_live"] is True
-        with urlopen(
-            Request(f"http://{host}:{port}/v1/mission", headers=auth), timeout=2
-        ) as resp:
+        with urlopen(Request(f"http://{host}:{port}/v1/mission", headers=auth), timeout=2) as resp:
             mission = json.loads(resp.read().decode("utf-8"))
         assert mission["pilot_estate_rows"] == []
         with urlopen(
@@ -65,15 +63,9 @@ def test_l3_loop_runs_version(tmp_path: Path) -> None:
     vault = tmp_path / "v"
     vault.mkdir()
     arm_scheduler(vault, arm_id="arm-loop")
-    op = elevated_operator(
-        "l3-loop-op", extra={"autonomy.l3", "scheduler.dispatch"}
-    )
-    enable_bounded_l3(
-        vault, policy_id="pol-loop", arm_id="arm-loop", operator=op, max_jobs=2
-    )
-    report = run_bounded_l3_loop(
-        vault, policy_id="pol-loop", jobs=["version"], operator=op
-    )
+    op = elevated_operator("l3-loop-op", extra={"autonomy.l3", "scheduler.dispatch"})
+    enable_bounded_l3(vault, policy_id="pol-loop", arm_id="arm-loop", operator=op, max_jobs=2)
+    report = run_bounded_l3_loop(vault, policy_id="pol-loop", jobs=["version"], operator=op)
     assert report["l3_loop"] is True
     assert report["promoted"] is False
     assert report["jobs_run"][0]["job"] == "version"
@@ -84,12 +76,8 @@ def test_l3_loop_rejects_over_max(tmp_path: Path) -> None:
     vault = tmp_path / "v"
     vault.mkdir()
     arm_scheduler(vault, arm_id="arm-loop")
-    op = elevated_operator(
-        "l3-loop-op", extra={"autonomy.l3", "scheduler.dispatch"}
-    )
-    enable_bounded_l3(
-        vault, policy_id="pol-max", arm_id="arm-loop", operator=op, max_jobs=1
-    )
+    op = elevated_operator("l3-loop-op", extra={"autonomy.l3", "scheduler.dispatch"})
+    enable_bounded_l3(vault, policy_id="pol-max", arm_id="arm-loop", operator=op, max_jobs=1)
     with pytest.raises(AutonomyL3Error, match="exceed-max"):
         run_bounded_l3_loop(
             vault,
@@ -111,9 +99,7 @@ def test_oai_import_rejects_oversized(tmp_path: Path) -> None:
 def test_web_stubs_demo_isolated() -> None:
     root = Path(__file__).resolve().parents[2]
     for name in ("sample-mission-control.json", "sample-workspace.json"):
-        payload = json.loads(
-            (root / "apps" / "web" / "public" / name).read_text(encoding="utf-8")
-        )
+        payload = json.loads((root / "apps" / "web" / "public" / name).read_text(encoding="utf-8"))
         assert payload["demo_isolated"] is True
         assert payload["pilot_estate_rows"] == []
         assert payload.get("authentic_pilot") is False

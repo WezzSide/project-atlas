@@ -29,9 +29,7 @@ def test_release_documents_pin_freeze_tip_and_certified_yes() -> None:
 
 
 def test_release_owner_gate_state_and_fixture_pilot_waiver() -> None:
-    combined = "\n".join(
-        (RELEASE_DIR / name).read_text(encoding="utf-8") for name in DOCUMENTS
-    )
+    combined = "\n".join((RELEASE_DIR / name).read_text(encoding="utf-8") for name in DOCUMENTS)
     assert "WEB APPLICATION ACCEPTED = YES" in combined
     assert "FIXTURE-ONLY CERT UNDER OWNER WAIVER = YES" in combined
     assert "Authentic estate PILOT = NO" in combined

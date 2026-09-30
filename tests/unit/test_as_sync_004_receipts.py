@@ -113,9 +113,7 @@ def test_malformed_queue_order_fails_closed() -> None:
         build_dry_run_sync_receipts(queue)
 
 
-def test_write_is_limited_to_generated_ops(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_write_is_limited_to_generated_ops(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     report = build_dry_run_sync_receipts(_queue())
     path = write_dry_run_sync_receipts(tmp_path, report)
     expected = (tmp_path / "generated" / "ops" / "sync-receipts-dry-run.json").resolve()

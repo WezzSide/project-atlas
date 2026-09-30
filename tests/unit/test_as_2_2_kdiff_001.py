@@ -181,9 +181,7 @@ def _hash_tree(root: Path) -> dict[str, str]:
     out: dict[str, str] = {}
     for path in sorted(root.rglob("*")):
         if path.is_file():
-            out[path.relative_to(root).as_posix()] = hashlib.sha256(
-                path.read_bytes()
-            ).hexdigest()
+            out[path.relative_to(root).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
     return out
 
 
@@ -496,9 +494,7 @@ def test_missing_claims_state_fails_closed(tmp_path: Path) -> None:
 
 def test_subject_cap_bounds_and_truncates(tmp_path: Path) -> None:
     vault = _build_matrix_vault(tmp_path)
-    snapshot = read_as_of(
-        vault, project_id="proj-a", as_of_valid_time=T1, subject_cap=2
-    )
+    snapshot = read_as_of(vault, project_id="proj-a", as_of_valid_time=T1, subject_cap=2)
     assert snapshot["cell_count"] == 2
     assert snapshot["truncated"] is True
     assert snapshot["caps"]["subject_cap"] == 2
@@ -596,7 +592,5 @@ def test_cli_operational_error_exit_one(tmp_path: Path) -> None:
 
     vault = tmp_path / "empty-vault"
     vault.mkdir()
-    code = cli_main(
-        ["kdiff", "--vault", str(vault), "--project", "ghost", "--as-of", T1]
-    )
+    code = cli_main(["kdiff", "--vault", str(vault), "--project", "ghost", "--as-of", T1])
     assert code == 1

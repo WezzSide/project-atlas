@@ -99,9 +99,7 @@ def test_stale_as_current_fails_closed(tmp_path: Path) -> None:
         vault / "generated" / "ops" / "atlas3" / "memory" / "harbor-api" / "reconcile.json",
         {
             "reconciliation": {
-                "items": [
-                    {"project_id": "harbor-api", "provider": "chatgpt", "text": "old"}
-                ],
+                "items": [{"project_id": "harbor-api", "provider": "chatgpt", "text": "old"}],
                 "stale_memories": [
                     {
                         "project_id": "harbor-api",
@@ -139,9 +137,7 @@ def test_foreign_memory_fails_closed(tmp_path: Path) -> None:
         vault / "generated" / "ops" / "atlas3" / "memory" / "harbor-api" / "reconcile.json",
         {
             "reconciliation": {
-                "items": [
-                    {"project_id": "foreign-api", "provider": "chatgpt", "text": "leak"}
-                ]
+                "items": [{"project_id": "foreign-api", "provider": "chatgpt", "text": "leak"}]
             }
         },
     )

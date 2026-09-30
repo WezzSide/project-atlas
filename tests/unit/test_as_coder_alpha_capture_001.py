@@ -56,9 +56,7 @@ def test_explicit_capture_and_context_surface(tmp_path: Path) -> None:
     assert "## Session memory (captures)" in md
     assert "Wired capture defaults" in md
     assert "Keep UNKNOWN honest" in md
-    assert "generated_at" not in json.loads(
-        (vault / report["path"]).read_text(encoding="utf-8")
-    )
+    assert "generated_at" not in json.loads((vault / report["path"]).read_text(encoding="utf-8"))
 
 
 def test_handoff_semi_auto_capture(tmp_path: Path) -> None:

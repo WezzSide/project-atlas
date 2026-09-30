@@ -32,9 +32,7 @@ def test_ax2_mix_006_reconciled_cli_exposes_diag_failure_and_ops_health(
 
     # Success path remains 007 answer JSON (firewall).
     lib_ok = answer_to_json(
-        query_knowledge(
-            vault, "project-atlas", "wp:AS-ID-001", "title", kind="authoritative"
-        )
+        query_knowledge(vault, "project-atlas", "wp:AS-ID-001", "title", kind="authoritative")
     )
     code_ok = cli_main(
         [
@@ -60,9 +58,7 @@ def test_ax2_mix_006_reconciled_cli_exposes_diag_failure_and_ops_health(
     auth_path = vault / "state" / "authoritative-state" / "project-atlas.json"
     raw = json.loads(auth_path.read_text(encoding="utf-8"))
     raw["compilation_id"] = "compile-mix006-drift"
-    auth_path.write_text(
-        json.dumps(raw, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
+    auth_path.write_text(json.dumps(raw, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     code_fail = cli_main(
         [
             "query",
@@ -84,9 +80,7 @@ def test_ax2_mix_006_reconciled_cli_exposes_diag_failure_and_ops_health(
 
     # Fresh vault for ops health (authoritative state above is drifted).
     ops_vault = materialize_knowledge_vault(tmp_path / "ops")
-    code_health = cli_main(
-        ["ops", "health", "--vault", str(ops_vault), "--json", "--no-write"]
-    )
+    code_health = cli_main(["ops", "health", "--vault", str(ops_vault), "--json", "--no-write"])
     assert code_health == 0
     health = json.loads(capsys.readouterr().out)
     assert health["schema"] == "atlas.ops.health_snapshot.v1"
@@ -118,9 +112,7 @@ def test_ax2_mix_007_partial_evidence_honesty_with_authoritative_claims(
     assert snapshot["authority_plane"] == "none"
 
     lib = answer_to_json(
-        query_knowledge(
-            vault, "project-atlas", "wp:AS-ID-001", "title", kind="authoritative"
-        )
+        query_knowledge(vault, "project-atlas", "wp:AS-ID-001", "title", kind="authoritative")
     )
     code = cli_main(
         [

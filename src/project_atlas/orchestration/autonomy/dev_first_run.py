@@ -118,9 +118,16 @@ def build_package(work: WorkItem | None = None) -> dict[str, Any]:
             "profile": "github_hosted",
             "workflow": VERIFY_WORKFLOW,
             "report_artifact": REPORT_ARTIFACT,
-            "policy": "PASS iff verifier verdict VERIFIED for the source run AND every check run "
-            "on the exact result head concluded success (draft evidence PR opened by the adapter); "
-            "UNESTABLISHED => no verdict",
+            "policy": "PASS iff verifier verdict VERIFIED for the source run AND every REQUIRED "
+            "check (control-plane + the 3 quality jobs) is present, completed and success on the "
+            "exact result head, and no other check failed (draft evidence PR opened by the "
+            "adapter); UNESTABLISHED or missing/in-progress checks => no verdict",
+            "required_checks": [
+                "control-plane",
+                "quality (ubuntu-latest, 3.12, full)",
+                "quality (ubuntu-latest, 3.13, compat)",
+                "quality (windows-latest, 3.12, windows)",
+            ],
         },
         "failure_ceiling": {
             "max_attempts": w.max_attempts,
@@ -128,7 +135,8 @@ def build_package(work: WorkItem | None = None) -> dict[str, Any]:
         },
         "abort_conditions": [
             "main is not at the sealed base revision before dispatch",
-            "run correlation ambiguous",
+            "run correlation ambiguous (correlation is serialised: one unbound dispatch at a time; "
+            "no foreign/manual dispatch of atlas-agent-execute during the run)",
             "result branch moves after ingestion",
             "result touches forbidden or out-of-scope paths",
             "verifier verdict REJECTED/UNESTABLISHED repeatedly or attempt ceiling reached",

@@ -45,9 +45,7 @@ def test_autonomy_rejects_live(tmp_path: Path) -> None:
     vault = tmp_path / "v"
     vault.mkdir()
     with pytest.raises(AutonomyLevelError, match="live-forbidden"):
-        build_autonomy_level_catalog(
-            vault, record_id="auto-a", enable_live_autonomy=True
-        )
+        build_autonomy_level_catalog(vault, record_id="auto-a", enable_live_autonomy=True)
 
 
 def test_docs() -> None:

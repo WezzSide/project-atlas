@@ -32,9 +32,7 @@ from project_atlas.orchestration.origination.projection import load_projection
 
 
 def _run_git(repo: Path, *args: str) -> str:
-    result = subprocess.run(
-        ["git", *args], cwd=repo, check=True, capture_output=True, text=True
-    )
+    result = subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True)
     return result.stdout.strip()
 
 
@@ -958,9 +956,7 @@ def test_reverse_transition_blocker_removed_lets_a_later_revision_materialize(
     a_record = next(r for r in projection.records if r.origination_identity == a_identity)
     b_record = next(r for r in projection.records if r.origination_identity == b_identity)
     c_record = next(
-        r
-        for r in projection.records
-        if r.origination_identity not in {a_identity, b_identity}
+        r for r in projection.records if r.origination_identity not in {a_identity, b_identity}
     )
 
     # A: historical, superseded when B first revoked it.
@@ -1044,9 +1040,7 @@ def test_multiple_revisions_maintain_at_most_one_current_active_revision_through
     assert c_result["materialized_count"] == 1
     assert len(_active_package_ids()) == 1
     c_identity = next(
-        r.origination_identity
-        for r in load_projection(store).records
-        if r.state == "MATERIALIZED"
+        r.origination_identity for r in load_projection(store).records if r.state == "MATERIALIZED"
     )
 
     _commit_roadmap("Feature X (D, blocked again)", blocked=True)

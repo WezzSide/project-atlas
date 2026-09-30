@@ -128,9 +128,7 @@ def _claims_vault(
     return vault
 
 
-def _ask(
-    vault: Path, question: str, *, project_id: str = "harbor-api"
-) -> dict[str, Any]:
+def _ask(vault: Path, question: str, *, project_id: str = "harbor-api") -> dict[str, Any]:
     answer = ask_atlas_2(
         vault,
         question=question,
@@ -320,9 +318,7 @@ def test_d178_version_control_use_keeps_relational_use_required(tmp_path: Path) 
     """'Does Helix use version control?' must keep use* required (not version-scaffold)."""
     from project_atlas.ask2 import _question_claim_terms
 
-    terms = _question_claim_terms(
-        "Does Helix use version control?", project_id="helix"
-    )
+    terms = _question_claim_terms("Does Helix use version control?", project_id="helix")
     assert "use" in terms or "uses" in terms
     assert "version" not in terms  # attribute filler
     assert "control" in terms

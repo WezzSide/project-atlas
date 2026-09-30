@@ -113,9 +113,7 @@ def test_web_hook_source_types_present() -> None:
     # Guard TS contract via public sample stub shape used by demo isolation.
     root = Path(__file__).resolve().parents[2]
     stub = json.loads(
-        (root / "apps" / "web" / "public" / "sample-read-status.json").read_text(
-            encoding="utf-8"
-        )
+        (root / "apps" / "web" / "public" / "sample-read-status.json").read_text(encoding="utf-8")
     )
     assert stub["ui_canonical"] is False
     assert stub["read_plane"] == "stub"
@@ -125,8 +123,6 @@ def test_web_hook_source_types_present() -> None:
 
 def test_adv_docs_suite_lists_surfaces() -> None:
     root = Path(__file__).resolve().parents[2]
-    text = (root / "docs" / "atlas-2.1" / "ADV-LIVE-SUITE.md").read_text(
-        encoding="utf-8"
-    )
+    text = (root / "docs" / "atlas-2.1" / "ADV-LIVE-SUITE.md").read_text(encoding="utf-8")
     for token in ("ADV-2.1-01", "API", "MCP", "AUTHZ", "SCHED", "ASK"):
         assert token in text

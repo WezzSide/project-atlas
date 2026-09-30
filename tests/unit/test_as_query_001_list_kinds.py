@@ -106,9 +106,7 @@ def test_t02_list_authoritative_still_works(tmp_path: Path) -> None:
     assert all(item.kind is QueryKind.AUTHORITATIVE for item in answers)
 
 
-def test_t03_cli_list_temporal(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_t03_cli_list_temporal(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     vault = _materialize_vault(tmp_path)
     code = cli_main(
         [

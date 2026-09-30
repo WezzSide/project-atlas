@@ -153,12 +153,8 @@ def test_policy_bumped_to_hierarchical_fair_v2() -> None:
 def test_1_enumeration_order_independent(tmp_path: Path) -> None:
     estate = tmp_path / "estate"
     expected = _adversarial_estate(estate, noise=520)
-    first = discover_estate(
-        estate, max_project_candidates=40, enumeration_order="name_asc"
-    )
-    second = discover_estate(
-        estate, max_project_candidates=40, enumeration_order="name_desc"
-    )
+    first = discover_estate(estate, max_project_candidates=40, enumeration_order="name_asc")
+    second = discover_estate(estate, max_project_candidates=40, enumeration_order="name_desc")
     assert _paths(first) == _paths(second)
     for name in expected["keepers"]:
         assert name in _names(first)
@@ -225,12 +221,12 @@ def test_6_cap_honesty_over_five_hundred_candidates(tmp_path: Path) -> None:
     assert scan["candidate_selection_policy"] == CANDIDATE_SELECTION_POLICY
 
 
-def test_7_volume_root_never_emitted(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_7_volume_root_never_emitted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     volume = tmp_path / "D"
     (volume / ".git").mkdir(parents=True)
-    _write(volume / ".git" / "config", '[remote "origin"]\n\turl = https://example.invalid/vol.git\n')
+    _write(
+        volume / ".git" / "config", '[remote "origin"]\n\turl = https://example.invalid/vol.git\n'
+    )
     _write(volume / "README.md", "# volume\n")
     _make_proj(volume / "inside")
     _fake_windows_volume(monkeypatch, volume)

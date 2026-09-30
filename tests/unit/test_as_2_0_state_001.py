@@ -171,9 +171,7 @@ def test_missing_source_is_source_health_attention() -> None:
     state = synthesize_project_state(
         "harbor-api",
         [_claim("claim-a", value="PostgreSQL 16")],
-        StateContext(
-            sources=(SourceObservation(source_id="src-a", present=False, deleted=True),)
-        ),
+        StateContext(sources=(SourceObservation(source_id="src-a", present=False, deleted=True),)),
     )
     assert state.source_health_concerns
     assert any(item.kind.value == "source-health" for item in state.attention_candidates)

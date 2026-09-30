@@ -41,9 +41,7 @@ def _claim(
         claim_type=claim_type,
         field=field,
         value=value,
-        provenance=[
-            ProvenanceReference(source_id=source_id, resource=resource, sha256=HASH_A)
-        ],
+        provenance=[ProvenanceReference(source_id=source_id, resource=resource, sha256=HASH_A)],
         authority=AuthorityLevel.PRIMARY,
         confidence=ConfidenceState.HIGH,
         lifecycle=lifecycle,
@@ -89,9 +87,7 @@ def test_explicit_candidate_is_not_inferred() -> None:
                 value="lighthouse",
                 claim_type="dependency-candidate",
                 provenance=(
-                    ProvenanceReference(
-                        source_id="src-a", resource="docs/src-a.md", sha256=HASH_A
-                    ),
+                    ProvenanceReference(source_id="src-a", resource="docs/src-a.md", sha256=HASH_A),
                 ),
             )
         ],

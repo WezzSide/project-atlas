@@ -38,9 +38,7 @@ def test_crosswalk_deepen_docs_present() -> None:
         path = PREP / name
         assert path.is_file(), name
         assert "PREP" in path.read_text(encoding="utf-8").upper()
-    package = (PREP / "AS-2.2-ROADMAP-CROSSWALK-DEEPEN-PREP-001.md").read_text(
-        encoding="utf-8"
-    )
+    package = (PREP / "AS-2.2-ROADMAP-CROSSWALK-DEEPEN-PREP-001.md").read_text(encoding="utf-8")
     assert "ATLAS_2_1_RELEASE_CERTIFIED" in package
     assert "**NO**" in package
     assert "ATLAS_2_2_INTELLIGENCE_IMPLEMENTATION_UNLOCKED" in package
@@ -50,9 +48,7 @@ def test_crosswalk_deepen_extends_base_without_relocation() -> None:
     assert BASE.is_file()
     assert (PREP / "CROSSWALK.md").is_file()
     assert (FIXTURES / "crosswalk.fixture.json").is_file()
-    package = (PREP / "AS-2.2-ROADMAP-CROSSWALK-DEEPEN-PREP-001.md").read_text(
-        encoding="utf-8"
-    )
+    package = (PREP / "AS-2.2-ROADMAP-CROSSWALK-DEEPEN-PREP-001.md").read_text(encoding="utf-8")
     assert "do not dual-own" in package.lower() or "do not relocate" in package.lower()
     assert "roadmap-crosswalk/" in package
 

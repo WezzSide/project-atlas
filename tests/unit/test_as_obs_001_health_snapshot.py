@@ -220,9 +220,7 @@ def test_rollup_rules_critical_high_medium_unknown() -> None:
         == "degraded"
     )
     assert (
-        rollup_health(
-            [{"status": "unknown", "severity": None}, {"status": "ok", "severity": None}]
-        )
+        rollup_health([{"status": "unknown", "severity": None}, {"status": "ok", "severity": None}])
         == "unknown"
     )
     assert rollup_health([{"status": "ok", "severity": None}]) == "healthy"

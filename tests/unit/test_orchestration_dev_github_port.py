@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from project_atlas.orchestration.autonomy.dev_fabric_adapter import AdapterError
+from project_atlas.orchestration.autonomy.dev_fabric_adapter import AdapterError, CheckRun
 from project_atlas.orchestration.autonomy.dev_github_port import GitHubRestPort
 
 
@@ -61,7 +61,10 @@ def test_compare_refuses_truncation_and_reads_merge_base():
         "total_commits": 1,
         "commits": [1],
         "merge_base_commit": {"sha": "a" * 40},
-        "files": [{"filename": "z"}, {"filename": "a"}],
+        "files": [
+            {"filename": "z", "status": "modified"},
+            {"filename": "a", "status": "added"},
+        ],
     }
     c = Stub({("GET", "/compare/"): (200, d)}).compare("a" * 40, "b" * 40)
     assert c.merge_base == "a" * 40 and c.files == ("a", "z")
@@ -113,6 +116,52 @@ def test_check_runs_and_run_mapping():
             ),
         }
     )
-    assert p.check_runs("a" * 40) == {"q": ("completed", "success")}
+    assert p.check_runs("a" * 40) == [CheckRun("q", "completed", "success")]
     r = p.get_run(5)
     assert (r.run_id, r.attempt, r.workflow, r.conclusion) == (5, 2, "x.yml", "success")
+
+
+def test_rename_reports_both_source_and_destination_and_unknown_status_is_refused():
+    d = {
+        "total_commits": 1,
+        "commits": [1],
+        "merge_base_commit": {"sha": "a" * 40},
+        "files": [
+            {
+                "filename": "tests/unit/x.py",
+                "previous_filename": ".github/workflows/ci.yml",
+                "status": "renamed",
+            }
+        ],
+    }
+    c = Stub({("GET", "/compare/"): (200, d)}).compare("a" * 40, "b" * 40)
+    assert c.files == (".github/workflows/ci.yml", "tests/unit/x.py")
+    bad = {**d, "files": [{"filename": "q", "status": "weird"}]}
+    with pytest.raises(AdapterError):
+        Stub({("GET", "/compare/"): (200, bad)}).compare("a" * 40, "b" * 40)
+
+
+def test_check_runs_are_paginated_and_same_name_entries_are_all_kept():
+    page1 = {"check_runs": [{"name": "t", "status": "completed", "conclusion": "failure"}] * 100}
+    page2 = {"check_runs": [{"name": "t", "status": "completed", "conclusion": "success"}]}
+
+    class Paged(GitHubRestPort):
+        def __init__(self):
+            super().__init__("o/r", "T")
+
+        def _request(self, method, path, body=None):
+            return 200, (page1 if path.endswith("&page=1") else page2)
+
+    runs = Paged().check_runs("a" * 40)
+    assert len(runs) == 101 and runs[0].conclusion == "failure" and runs[-1].conclusion == "success"
+
+
+def test_unsafe_names_are_refused_and_pr_lookup_is_open_only():
+    with pytest.raises(AdapterError):
+        GitHubRestPort("not a repo", "T")
+    with pytest.raises(AdapterError):
+        Stub({}).branch_head("a/../b")
+    p = Stub({("GET", "/pulls?"): (200, [])})
+    p.routes[("POST", "/pulls")] = (201, {"number": 3})
+    p.ensure_draft_pr("b", "main", "t", "x")
+    assert "state=open" in p.calls[0][1]

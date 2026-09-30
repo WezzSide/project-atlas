@@ -86,9 +86,7 @@ def test_contributing_md_exists_and_documents_bootstrap_approval_state() -> None
     # bootstrap disposition is "0".
     lowered = text.lower()
     assert (
-        "`0`" in text
-        or "count is 0" in lowered
-        or "required-approving-review count is" in lowered
+        "`0`" in text or "count is 0" in lowered or "required-approving-review count is" in lowered
     )
 
 
@@ -291,9 +289,9 @@ def test_ci_workflow_declares_control_plane_job() -> None:
         for step in job.get("steps", [])
         if isinstance(step, dict) and isinstance(step.get("run"), str)
     ]
-    assert any(
-        "atlas-vault-documentation/tests" in run and "pytest" in run for run in step_runs
-    ), "control-plane must invoke pytest on atlas-vault-documentation/tests directly"
+    assert any("atlas-vault-documentation/tests" in run and "pytest" in run for run in step_runs), (
+        "control-plane must invoke pytest on atlas-vault-documentation/tests directly"
+    )
 
 
 def test_atlas_documentation_gate_remains_workflow_dispatch_only() -> None:
@@ -525,4 +523,3 @@ def test_closure_docs_do_not_claim_live_settings_activated() -> None:
     # Positive: GOVERNANCE must still say settings activation is deferred.
     gov = (REPO_ROOT / "GOVERNANCE.md").read_text(encoding="utf-8").lower()
     assert "deferred" in gov
-

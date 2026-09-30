@@ -266,9 +266,7 @@ def test_ask2_rejects_empty_question(tmp_path: Path) -> None:
 
 def test_ask2_known_grounded_answer(tmp_path: Path) -> None:
     vault = _concept_vault(tmp_path)
-    answer = ask_atlas_2(
-        vault, question="auth token", project_id="demo", kinds=("concept",)
-    )
+    answer = ask_atlas_2(vault, question="auth token", project_id="demo", kinds=("concept",))
     validate_record(answer, "ask-atlas-2-answer")
     assert answer["package_id"] == PACKAGE_ID
     assert answer["status"] == "known"
@@ -302,12 +300,8 @@ def test_ask2_read_only_no_writes(tmp_path: Path) -> None:
 
 def test_ask2_deterministic_repeat_byte_identical(tmp_path: Path) -> None:
     vault = _concept_vault(tmp_path)
-    a = answer_to_json(
-        ask_atlas_2(vault, question="auth", project_id="demo", kinds=("concept",))
-    )
-    b = answer_to_json(
-        ask_atlas_2(vault, question="auth", project_id="demo", kinds=("concept",))
-    )
+    a = answer_to_json(ask_atlas_2(vault, question="auth", project_id="demo", kinds=("concept",)))
+    b = answer_to_json(ask_atlas_2(vault, question="auth", project_id="demo", kinds=("concept",)))
     assert a == b
 
 
@@ -382,9 +376,7 @@ def test_ask2_explicitly_supported_claim_remains_known(tmp_path: Path) -> None:
         legacy_scan=False,
     )
     assert answer["status"] == "known"
-    assert {entry["record_id"] for entry in answer["EVIDENCE"]} == {
-        "atlas-revenue-forecast"
-    }
+    assert {entry["record_id"] for entry in answer["EVIDENCE"]} == {"atlas-revenue-forecast"}
 
 
 # --------------------------------------------------------------------------- #
@@ -393,12 +385,8 @@ def test_ask2_explicitly_supported_claim_remains_known(tmp_path: Path) -> None:
 
 
 def test_ask2_conflict_status_and_sidecar(tmp_path: Path) -> None:
-    vault = _claims_vault(
-        tmp_path, with_conflict=True, portfolio={"a": "stale", "b": "fresh"}
-    )
-    answer = ask_atlas_2(
-        vault, question="status", project_id="demo", kinds=("claim",)
-    )
+    vault = _claims_vault(tmp_path, with_conflict=True, portfolio={"a": "stale", "b": "fresh"})
+    answer = ask_atlas_2(vault, question="status", project_id="demo", kinds=("claim",))
     validate_record(answer, "ask-atlas-2-answer")
     assert answer["status"] == "conflict"
     assert answer["CONFLICTS"]["unresolved_count"] >= 1
@@ -418,9 +406,7 @@ def test_ask2_conflict_status_and_sidecar(tmp_path: Path) -> None:
 
 def test_ask2_stale_freshness_preserved(tmp_path: Path) -> None:
     vault = _claims_vault(tmp_path, portfolio={"b": "stale"})
-    answer = ask_atlas_2(
-        vault, question="owner", project_id="demo", kinds=("claim",)
-    )
+    answer = ask_atlas_2(vault, question="owner", project_id="demo", kinds=("claim",))
     validate_record(answer, "ask-atlas-2-answer")
     assert answer["status"] == "known"
     assert answer["FRESHNESS"]["aggregate"] == "stale"
@@ -432,9 +418,7 @@ def test_ask2_stale_freshness_preserved(tmp_path: Path) -> None:
 def test_ask2_freshness_unknown_never_invented(tmp_path: Path) -> None:
     # No portfolio corroboration → freshness unknown (never invented fresh).
     vault = _claims_vault(tmp_path, portfolio=None)
-    answer = ask_atlas_2(
-        vault, question="owner", project_id="demo", kinds=("claim",)
-    )
+    answer = ask_atlas_2(vault, question="owner", project_id="demo", kinds=("claim",))
     validate_record(answer, "ask-atlas-2-answer")
     assert answer["FRESHNESS"]["aggregate"] == "unknown"
     assert answer["FRESHNESS"]["unknown_count"] >= 1
@@ -585,9 +569,7 @@ def test_ask2_malformed_provenance_fails_closed(tmp_path: Path) -> None:
         },
     )
     with pytest.raises(Ask2Error, match="context-compiler"):
-        ask_atlas_2(
-            vault, question="orphan", project_id="demo", kinds=("concept",)
-        )
+        ask_atlas_2(vault, question="orphan", project_id="demo", kinds=("concept",))
 
 
 # --------------------------------------------------------------------------- #
@@ -607,9 +589,7 @@ def test_ask2_graph_only_relation_not_authority(tmp_path: Path) -> None:
             "edges": [{"src": "gamma-auth-token", "dst": "ghost-graph-node"}],
         },
     )
-    answer = ask_atlas_2(
-        vault, question="auth token", project_id="demo", kinds=("concept",)
-    )
+    answer = ask_atlas_2(vault, question="auth token", project_id="demo", kinds=("concept",))
     validate_record(answer, "ask-atlas-2-answer")
     assert answer["graph_authority"] is False
     assert answer["AUTHORITY"]["graph_authority"] is False

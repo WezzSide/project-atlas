@@ -249,8 +249,7 @@ def test_as_graph_004_incremental_noop_byte_identical(tmp_path: Path) -> None:
     written = write_quarantine_outputs(first, vault=vault)
     assert written
     snapshots = {
-        rel: (vault.joinpath(rel).stat().st_mtime_ns, _sha256(vault / rel))
-        for rel in written
+        rel: (vault.joinpath(rel).stat().st_mtime_ns, _sha256(vault / rel)) for rel in written
     }
 
     prior = load_incremental_state(vault, project_id="demo")

@@ -79,8 +79,8 @@ def test_nav_does_not_copy_from_to_onto_roadmap() -> None:
     text = _nav_text()
     assert "projectAwareHref" in text
     assert "never from=/to=" in text
-    assert "params.get(\"from\")" not in text
-    assert "params.get(\"to\")" not in text
+    assert 'params.get("from")' not in text
+    assert 'params.get("to")' not in text
     helper = text.split("export function projectAwareHref", 1)[1].split(
         "export function ProdNav",
         1,

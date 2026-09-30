@@ -509,9 +509,7 @@ def test_stranger_cli_defaults_after_connect(
     vault = resolve_bound_vault(root)
     project_id = resolve_bound_project_id(root, vault=vault)
     assert project_id
-    assert (
-        main(["attention", "--json"]) == EXIT_OK
-    )
+    assert main(["attention", "--json"]) == EXIT_OK
     assert main(["source-health", "--json"]) == EXIT_OK
     assert main(["brief", "--json"]) == EXIT_OK
     with pytest.raises(ConnectError):

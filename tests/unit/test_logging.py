@@ -43,9 +43,7 @@ def test_formatters_redact_secret_shaped_message_and_context() -> None:
     """SEC-ADV-INT-002: logging boundary redacts interpolated secret canaries."""
     synth = "sk_test_SYNTHETIC_ADV_INT_002_DO_NOT_USE_ABCDEF12"
     msg = f"api_key = '{synth}'"
-    record = logging.LogRecord(
-        "project_atlas.test", logging.INFO, __file__, 1, msg, (), None
-    )
+    record = logging.LogRecord("project_atlas.test", logging.INFO, __file__, 1, msg, (), None)
     record.context = {"detail": msg, "ok": "safe"}  # type: ignore[attr-defined]
 
     json_line = JsonFormatter().format(record)
@@ -171,9 +169,9 @@ def test_handler_is_never_attached_without_a_formatter(
         logging.Logger.addHandler = real_add  # type: ignore[method-assign]
 
     assert seen, "the handler must have been attached"
-    assert all(
-        isinstance(formatter, (JsonFormatter, ConsoleFormatter)) for formatter in seen
-    ), f"handler attached without one of this module's formatters: {seen}"
+    assert all(isinstance(formatter, (JsonFormatter, ConsoleFormatter)) for formatter in seen), (
+        f"handler attached without one of this module's formatters: {seen}"
+    )
     assert isinstance(seen[0], JsonFormatter), "the requested format must be the one attached"
 
 
@@ -266,8 +264,15 @@ def test_cli_log_format_json_emits_only_json_records(tmp_path: Path, with_config
         if os.access(source / "docs" / "locked", os.R_OK):  # pragma: no cover - root
             pytest.skip("filesystem does not enforce directory mode bits")
         completed = _run_cli(
-            ["--log-format", "json", "discover",
-             "--source", str(source), "--output", str(tmp_path / "m.json")],
+            [
+                "--log-format",
+                "json",
+                "discover",
+                "--source",
+                str(source),
+                "--output",
+                str(tmp_path / "m.json"),
+            ],
             cwd=workdir,
         )
     finally:
@@ -320,8 +325,15 @@ def test_cli_failure_path_is_json(tmp_path: Path) -> None:
     """An error record is governed too, not just warnings."""
     workdir = _workdir(tmp_path, with_config=True)
     completed = _run_cli(
-        ["--log-format", "json", "discover",
-         "--source", str(tmp_path / "missing"), "--output", str(tmp_path / "m.json")],
+        [
+            "--log-format",
+            "json",
+            "discover",
+            "--source",
+            str(tmp_path / "missing"),
+            "--output",
+            str(tmp_path / "m.json"),
+        ],
         cwd=workdir,
     )
 

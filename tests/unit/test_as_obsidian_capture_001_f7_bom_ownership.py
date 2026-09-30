@@ -81,9 +81,13 @@ def test_f7_bom_note_preserves_human_bytes(vault: Path) -> None:
     """Recognising the note is not enough — the human edit must still survive."""
     result = capture(vault, build_capture_request(content="f7 human survives"))
     note = _note(vault, result)
-    text = note.read_bytes().decode("utf-8").replace(
-        f"{HUMAN_BEGIN}\n{HUMAN_END}",
-        f"{HUMAN_BEGIN}\nkeep this human line\n{HUMAN_END}",
+    text = (
+        note.read_bytes()
+        .decode("utf-8")
+        .replace(
+            f"{HUMAN_BEGIN}\n{HUMAN_END}",
+            f"{HUMAN_BEGIN}\nkeep this human line\n{HUMAN_END}",
+        )
     )
     note.write_bytes((BOM + text).encode("utf-8"))
 
@@ -173,8 +177,10 @@ def test_f7_bom_is_not_preserved_and_that_is_deliberate(vault: Path) -> None:
     """
     result = capture(vault, build_capture_request(content="f7 bom not preserved"))
     note = _note(vault, result)
-    text = note.read_bytes().decode("utf-8").replace(
-        f"{HUMAN_BEGIN}\n{HUMAN_END}", f"{HUMAN_BEGIN}\nhuman stays\n{HUMAN_END}"
+    text = (
+        note.read_bytes()
+        .decode("utf-8")
+        .replace(f"{HUMAN_BEGIN}\n{HUMAN_END}", f"{HUMAN_BEGIN}\nhuman stays\n{HUMAN_END}")
     )
     note.write_bytes((BOM + text).encode("utf-8"))
     assert note.read_bytes().startswith(b"\xef\xbb\xbf")
@@ -184,4 +190,3 @@ def test_f7_bom_is_not_preserved_and_that_is_deliberate(vault: Path) -> None:
     after = note.read_bytes()
     assert not after.startswith(b"\xef\xbb\xbf"), "BOM survived; update this claim"
     assert b"human stays" in after, "HUMAN bytes must survive regardless"
-

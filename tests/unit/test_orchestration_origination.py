@@ -103,7 +103,7 @@ def test_positive_path_produces_ready_o1_proposal(tmp_path: Path) -> None:
     assert proposal.evidence_completeness == EvidenceCompleteness.COMPLETE
     assert {f.location for f in proposal.acceptance_evidence} == {"tests/test_feature_x.py"}
     # Generic-ness: nothing in the module references "feature-x" or "demo-project".
-    src = (Path(adapter.__file__).read_text() + Path(policy.__file__).read_text())
+    src = Path(adapter.__file__).read_text() + Path(policy.__file__).read_text()
     assert "feature-x" not in src
     assert "demo-project" not in src
 
@@ -377,21 +377,20 @@ def test_multiple_items_have_distinct_identities_stable_across_sibling_edits(
         },
     ]
     _write_roadmap(tmp_path, items)
-    first = {outcome.proposal.title: outcome.proposal for outcome in originate_all(
-        tmp_path, "demo-project"
-    )}
+    first = {
+        outcome.proposal.title: outcome.proposal
+        for outcome in originate_all(tmp_path, "demo-project")
+    }
     assert first["Feature A"].origination_identity != first["Feature B"].origination_identity
     assert first["Feature A"].work_id != first["Feature B"].work_id
 
     items[1] = {**items[1], "title": "Feature B revised"}
     _write_roadmap(tmp_path, items)
-    second = {outcome.proposal.title: outcome.proposal for outcome in originate_all(
-        tmp_path, "demo-project"
-    )}
-    assert (
-        second["Feature A"].origination_identity
-        == first["Feature A"].origination_identity
-    )
+    second = {
+        outcome.proposal.title: outcome.proposal
+        for outcome in originate_all(tmp_path, "demo-project")
+    }
+    assert second["Feature A"].origination_identity == first["Feature A"].origination_identity
 
 
 def test_evidence_traversal_and_symlink_escape_are_not_read(tmp_path: Path) -> None:
@@ -452,9 +451,10 @@ def test_corroborating_file_read_error_is_fail_closed(
         return original(path)
 
     monkeypatch.setattr(Path, "read_bytes", fail_candidate)
-    assert adapter.extract_corroborating_facts(
-        tmp_path, "demo-project", ("tests/test_feature_x.py",)
-    ) == ()
+    assert (
+        adapter.extract_corroborating_facts(tmp_path, "demo-project", ("tests/test_feature_x.py",))
+        == ()
+    )
 
 
 def test_cross_project_contamination_is_structurally_impossible(tmp_path: Path) -> None:
@@ -630,8 +630,7 @@ def test_risk_classifier_owner_held_for_empty_proposed_scope() -> None:
     result = risk.classify(proposed_scope=(), success_criteria=("do the thing",))
     assert result.risk_class == RiskClass.OWNER_HELD
     assert (
-        risk.DisqualifyingAttribute.OUT_OF_SPECIFICATION_COVERAGE
-        in result.disqualifying_attributes
+        risk.DisqualifyingAttribute.OUT_OF_SPECIFICATION_COVERAGE in result.disqualifying_attributes
     )
 
 
@@ -737,9 +736,9 @@ def test_materialize_preserves_active_dependency_edges(tmp_path: Path) -> None:
             },
         ],
     )
-    outcomes = {outcome.proposal.title: outcome for outcome in originate_all(
-        tmp_path, "demo-project"
-    )}
+    outcomes = {
+        outcome.proposal.title: outcome for outcome in originate_all(tmp_path, "demo-project")
+    }
     dependent = outcomes["Feature B"].proposal
     expected = identity.work_id_for("demo-project", "feature-a")
     assert dependent.dependencies == (expected,)
@@ -1051,9 +1050,7 @@ def test_rehydration_lookup_fails_closed_on_two_active_spec_revisions(tmp_path: 
         projection.persist_materialized(store, outcome.proposal.origination_identity, node)
 
     assert projection.find_materialized_work_node(store, first.proposal.work_id) is None
-    projection.mark_terminal(
-        store, first.proposal.origination_identity, node_state="SUPERSEDED"
-    )
+    projection.mark_terminal(store, first.proposal.origination_identity, node_state="SUPERSEDED")
     restored = projection.find_materialized_work_node(store, second.proposal.work_id)
     assert restored is not None
     assert restored.package_id == second.proposal.work_id

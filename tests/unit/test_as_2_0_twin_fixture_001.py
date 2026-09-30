@@ -54,17 +54,8 @@ def test_twin_fixture_rejects_duplicate_projects(tmp_path: Path) -> None:
 def test_twin_fixture_docs_and_schema() -> None:
     assert "twin-projection-fixture" in available_schemas()
     assert (ROOT / "docs" / "AS-2.0-TWIN-FIXTURE-001.md").is_file()
-    assert (
-        ROOT / "docs" / "atlas-2.0" / "fixtures" / "twin-projection" / "README.md"
-    ).is_file()
-    sample = (
-        ROOT
-        / "docs"
-        / "atlas-2.0"
-        / "fixtures"
-        / "twin-projection"
-        / "sample-projection.json"
-    )
+    assert (ROOT / "docs" / "atlas-2.0" / "fixtures" / "twin-projection" / "README.md").is_file()
+    sample = ROOT / "docs" / "atlas-2.0" / "fixtures" / "twin-projection" / "sample-projection.json"
     import json
 
     payload = json.loads(sample.read_text(encoding="utf-8"))

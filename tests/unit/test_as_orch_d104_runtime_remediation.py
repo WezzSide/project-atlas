@@ -106,9 +106,7 @@ def test_resume_agent_rejects_cross_worktree(tmp_path: Path) -> None:
             creation_sequence=1,
         )
     )
-    port = CursorAgentCliExecutionPort(
-        root=tmp_path, agents_reg=agents, runs_reg=runs, pool=pool
-    )
+    port = CursorAgentCliExecutionPort(root=tmp_path, agents_reg=agents, runs_reg=runs, pool=pool)
     with pytest.raises(SdkRuntimeError, match=r"cross-worktree|workspace root mismatch"):
         asyncio.run(port.resume_agent("cli-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"))
 
@@ -141,9 +139,7 @@ def test_dual_live_and_high_water_rollback_rejected_by_event_log(tmp_path: Path)
     with pytest.raises(SdkRuntimeError) as exc:
         _validate_loaded_against_high_water(
             root=tmp_path,
-            high_water=HostHighWater(
-                dag_generation=95, event_sequence=20, registry_revision=5
-            ),
+            high_water=HostHighWater(dag_generation=95, event_sequence=20, registry_revision=5),
         )
     assert exc.value.code == "HOST_ROLLBACK_REJECTED"
 

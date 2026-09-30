@@ -46,8 +46,6 @@ def test_as_core2_010_report_write_ops_only(tmp_path: Path) -> None:
 
 
 def test_as_core2_010_never_claims_pilot_pass(tmp_path: Path) -> None:
-    report = run_fixture_lifecycle_certification(
-        tmp_path / "work", case_ids=("new", "unchanged")
-    )
+    report = run_fixture_lifecycle_certification(tmp_path / "work", case_ids=("new", "unchanged"))
     assert report["estate_pilot_passed"] is False
     assert "ESTATE PILOT" in report["note"] or "PILOT PASS" in report["note"]

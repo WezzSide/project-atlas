@@ -58,9 +58,7 @@ _OWNER_APPROVED_EXCEPTIONS: tuple[dict[str, str], ...] = (
         "owner_approved": "YES",
         "reason": "authentic first-run P1 source-safety remediation (PR #656)",
         "path": "src/project_atlas/ingestion.py",
-        "allowed_sha256": (
-            "e8d779a8ab2fe0b4327ae9cf8cae115f2a793eb96eb35e8b0024b6ee085168ef"
-        ),
+        "allowed_sha256": ("e8d779a8ab2fe0b4327ae9cf8cae115f2a793eb96eb35e8b0024b6ee085168ef"),
     },
     {
         "exception_id": "R-READY-LINUX-RESIDUALS-20260905-DISCOVERY",
@@ -98,9 +96,7 @@ _OWNER_APPROVED_EXCEPTIONS: tuple[dict[str, str], ...] = (
             "named rather than dropped as 'no scope')"
         ),
         "path": "src/project_atlas/discovery.py",
-        "allowed_sha256": (
-            "471a56af7fcb45220f7c18b5b96efeb32acf7460489c2e9e7525eeec0a429f35"
-        ),
+        "allowed_sha256": ("471a56af7fcb45220f7c18b5b96efeb32acf7460489c2e9e7525eeec0a429f35"),
     },
     {
         "exception_id": "OG-ATLAS-LINUX-FILESYSTEM-20260905-INGESTION",
@@ -111,9 +107,7 @@ _OWNER_APPROVED_EXCEPTIONS: tuple[dict[str, str], ...] = (
             "symlinked authorized root now names its physical path"
         ),
         "path": "src/project_atlas/ingestion.py",
-        "allowed_sha256": (
-            "6911a99d2c5127a45f29d55888fb2398270749dcfd6c49da3d0626a106d74159"
-        ),
+        "allowed_sha256": ("6911a99d2c5127a45f29d55888fb2398270749dcfd6c49da3d0626a106d74159"),
     },
 )
 
@@ -168,9 +162,7 @@ def _has_any_remote(*, root: Path) -> bool:
     return result.returncode == 0 and bool(result.stdout.strip())
 
 
-def _event_pull_request_shas(
-    *, env: Mapping[str, str] | None = None
-) -> tuple[str, str] | None:
+def _event_pull_request_shas(*, env: Mapping[str, str] | None = None) -> tuple[str, str] | None:
     """Read the authoritative base/head commit SHAs for this PR directly
     from the GitHub Actions ``pull_request`` event payload.
 
@@ -245,8 +237,7 @@ def _event_push_before_sha(*, env: Mapping[str, str] | None = None) -> str | Non
         before_sha = payload["before"]
     except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError) as exc:
         raise DemoIsolationGuardError(
-            f"could not read push 'before' sha from GITHUB_EVENT_PATH "
-            f"({event_path}): {exc}"
+            f"could not read push 'before' sha from GITHUB_EVENT_PATH ({event_path}): {exc}"
         ) from exc
     if not isinstance(before_sha, str) or not before_sha:
         raise DemoIsolationGuardError("push 'before' sha missing or malformed in event payload")
@@ -525,7 +516,6 @@ def _seam_call_count(source: str, symbol: str, argument: str) -> int:
     )
 
 
-
 #: The one call that creates the shared CLI's top-level subparser group.
 _TOP_LEVEL_SUBPARSERS_NAME = "subparsers"
 
@@ -563,18 +553,17 @@ def _bound_names(scope: ast.AST, *, descend_into_functions: bool = True) -> list
             continue
         if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
             bound.append((node.id, node.lineno))
-        elif (
-            isinstance(node, (ast.ExceptHandler, ast.MatchAs, ast.MatchStar))
-            and node.name
-        ):
+        elif isinstance(node, (ast.ExceptHandler, ast.MatchAs, ast.MatchStar)) and node.name:
             bound.append((node.name, node.lineno))
         elif isinstance(node, ast.MatchMapping) and node.rest:
             bound.append((node.rest, node.lineno))
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             bound.append((node.name, node.lineno))
-            for argument in [
-                *node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs
-            ] if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) else []:
+            for argument in (
+                [*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs]
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                else []
+            ):
                 bound.append((argument.arg, argument.lineno))
         elif isinstance(node, (ast.Import, ast.ImportFrom)):
             for alias in node.names:
@@ -617,6 +606,7 @@ def _seam_attribute_writes(tree: ast.Module) -> list[tuple[str, int]]:
 #: The entry point whose parser is the one operators actually get.
 _CLI_ENTRY_POINT_NAME = "main"
 
+
 def _add_parser_calls(tree: ast.Module) -> list[tuple[str, str, int]]:
     """(receiver_name, command_name, lineno) for every `X.add_parser("cmd")`."""
     found: list[tuple[str, str, int]] = []
@@ -626,8 +616,10 @@ def _add_parser_calls(tree: ast.Module) -> list[tuple[str, str, int]]:
         if node.func.attr != "add_parser" or not isinstance(node.func.value, ast.Name):
             continue
         name: str | None = None
-        if node.args and isinstance(node.args[0], ast.Constant) and isinstance(
-            node.args[0].value, str
+        if (
+            node.args
+            and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, str)
         ):
             name = node.args[0].value
         for keyword in node.keywords:
@@ -726,9 +718,7 @@ def assert_cli_semantic_invariants(*, source: str, atlas3_commands: frozenset[st
 
     registrations = _add_parser_calls(tree)
     top_level = {
-        name
-        for receiver, name, _ in registrations
-        if receiver == _TOP_LEVEL_SUBPARSERS_NAME
+        name for receiver, name, _ in registrations if receiver == _TOP_LEVEL_SUBPARSERS_NAME
     }
 
     # (E) Each certified command still has a top-level registration. Parsed,
@@ -780,8 +770,7 @@ def assert_cli_atlas3_contract(
     #     still wired exactly once each. Catches removal and rewiring.
     for symbol, argument in sorted(_ATLAS3_SEAM_CALLS.items()):
         assert f"from {_ATLAS3_SEAM_MODULE} import {symbol}" in source, (
-            f"Atlas 3 seam broken: cli.py no longer imports {symbol} from "
-            f"{_ATLAS3_SEAM_MODULE}"
+            f"Atlas 3 seam broken: cli.py no longer imports {symbol} from {_ATLAS3_SEAM_MODULE}"
         )
         count = _seam_call_count(source, symbol, argument)
         assert count == 1, (
@@ -825,9 +814,7 @@ def assert_cli_atlas3_contract(
     # surviving registration -- that is what let a deleted certified command
     # pass the presence check below.
     lost = [name for name in dropped if name not in still_present]
-    assert lost == [], (
-        f"certified CLI surface removed: cli.py no longer registers {lost}"
-    )
+    assert lost == [], f"certified CLI surface removed: cli.py no longer registers {lost}"
 
     # (5) The named certified commands remain reachable *as top-level
     #     commands*. Depth matters here: `connect` is registered both as
@@ -840,6 +827,7 @@ def assert_cli_atlas3_contract(
             f"certified CLI surface removed: {command!r} is no longer registered "
             "as a top-level command via subparsers.add_parser"
         )
+
 
 #: Owner-approved exceptions to the *Atlas-3 hook* requirement below, pinned
 #: the same way `_OWNER_APPROVED_EXCEPTIONS` is: to one exact reviewed
@@ -868,9 +856,7 @@ _CLI_ADDITIVE_EXCEPTIONS: tuple[dict[str, str], ...] = (
             "Atlas-3 seam change, no command added, renamed or removed"
         ),
         "path": "src/project_atlas/cli.py",
-        "allowed_sha256": (
-            "752eb7f346814d1064faf7502f6fc55f4e47bc738c5bda24f5396bf63bfa8550"
-        ),
+        "allowed_sha256": ("752eb7f346814d1064faf7502f6fc55f4e47bc738c5bda24f5396bf63bfa8550"),
     },
 )
 
@@ -962,9 +948,7 @@ def test_cli_mutation_is_additive_only() -> None:
     # they need a real module: the text-layer matrix below exercises tiny
     # synthetic sources, which have no dispatch table and no argument
     # registrations to reason about.
-    assert_cli_semantic_invariants(
-        source=cli_source, atlas3_commands=frozenset(ATLAS3_COMMANDS)
-    )
+    assert_cli_semantic_invariants(source=cli_source, atlas3_commands=frozenset(ATLAS3_COMMANDS))
 
 
 # ---------------------------------------------------------------------------
@@ -1686,7 +1670,7 @@ def test_fetch_timeout_is_actually_enforced_not_just_declared(
 
 _ATLAS3_FIXTURE_COMMANDS = frozenset({"pulse", "start", "proof"})
 
-_SEAM_SOURCE = '''
+_SEAM_SOURCE = """
 def build_parser():
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("connect")
@@ -1708,7 +1692,7 @@ def main(argv=None):
 
     atlas3_exit = dispatch_atlas3(args)
     return atlas3_exit
-'''
+"""
 
 
 def _check(source: str, diff_text: str) -> None:
@@ -1783,8 +1767,8 @@ def test_g2c_duplicate_seam_call_fails() -> None:
 def test_g3_valid_additive_atlas3_registration_passes() -> None:
     """G3 -- Atlas 3 grows inside its own module; cli.py keeps one seam."""
     source = _SEAM_SOURCE.replace(
-        "    subparsers.add_parser(\"connect\")",
-        "    subparsers.add_parser(\"connect\")\n    subparsers.add_parser(\"doctor\")",
+        '    subparsers.add_parser("connect")',
+        '    subparsers.add_parser("connect")\n    subparsers.add_parser("doctor")',
     )
     _check(source, _diff(added=('    subparsers.add_parser("doctor")',)))
 
@@ -1800,9 +1784,9 @@ def test_g4_unrelated_nested_cli_addition_passes() -> None:
         '    capture_sub.add_parser("record")\n    capture_sub.add_parser("text")',
     )
     _check(source, _diff(added=('    capture_sub.add_parser("text")',)))
-    assert "register_atlas3_parsers" not in _diff(
-        added=('    capture_sub.add_parser("text")',)
-    ), "the passing diff must not need to mention Atlas 3 at all"
+    assert "register_atlas3_parsers" not in _diff(added=('    capture_sub.add_parser("text")',)), (
+        "the passing diff must not need to mention Atlas 3 at all"
+    )
 
 
 def test_g4b_unrelated_import_reformat_passes() -> None:
@@ -1990,6 +1974,7 @@ def test_g12_nested_subcommand_does_not_keep_a_deleted_top_level_alive() -> None
     with pytest.raises(AssertionError, match="certified CLI surface removed"):
         _check(source, _diff(removed=('    subparsers.add_parser("connect")',)))
 
+
 # --- the waiver, proven by running the guard, not by reading it ------------
 #
 # Source inspection cannot show that a waiver still blocks what it must. Each
@@ -2024,12 +2009,8 @@ def test_waiver_permits_only_the_authorized_bootstrap_delta() -> None:
 def test_waiver_still_blocks_a_certified_command_deletion() -> None:
     """B: removing a certified command registration must fail even when waived."""
     diff = _LOGFORMAT_DELTA + '-    connect_parser = subparsers.add_parser("connect")\n'
-    source = " ".join(
-        f'"{command}"' for command in _CERTIFIED_COMMANDS if command != "connect"
-    )
-    violations = _cli_guard_violations(
-        diff_text=diff, cli_source=source, atlas3_hooks_waived=True
-    )
+    source = " ".join(f'"{command}"' for command in _CERTIFIED_COMMANDS if command != "connect")
+    violations = _cli_guard_violations(diff_text=diff, cli_source=source, atlas3_hooks_waived=True)
     assert "deletion-from-certified-cli-surface" in violations
     assert "certified-command-missing:connect" in violations
 
@@ -2314,9 +2295,7 @@ def test_h16_logformat_bootstrap_delta_passes() -> None:
 def test_h17_capture_surface_passes() -> None:
     """H17 -- #684's certified surface is intact and top-level."""
     tree = _cli_module_ast(REAL_CLI_SOURCE)
-    top_level = {
-        name for receiver, name, _ in _add_parser_calls(tree) if receiver == "subparsers"
-    }
+    top_level = {name for receiver, name, _ in _add_parser_calls(tree) if receiver == "subparsers"}
     assert "capture" in top_level
     assert "capture" in _dispatched_commands(tree)
 
@@ -2396,7 +2375,7 @@ def test_v04_deleting_a_guarded_name_is_blocked() -> None:
 # freely. Resolution is by identity now.
 # ---------------------------------------------------------------------------
 
-_DECOY_FACTORY = '''def _atlas_compat_shim(parser):
+_DECOY_FACTORY = """def _atlas_compat_shim(parser):
     subparsers = parser.add_subparsers(dest="command")
     brief_parser = subparsers.add_parser("brief")
     brief_parser.add_argument("--vault")
@@ -2404,7 +2383,7 @@ _DECOY_FACTORY = '''def _atlas_compat_shim(parser):
     return subparsers
 
 
-def build_parser('''
+def build_parser("""
 
 
 def test_r02_match_capture_pattern_rebinding_the_seam_is_blocked() -> None:

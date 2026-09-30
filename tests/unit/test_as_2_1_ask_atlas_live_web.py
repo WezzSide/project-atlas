@@ -32,7 +32,7 @@ def test_hook_uses_read_only_encoded_query() -> None:
     assert "/v1/ask?q=${encodeURIComponent(q)}" in text
     assert "query too long (max 256)" in text
     assert "liveApiFetch" in text
-    assert "method: \"POST\"" not in text
+    assert 'method: "POST"' not in text
     assert "method: 'POST'" not in text
 
 
@@ -41,7 +41,7 @@ def test_hook_does_not_label_live_failure_as_demo_stub() -> None:
     assert 'setDataSource("live_api")' in text
     assert 'setDataSource("demo_stub")' in text
     assert "if (!liveApiDemoOnly())" in text
-    assert 'setError(`ask HTTP ${resp.status}`)' in text
+    assert "setError(`ask HTTP ${resp.status}`)" in text
     assert "setDataSource(null)" in text
     live_fail = text.split("if (resp.ok)")[1].split("} catch")[0]
     assert 'setDataSource("demo_stub")' not in live_fail

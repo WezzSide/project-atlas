@@ -319,12 +319,8 @@ def test_d178_kdiff_reader_offset_not_stripped(tmp_path: Path) -> None:
         project_id="harbor-api",
         as_of_valid_time="2024-06-01T00:00:00+01:00",
     )
-    zulu = read_as_of(
-        vault, project_id="harbor-api", as_of_valid_time="2024-06-01T00:00:00Z"
-    )
-    stripped_cells = [
-        c for c in stripped_would_cover["cells"] if c["disposition"] == "selected"
-    ]
+    zulu = read_as_of(vault, project_id="harbor-api", as_of_valid_time="2024-06-01T00:00:00Z")
+    stripped_cells = [c for c in stripped_would_cover["cells"] if c["disposition"] == "selected"]
     zulu_cells = [c for c in zulu["cells"] if c["disposition"] == "selected"]
     assert stripped_cells == []
     assert zulu_cells and zulu_cells[0]["selected_claim_id"] == "claim.closed"
@@ -345,9 +341,7 @@ def test_d178_app_service_and_live_api_share_semantics(tmp_path: Path) -> None:
     cli_dispositions: dict[str, list[str]] = {}
     for as_of in forms:
         payload = service.kdiff_as_of("harbor-api", as_of)
-        cli_dispositions[as_of] = sorted(
-            c["disposition"] for c in payload["cells"]
-        )
+        cli_dispositions[as_of] = sorted(c["disposition"] for c in payload["cells"])
 
     server = serve_api(vault, host="127.0.0.1", port=0)
     host, port = server.server_address[:2]
@@ -356,10 +350,7 @@ def test_d178_app_service_and_live_api_share_semantics(tmp_path: Path) -> None:
     try:
         hdrs = session_credentials(server).auth_headers()
         for as_of in forms:
-            url = (
-                f"http://{host}:{port}/v1/kdiff"
-                f"?project=harbor-api&as_of={quote(as_of, safe='')}"
-            )
+            url = f"http://{host}:{port}/v1/kdiff?project=harbor-api&as_of={quote(as_of, safe='')}"
             req = Request(url, headers=hdrs)
             with urlopen(req, timeout=3) as resp:
                 assert resp.status == 200

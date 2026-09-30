@@ -59,9 +59,7 @@ def test_obs_live_lanes_unknown_rollup(tmp_path: Path) -> None:
 def test_obs_perf_combined_receipt(tmp_path: Path) -> None:
     vault = tmp_path / "v"
     vault.mkdir()
-    payload = build_obs_perf_receipt(
-        vault, receipt_id="combo", baseline_id="combo-b", iterations=1
-    )
+    payload = build_obs_perf_receipt(vault, receipt_id="combo", baseline_id="combo-b", iterations=1)
     assert payload["package_id"] == "AS-2.1-OBS-PERF-001"
     assert payload["shared_schema_mutated"] is False
     assert payload["rollup"] == "unknown"

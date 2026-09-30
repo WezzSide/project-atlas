@@ -86,9 +86,7 @@ _TEST_IV_REQUIREMENTS = IvRequirements(certification_required=True, adversarial_
 
 
 def _run_git(repo: Path, *args: str) -> str:
-    result = subprocess.run(
-        ["git", *args], cwd=repo, check=True, capture_output=True, text=True
-    )
+    result = subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True)
     return result.stdout.strip()
 
 
@@ -748,7 +746,9 @@ def test_second_tick_does_not_duplicate_already_discovered_node(tmp_path: Path) 
     trust_store = _make_trust_store(tmp_path, main, tree)
 
     run_origination_scan(
-        root=repo, project_id="demo-project", origination_store=origination_store,
+        root=repo,
+        project_id="demo-project",
+        origination_store=origination_store,
         trust_store=trust_store,
     )
 
@@ -1133,8 +1133,7 @@ def test_revised_work_reaches_governor_after_prior_revision_lease_released(
         released_sequence=2,
     )
     (lease_store / LEASE_PROJECTION_NAME).write_text(
-        json.dumps(LeaseProjection(leases=(released,)).model_dump(mode="json"), indent=2)
-        + "\n",
+        json.dumps(LeaseProjection(leases=(released,)).model_dump(mode="json"), indent=2) + "\n",
         encoding="utf-8",
     )
     mark_terminal(origination_store, first_record.origination_identity, node_state="CLOSED")
@@ -1495,9 +1494,7 @@ def test_a_revision_that_becomes_blocked_is_never_leased_by_a_later_real_tick(
                     "docs/REQUIREMENTS.md",
                     "tests/test_int_013_like.py",
                 ],
-                "blockers": [
-                    "EXTERNAL_BLOCKED: needs owner-provided authentic project roots"
-                ],
+                "blockers": ["EXTERNAL_BLOCKED: needs owner-provided authentic project roots"],
             }
         ],
     )
@@ -1518,7 +1515,8 @@ def test_a_revision_that_becomes_blocked_is_never_leased_by_a_later_real_tick(
     assert second_entry["superseded_prior_revisions"] == [old_identity]
 
     old_record = next(
-        r for r in load_projection(origination_store).records
+        r
+        for r in load_projection(origination_store).records
         if r.origination_identity == old_identity
     )
     assert old_record.state == "SUPERSEDED"
@@ -1624,9 +1622,7 @@ def test_origination_node_leases_normally_while_its_revision_is_current(
     governor.add_node(node)
     governor.mark_ready(node.package_id)
 
-    lease = governor.lease(
-        node.package_id, "governor-pilot-local", branch="feat/x", worktree="wt"
-    )
+    lease = governor.lease(node.package_id, "governor-pilot-local", branch="feat/x", worktree="wt")
     assert lease.package_id == node.package_id
 
 
@@ -1694,17 +1690,13 @@ def test_long_lived_governor_refuses_lease_for_stale_origination_revision(
     assert second_entry["superseded_prior_revisions"] == [identity_a]
 
     # SAME governor object, never restarted, still holding node A at READY.
-    stale = next(
-        item for item in governor.snapshot().nodes if item.package_id == node_a.package_id
-    )
+    stale = next(item for item in governor.snapshot().nodes if item.package_id == node_a.package_id)
     assert stale.state == NodeState.READY
     assert stale.origination_identity == identity_a
     assert stale.base_pin == main  # base_pin did NOT move
 
     with pytest.raises(GovernorError) as excinfo:
-        governor.lease(
-            node_a.package_id, "governor-pilot-local", branch="feat/x", worktree="wt"
-        )
+        governor.lease(node_a.package_id, "governor-pilot-local", branch="feat/x", worktree="wt")
     assert excinfo.value.code == "STALE_ORIGINATION_IDENTITY"
 
     # The refusal is a refusal, not a mutation: no lease was granted, and
@@ -1746,9 +1738,7 @@ def test_success_criteria_only_change_also_denies_a_stale_lease(tmp_path: Path) 
     assert second_exit == 0
 
     with pytest.raises(GovernorError) as excinfo:
-        governor.lease(
-            node_a.package_id, "governor-pilot-local", branch="feat/x", worktree="wt"
-        )
+        governor.lease(node_a.package_id, "governor-pilot-local", branch="feat/x", worktree="wt")
     assert excinfo.value.code == "STALE_ORIGINATION_IDENTITY"
 
 
@@ -1780,9 +1770,7 @@ def test_non_origination_node_leases_unaffected_by_the_currentness_check(
     governor.add_node(node)
     governor.mark_ready(node.package_id)
 
-    lease = governor.lease(
-        node.package_id, "governor-pilot-local", branch="feat/x", worktree="wt"
-    )
+    lease = governor.lease(node.package_id, "governor-pilot-local", branch="feat/x", worktree="wt")
     assert lease.package_id == "MANUAL-NODE-001"
 
 
@@ -1794,9 +1782,9 @@ def test_work_node_persisted_before_provenance_existed_still_deserializes() -> N
     required -- which also means such a legacy node is treated as
     non-origination (legacy lease behavior), never handed a fabricated
     identity."""
-    legacy = _minimal_work_node(
-        "LEGACY-001", base_pin="a" * 40, surface_id="legacy"
-    ).model_dump(mode="json")
+    legacy = _minimal_work_node("LEGACY-001", base_pin="a" * 40, surface_id="legacy").model_dump(
+        mode="json"
+    )
     del legacy["origination_identity"]
     assert "origination_identity" not in legacy
 
@@ -1859,8 +1847,7 @@ def test_result_from_stale_contract_revision_cannot_terminalize_the_current_one(
     assert synced == ()
 
     after = {
-        row.origination_identity: row.state
-        for row in load_projection(origination_store).records
+        row.origination_identity: row.state for row in load_projection(origination_store).records
     }
     assert after[identity_a] == "SUPERSEDED"
     # The critical assertion: B is NOT terminalized by A's result.
@@ -1896,9 +1883,7 @@ def test_origination_identity_is_deterministic_and_path_normalized(tmp_path: Pat
 
     # Same inputs, a completely separate store: identity must be stable.
     repo_again = _eligible_repo(tmp_path, name="repo-again")
-    _write_contract(
-        repo_again, proposed_scope="src/thing.py", success_criteria="K1: thing works"
-    )
+    _write_contract(repo_again, proposed_scope="src/thing.py", success_criteria="K1: thing works")
     again_store = repo_again / ORIGINATION_PROJECTION_RELATIVE_DEFAULT
     again_main = _run_git(repo_again, "rev-parse", "origin/main")
     again_tree = _run_git(repo_again, "rev-parse", "origin/main^{tree}")
@@ -1909,9 +1894,7 @@ def test_origination_identity_is_deterministic_and_path_normalized(tmp_path: Pat
     # Windows-style separators in the declared scope must normalize to the
     # same canonical path -- and therefore the same identity.
     repo_win = _eligible_repo(tmp_path, name="repo-win")
-    _write_contract(
-        repo_win, proposed_scope="src\\thing.py", success_criteria="K1: thing works"
-    )
+    _write_contract(repo_win, proposed_scope="src\\thing.py", success_criteria="K1: thing works")
     win_store = repo_win / ORIGINATION_PROJECTION_RELATIVE_DEFAULT
     win_main = _run_git(repo_win, "rev-parse", "origin/main")
     win_tree = _run_git(repo_win, "rev-parse", "origin/main^{tree}")
@@ -2098,8 +2081,7 @@ def test_legacy_origination_row_heals_through_a_real_second_scan(
     assert scan_exit == 0
 
     states = {
-        row.origination_identity: row.state
-        for row in load_projection(origination_store).records
+        row.origination_identity: row.state for row in load_projection(origination_store).records
     }
     assert states[legacy_identity] == "SUPERSEDED"  # legacy row retired, not deleted
 
@@ -2119,10 +2101,10 @@ def test_legacy_origination_row_heals_through_a_real_second_scan(
     )
     recovered.add_node(healed)
     recovered.mark_ready(package_id)
-    lease = recovered.lease(
-        package_id, "governor-pilot-local", branch="feat/x", worktree="wt"
-    )
+    lease = recovered.lease(package_id, "governor-pilot-local", branch="feat/x", worktree="wt")
     assert lease.package_id == package_id
+
+
 def test_identity_bearing_node_is_denied_when_no_currentness_store_is_available(
     tmp_path: Path,
 ) -> None:
@@ -2169,9 +2151,7 @@ def test_identity_bearing_node_is_denied_when_no_currentness_store_is_available(
     governor.mark_ready(node.package_id)
 
     with pytest.raises(GovernorError) as excinfo:
-        governor.lease(
-            node.package_id, "governor-pilot-local", branch="feat/x", worktree="wt"
-        )
+        governor.lease(node.package_id, "governor-pilot-local", branch="feat/x", worktree="wt")
     assert excinfo.value.code == "ORIGINATION_AUTHORITY_UNAVAILABLE"
     assert governor.snapshot().leases == ()
 
@@ -2186,9 +2166,7 @@ def test_identity_bearing_node_is_denied_when_no_currentness_store_is_available(
     )
     wired.add_node(node)
     wired.mark_ready(node.package_id)
-    lease = wired.lease(
-        node.package_id, "governor-pilot-local", branch="feat/x", worktree="wt"
-    )
+    lease = wired.lease(node.package_id, "governor-pilot-local", branch="feat/x", worktree="wt")
     assert lease.package_id == node.package_id
 
 
@@ -2219,9 +2197,7 @@ def test_non_origination_node_still_leases_without_any_origination_store(
     governor.add_node(node)
     governor.mark_ready(node.package_id)
 
-    lease = governor.lease(
-        node.package_id, "governor-pilot-local", branch="feat/x", worktree="wt"
-    )
+    lease = governor.lease(node.package_id, "governor-pilot-local", branch="feat/x", worktree="wt")
     assert lease.package_id == "MANUAL-NODE-002"
 
 
@@ -2286,9 +2262,7 @@ def test_lease_denied_when_current_origination_record_is_ambiguous(tmp_path: Pat
     governor.mark_ready(leasable.package_id)
 
     with pytest.raises(GovernorError) as excinfo:
-        governor.lease(
-            leasable.package_id, "governor-pilot-local", branch="feat/x", worktree="wt"
-        )
+        governor.lease(leasable.package_id, "governor-pilot-local", branch="feat/x", worktree="wt")
     assert excinfo.value.code == "STALE_ORIGINATION_IDENTITY"
 
 
@@ -2319,9 +2293,9 @@ def test_lease_denied_when_no_current_origination_record_exists(tmp_path: Path) 
     tree = _run_git(repo, "rev-parse", "origin/main^{tree}")
     trust_store = _make_trust_store(tmp_path, main, tree)
 
-    node = _minimal_work_node(
-        "ORIG-orphan", base_pin=main, surface_id="orphan-surface"
-    ).model_copy(update={"origination_identity": "c" * 64})
+    node = _minimal_work_node("ORIG-orphan", base_pin=main, surface_id="orphan-surface").model_copy(
+        update={"origination_identity": "c" * 64}
+    )
 
     governor = AutonomousGovernor(
         current_main=main,
@@ -2333,9 +2307,7 @@ def test_lease_denied_when_no_current_origination_record_exists(tmp_path: Path) 
     governor.mark_ready(node.package_id)
 
     with pytest.raises(GovernorError) as excinfo:
-        governor.lease(
-            node.package_id, "governor-pilot-local", branch="feat/x", worktree="wt"
-        )
+        governor.lease(node.package_id, "governor-pilot-local", branch="feat/x", worktree="wt")
     assert excinfo.value.code == "STALE_ORIGINATION_IDENTITY"
 
 

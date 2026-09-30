@@ -132,8 +132,7 @@ def _estate(tmp_path: Path) -> tuple[Path, Path, Path]:
     )
     portal_readme.write_text(f"# Portal\n\n{PORTAL_SECRET}\n", encoding="utf-8")
     portal_plan.write_text(
-        "# Portal Plan\n\n## Core architectural decision\n\n"
-        f"{PORTAL_ARCH_MARK}.\n",
+        f"# Portal Plan\n\n## Core architectural decision\n\n{PORTAL_ARCH_MARK}.\n",
         encoding="utf-8",
     )
     unowned.write_text("# Unowned\n\nnot claimed\n", encoding="utf-8")
@@ -227,8 +226,7 @@ def _estate(tmp_path: Path) -> tuple[Path, Path, Path]:
     _write_imported(
         vault,
         "source-portal-plan",
-        "# Portal Plan\n\n## Core architectural decision\n\n"
-        f"{PORTAL_ARCH_MARK}.\n",
+        f"# Portal Plan\n\n## Core architectural decision\n\n{PORTAL_ARCH_MARK}.\n",
     )
     return root, vault, portal_readme
 
@@ -329,6 +327,7 @@ def test_unknown_project_fail_closed_never_healthy(tmp_path: Path) -> None:
         for entry in (architecture.get("evidence") or [])
         if isinstance(entry, dict)
     )
+
 
 def test_missing_project_does_not_invent_authority(tmp_path: Path) -> None:
     vault = tmp_path / "vault"

@@ -62,9 +62,7 @@ def test_as_adv_release_003_determinism_reports_equal_digest_summaries(
 def test_as_adv_release_003_matrix_and_docs_keep_release_no() -> None:
     assert "perf_budget_smoke" in MATRIX_CASE_IDS
     root = Path(__file__).resolve().parents[2]
-    doc = (root / "docs" / "AS-ADV-RELEASE-003-perf-determinism.md").read_text(
-        encoding="utf-8"
-    )
+    doc = (root / "docs" / "AS-ADV-RELEASE-003-perf-determinism.md").read_text(encoding="utf-8")
     assert "RELEASE = **NO**" in doc
     assert "RELEASE CERTIFIED = **NO**" in doc
     assert "release_certified: false" in doc

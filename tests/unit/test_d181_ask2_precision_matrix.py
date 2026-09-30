@@ -165,16 +165,10 @@ def test_d181_b_meta_claim_construction(tmp_path: Path) -> None:
             )
         ],
     )
-    answer = _ask(
-        vault, "What database does Harbor claim to use?", project_id="harbor"
-    )
+    answer = _ask(vault, "What database does Harbor claim to use?", project_id="harbor")
     assert answer["status"] == "known"
-    assert "claim" not in _question_claim_terms(
-        "What database does Harbor claim to use?"
-    )
-    assert "use" not in _question_claim_terms(
-        "What database does Harbor claim to use?"
-    )
+    assert "claim" not in _question_claim_terms("What database does Harbor claim to use?")
+    assert "use" not in _question_claim_terms("What database does Harbor claim to use?")
 
 
 def test_d181_c_past_meta_claimed_to_use(tmp_path: Path) -> None:

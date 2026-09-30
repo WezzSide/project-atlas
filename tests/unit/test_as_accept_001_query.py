@@ -127,9 +127,7 @@ def test_ax_qry_001_multifield_single_snapshot_no_mixed_compilation(
         if load_count["n"] == 1:
             raw = json.loads(auth_path.read_text(encoding="utf-8"))
             raw["compilation_id"] = "compile-mutated-after-snapshot-load"
-            auth_path.write_text(
-                json.dumps(raw, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-            )
+            auth_path.write_text(json.dumps(raw, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         return snap
 
     monkeypatch.setattr(
@@ -215,7 +213,11 @@ def test_ax_qry_004_ret_kind_confusion_rejected(
     for kind in ("exact", "prefix", "authority", "ret"):
         with pytest.raises(KnowledgeQueryError) as exc:
             query_knowledge(
-                vault, "project-atlas", "wp:AS-ID-001", "title", kind=kind  # type: ignore[arg-type]
+                vault,
+                "project-atlas",
+                "wp:AS-ID-001",
+                "title",
+                kind=kind,  # type: ignore[arg-type]
             )
         assert exc.value.code is KnowledgeQueryErrorCode.UNSUPPORTED_KIND
 

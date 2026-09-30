@@ -23,9 +23,7 @@ def test_collab_close_blocks_further_actions(tmp_path: Path) -> None:
     closed = close_collab_session(vault, session_id="sess-b")
     assert closed["closed"] is True
     with pytest.raises(CollabError, match="closed"):
-        append_collab_action(
-            vault, session_id="sess-b", action_name="note", detail="late"
-        )
+        append_collab_action(vault, session_id="sess-b", action_name="note", detail="late")
 
 
 def test_collab_comment_thread_still_disabled(tmp_path: Path) -> None:

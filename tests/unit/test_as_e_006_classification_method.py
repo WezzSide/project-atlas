@@ -155,10 +155,7 @@ def test_e006_fr004_manifest_audit_wire() -> None:
 def test_e006_adv_no_ext_precedence_rewrite(tmp_path: Path) -> None:
     """EXT rule tables remain the sole precedence surface (no D-006 invent)."""
     classification_py = (
-        Path(__file__).resolve().parents[2]
-        / "src"
-        / "project_atlas"
-        / "classification.py"
+        Path(__file__).resolve().parents[2] / "src" / "project_atlas" / "classification.py"
     ).read_text(encoding="utf-8")
     assert "def classify_source(" in classification_py
     assert "def apply_classification_method(" in classification_py

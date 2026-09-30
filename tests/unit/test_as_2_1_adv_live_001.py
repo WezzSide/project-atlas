@@ -18,9 +18,7 @@ def test_adv_scheduler_dispatch_requires_arm(tmp_path: Path) -> None:
     vault.mkdir()
     elev = elevated_operator("sched-op", extra={"scheduler.dispatch"})
     with pytest.raises(SchedulerLiveError, match="not-armed"):
-        dispatch_supervised_job(
-            vault, arm_id="missing", job="version", operator=elev
-        )
+        dispatch_supervised_job(vault, arm_id="missing", job="version", operator=elev)
 
 
 def test_adv_ask_query_bounds(tmp_path: Path) -> None:

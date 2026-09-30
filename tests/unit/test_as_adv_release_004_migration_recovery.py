@@ -62,9 +62,7 @@ def test_as_adv_release_004_recovery_outcomes_repeat(
 def test_as_adv_release_004_matrix_and_docs_keep_release_no() -> None:
     assert "migration_recovery_replay" in MATRIX_CASE_IDS
     root = Path(__file__).resolve().parents[2]
-    doc = (root / "docs" / "AS-ADV-RELEASE-004-migration-recovery.md").read_text(
-        encoding="utf-8"
-    )
+    doc = (root / "docs" / "AS-ADV-RELEASE-004-migration-recovery.md").read_text(encoding="utf-8")
     assert "migration_recovery_replay" in doc
     assert "RELEASE = **NO**" in doc
     assert "RELEASE CERTIFIED = **NO**" in doc

@@ -103,9 +103,7 @@ def test_explain_receipt_schema_registered() -> None:
 
 def test_t01_receipt_from_authoritative_answer(tmp_path: Path) -> None:
     vault = _materialize_vault(tmp_path)
-    answer = query_knowledge(
-        vault, "project-atlas", "wp:AS-ID-001", "title", kind="authoritative"
-    )
+    answer = query_knowledge(vault, "project-atlas", "wp:AS-ID-001", "title", kind="authoritative")
     receipt = build_explain_receipt_from_answer(answer)
     validate_record(receipt, "explain-receipt")
     assert receipt["package"] == "AS-EXPLAIN-001"
@@ -120,9 +118,7 @@ def test_t01_receipt_from_authoritative_answer(tmp_path: Path) -> None:
 
 def test_t02_receipt_from_explain_kind_preserves_layers(tmp_path: Path) -> None:
     vault = _materialize_vault(tmp_path)
-    answer = query_knowledge(
-        vault, "project-atlas", "wp:AS-ID-001", "title", kind="explain"
-    )
+    answer = query_knowledge(vault, "project-atlas", "wp:AS-ID-001", "title", kind="explain")
     assert answer.kind is QueryKind.EXPLAIN
     receipt = build_explain_receipt_from_answer(answer)
     validate_record(receipt, "explain-receipt")
@@ -146,9 +142,7 @@ def test_t03_multifield_receipts_preserve_order(tmp_path: Path) -> None:
 def test_t04_diagnostic_receipt_fail_closed() -> None:
     from project_atlas.knowledge_query import KnowledgeQueryError
 
-    err = KnowledgeQueryError(
-        KnowledgeQueryErrorCode.INVALID_INPUT, "bad request"
-    )
+    err = KnowledgeQueryError(KnowledgeQueryErrorCode.INVALID_INPUT, "bad request")
     diagnostic = query_diagnostic_from_error(
         err,
         project_id="project-atlas",
@@ -167,9 +161,7 @@ def test_t04_diagnostic_receipt_fail_closed() -> None:
 
 def test_t05_trust_score_smuggling_rejected(tmp_path: Path) -> None:
     vault = _materialize_vault(tmp_path)
-    answer = query_knowledge(
-        vault, "project-atlas", "wp:AS-ID-001", "title", kind="authoritative"
-    )
+    answer = query_knowledge(vault, "project-atlas", "wp:AS-ID-001", "title", kind="authoritative")
     receipt = build_explain_receipt_from_answer(answer)
     smuggled = dict(receipt)
     smuggled["confidence"] = 0.9
@@ -194,9 +186,7 @@ def test_t06_not_found_marks_omissions(tmp_path: Path) -> None:
 def test_t07_default_007_answer_json_unchanged(tmp_path: Path) -> None:
     """EXPL-FR-010: building a receipt must not mutate the answer envelope."""
     vault = _materialize_vault(tmp_path)
-    answer = query_knowledge(
-        vault, "project-atlas", "wp:AS-ID-001", "title", kind="authoritative"
-    )
+    answer = query_knowledge(vault, "project-atlas", "wp:AS-ID-001", "title", kind="authoritative")
     before = answer.model_dump(mode="json")
     build_explain_receipt_from_answer(answer)
     after = answer.model_dump(mode="json")

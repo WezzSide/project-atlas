@@ -224,7 +224,9 @@ def test_dict_masquerading_as_carrier_denied(tmp_path: Path) -> None:
     fake_carrier = {"source_pr": 671, "reason": "looks legitimate"}
     with pytest.raises(TrustError) as exc:
         require_trust_current_for_merge(
-            store=tmp_path, topology=topology, trust_repair_carrier=fake_carrier  # type: ignore[arg-type]
+            store=tmp_path,
+            topology=topology,
+            trust_repair_carrier=fake_carrier,  # type: ignore[arg-type]
         )
     assert exc.value.code == "INTERLOCK_MISUSE"
 
@@ -237,7 +239,9 @@ def test_bare_true_masquerading_as_carrier_denied(tmp_path: Path) -> None:
     topology = _topology(observed_main=NEXT_MAIN, observed_tree=NEXT_TREE)
     with pytest.raises(TrustError) as exc:
         require_trust_current_for_merge(
-            store=tmp_path, topology=topology, trust_repair_carrier=True  # type: ignore[arg-type]
+            store=tmp_path,
+            topology=topology,
+            trust_repair_carrier=True,  # type: ignore[arg-type]
         )
     assert exc.value.code == "INTERLOCK_MISUSE"
 

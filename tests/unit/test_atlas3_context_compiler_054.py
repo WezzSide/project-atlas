@@ -61,9 +61,7 @@ def test_current_memory_ranks_below_project_evidence() -> None:
     assert report["write_applied"] is False
     assert report["promoted_to_truth_core"] == 0
     layers = report["layers"]
-    assert layers["authoritative_project_evidence"] == [
-        "harbor-api production is PostgreSQL 15"
-    ]
+    assert layers["authoritative_project_evidence"] == ["harbor-api production is PostgreSQL 15"]
     assert layers["current_reconciled_memory"][0]["text"].startswith("assistant")
     assert layers["stale_memory_historical_only"] == []
 
@@ -140,9 +138,7 @@ def test_trust_score_fails_closed() -> None:
     assert exc.value.code == "AUTHORITY_CLAIM_FORBIDDEN"
 
 
-def test_cli_capability_and_compile(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_cli_capability_and_compile(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command", required=True)
     register_atlas3_parsers(sub)
@@ -182,9 +178,9 @@ def test_cli_capability_and_compile(
 
 def test_module_does_not_touch_certified_surfaces() -> None:
     root = Path(__file__).resolve().parents[2]
-    source = (
-        root / "src/project_atlas/atlas3/memory/context_compiler.py"
-    ).read_text(encoding="utf-8")
+    source = (root / "src/project_atlas/atlas3/memory/context_compiler.py").read_text(
+        encoding="utf-8"
+    )
     for name in (
         "from project_atlas.runtime_22",
         "from project_atlas.chatgpt_bridge",

@@ -37,7 +37,7 @@ def test_no_query_does_not_default_to_harbor_api() -> None:
     text = PAGE.read_text(encoding="utf-8")
     assert "DEFAULT_PROJECT" not in text
     assert '?? "harbor-api"' not in text
-    assert '?? DEFAULT_PROJECT' not in text
+    assert "?? DEFAULT_PROJECT" not in text
     assert "projectParam && projectParam.trim()" in text
     assert "useLiveRoadmap(projectId)" in text
     assert 'projectId ?? "UNKNOWN"' in text
@@ -49,10 +49,7 @@ def test_explicit_dark_factory_query_still_uses_live_hook() -> None:
     assert 'params.get("project")' in text
     assert "useLiveRoadmap(projectId)" in text
     hook = HOOK.read_text(encoding="utf-8")
-    assert (
-        "liveApiFetch(`/v1/roadmap?project=${encodeURIComponent(projectId)}`)"
-        in hook
-    )
+    assert "liveApiFetch(`/v1/roadmap?project=${encodeURIComponent(projectId)}`)" in hook
     assert "if (!projectId)" in hook
 
 

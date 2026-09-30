@@ -133,10 +133,7 @@ def test_no_stable_old_locator_records_discontinuity() -> None:
         DiscontinuityRecord(
             new_claim_id="claim-new00007",
             old_locator=None,
-            reason=(
-                "no stable old locator: new identity with explicit "
-                "historical discontinuity"
-            ),
+            reason=("no stable old locator: new identity with explicit historical discontinuity"),
         ),
     )
     validate_record(payload, "claim-alias")

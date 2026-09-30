@@ -42,8 +42,8 @@ KEYWORD = "ignore"
 # the GOV-007 target characters. All of these are meant to be stripped or
 # collapsed entirely by the detector, reuniting the surrounding letters.
 _INSERTABLE_EVASIONS: dict[str, str] = {
-    "zero-width-joiner-Cf": '\u200d',
-    "soft-hyphen-Cf": '\xad',
+    "zero-width-joiner-Cf": "\u200d",
+    "soft-hyphen-Cf": "\xad",
     "combining-macron-Mn": "\u0304",
     "combining-diaeresis-Mn": "\u0308",
     "vertical-tab-Cc-other": "\x0b",
@@ -62,9 +62,7 @@ _INSERTABLE_EVASIONS: dict[str, str] = {
 # hand-maintained list, so this automatically tracks whatever Unicode
 # version the running interpreter ships with.
 _Z_CATEGORY_INSERTABLE_EVASIONS: dict[str, str] = {
-    f"z-category-U+{ord(ch):04X}": ch
-    for ch in sorted(_Z_CATEGORY_CHARACTERS)
-    if ch != " "
+    f"z-category-U+{ord(ch):04X}": ch for ch in sorted(_Z_CATEGORY_CHARACTERS) if ch != " "
 }
 
 _ALL_INSERTABLE_EVASIONS: dict[str, str] = {

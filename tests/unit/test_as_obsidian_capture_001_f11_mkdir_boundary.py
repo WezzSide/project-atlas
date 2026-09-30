@@ -93,9 +93,7 @@ def _mkdir_error_name(parent: pathlib.Path) -> str:
         parent.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         return type(exc).__name__
-    raise AssertionError(
-        f"fixture is inert: mkdir({parent}) succeeded, so nothing is pinned here"
-    )
+    raise AssertionError(f"fixture is inert: mkdir({parent}) succeeded, so nothing is pinned here")
 
 
 def test_f11_projection_mkdir_failure_stays_inside_the_error_boundary(

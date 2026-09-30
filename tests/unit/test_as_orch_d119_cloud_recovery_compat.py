@@ -69,9 +69,7 @@ def test_extract_direct_run_result_git_repo_url() -> None:
 
 def test_extract_nested_run_git_repo_url() -> None:
     src = SimpleNamespace(
-        run=SimpleNamespace(
-            git=SimpleNamespace(repo_url=CANONICAL_REPO_URL, branches=[BRANCH])
-        )
+        run=SimpleNamespace(git=SimpleNamespace(repo_url=CANONICAL_REPO_URL, branches=[BRANCH]))
     )
     info = extract_terminal_run_git(src)
     assert info is not None
@@ -109,9 +107,7 @@ def test_bind_repo_omitted_valid_launch_baseline() -> None:
 def test_bind_repo_omitted_missing_baseline_pre_head() -> None:
     git = RunGitInfo(repo_url=None, branches=(BRANCH,))
     with pytest.raises(SdkRuntimeError) as exc:
-        bind_terminal_git_repository(
-            git, attribution=_baseline(remote_pre_head=None)
-        )
+        bind_terminal_git_repository(git, attribution=_baseline(remote_pre_head=None))
     assert exc.value.code == "REMOTE_ATTRIBUTION_UNDETERMINED"
 
 
@@ -126,9 +122,7 @@ def test_bind_repo_omitted_foreign_baseline() -> None:
 
 
 def test_bind_repo_present_foreign_host() -> None:
-    git = RunGitInfo(
-        repo_url="https://gitlab.com/B0LK13/project-atlas", branches=(BRANCH,)
-    )
+    git = RunGitInfo(repo_url="https://gitlab.com/B0LK13/project-atlas", branches=(BRANCH,))
     with pytest.raises(SdkRuntimeError) as exc:
         bind_terminal_git_repository(git, attribution=_baseline())
     assert "foreign" in str(exc.value).casefold()
@@ -152,9 +146,7 @@ def test_bind_nested_foreign_repo_url() -> None:
 def test_cloud_provider_accepts_omitted_repo_with_baseline() -> None:
     provider = CloudRemoteGitAttributionProvider(
         resolve_remote_head=lambda _r, _b: H1,
-        resolve_remote_diff=lambda _r, _a, _b: [
-            "src/project_atlas/orchestration/sdk/backend.py"
-        ],
+        resolve_remote_diff=lambda _r, _a, _b: ["src/project_atlas/orchestration/sdk/backend.py"],
     )
     paths = provider.collect_changed_paths(
         root=Path("."),
@@ -174,9 +166,7 @@ def test_cloud_provider_rejects_ambiguous_branches() -> None:
         provider.collect_changed_paths(
             root=Path("."),
             attribution=_baseline(),
-            terminal_git=RunGitInfo(
-                repo_url=CANONICAL_REPO_URL, branches=(BRANCH, "other")
-            ),
+            terminal_git=RunGitInfo(repo_url=CANONICAL_REPO_URL, branches=(BRANCH, "other")),
             local_pre_head=None,
         )
     assert exc.value.code == "REMOTE_ATTRIBUTION_UNDETERMINED"
@@ -207,18 +197,14 @@ def test_cloud_provider_rejects_unexpected_branch_switch() -> None:
         provider.collect_changed_paths(
             root=Path("."),
             attribution=_baseline(),
-            terminal_git=RunGitInfo(
-                repo_url=CANONICAL_REPO_URL, branches=("feat/wrong-branch",)
-            ),
+            terminal_git=RunGitInfo(repo_url=CANONICAL_REPO_URL, branches=("feat/wrong-branch",)),
             local_pre_head=None,
         )
     assert exc.value.code == "REMOTE_ATTRIBUTION_UNDETERMINED"
 
 
 def test_is_get_run_reconnect_miss() -> None:
-    assert is_get_run_reconnect_miss(
-        Exception("invalid_argument: Run run-xyz not found")
-    )
+    assert is_get_run_reconnect_miss(Exception("invalid_argument: Run run-xyz not found"))
     assert not is_get_run_reconnect_miss(Exception("permission denied"))
 
 
@@ -242,9 +228,7 @@ class _FakeClient:
     async def get_run(self, run_id: str, options: object = None) -> object:
         self.get_run_options_calls.append(options)
         if not self._get_run_results:
-            return SimpleNamespace(
-                id=run_id, agent_id=AGENT, status="FINISHED", git=None
-            )
+            return SimpleNamespace(id=run_id, agent_id=AGENT, status="FINISHED", git=None)
         item = self._get_run_results.pop(0)
         if isinstance(item, BaseException):
             raise item
@@ -342,10 +326,7 @@ def test_recover_get_run_miss_list_empty() -> None:
                 resume=lambda _a: asyncio.sleep(0),
             )
         )
-    assert (
-        exc.value.code
-        == CloudRunRecoveryClass.CLOUD_RUN_RECOVERY_UNDETERMINED.value
-    )
+    assert exc.value.code == CloudRunRecoveryClass.CLOUD_RUN_RECOVERY_UNDETERMINED.value
 
 
 def test_recover_get_run_miss_only_other_run() -> None:
@@ -363,10 +344,7 @@ def test_recover_get_run_miss_only_other_run() -> None:
                 resume=lambda _a: asyncio.sleep(0),
             )
         )
-    assert (
-        exc.value.code
-        == CloudRunRecoveryClass.CLOUD_RUN_RECOVERY_UNDETERMINED.value
-    )
+    assert exc.value.code == CloudRunRecoveryClass.CLOUD_RUN_RECOVERY_UNDETERMINED.value
 
 
 def test_recover_rejects_wrong_agent_on_listed_run() -> None:

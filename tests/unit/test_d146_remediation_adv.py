@@ -82,17 +82,13 @@ def test_watchdog_waits_for_lock_holder_no_second_spawn(tmp_path: Path) -> None:
 
 def test_observer_timeout_pending_is_not_ci_fail() -> None:
     obs = CiObservation(head_sha="a" * 40, status="PENDING")
-    disp = classify_watch_session(
-        watch_exit_code=1, watch_timed_out=True, observation=obs
-    )
+    disp = classify_watch_session(watch_exit_code=1, watch_timed_out=True, observation=obs)
     assert disp == "CI_STILL_RUNNING"
     assert disp != "CI_TERMINAL_FAIL"
 
 
 def test_observer_exit_without_observation_is_observer_exited() -> None:
-    disp = classify_watch_session(
-        watch_exit_code=1, watch_timed_out=True, observation=None
-    )
+    disp = classify_watch_session(watch_exit_code=1, watch_timed_out=True, observation=None)
     assert disp == "OBSERVER_EXITED"
 
 

@@ -81,9 +81,7 @@ def test_cli_graph_authority(tmp_path: Path, capsys: pytest.CaptureFixture[str])
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command")
     register_atlas3_parsers(sub)
-    args = parser.parse_args(
-        ["graph-authority", "--vault", str(vault), "--project", "harbor-api"]
-    )
+    args = parser.parse_args(["graph-authority", "--vault", str(vault), "--project", "harbor-api"])
     assert dispatch_atlas3(args) == 0
     rendered = capsys.readouterr().out
     payload = json.loads(rendered)

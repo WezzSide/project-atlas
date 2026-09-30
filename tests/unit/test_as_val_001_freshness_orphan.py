@@ -27,8 +27,7 @@ def _write_manifest(vault: Path, sources: list[dict[str, object]]) -> None:
     path = vault / "sources" / "manifests" / "source-manifest.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        json.dumps({"schema_version": 1, "sources": sources}, indent=2, sort_keys=True)
-        + "\n",
+        json.dumps({"schema_version": 1, "sources": sources}, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
 
@@ -151,8 +150,7 @@ def test_h006_quarantined_stale_source_is_not_silent_error(tmp_path: Path) -> No
     reports = vault / "generated" / "reports"
     reports.mkdir(parents=True, exist_ok=True)
     (reports / "secret-findings.json").write_text(
-        json.dumps([{"source_id": "src-secret", "rule": "aws-access-key"}], indent=2)
-        + "\n",
+        json.dumps([{"source_id": "src-secret", "rule": "aws-access-key"}], indent=2) + "\n",
         encoding="utf-8",
     )
     result = validate(vault, reference_now=REFERENCE_NOW, stale_after_days=180)

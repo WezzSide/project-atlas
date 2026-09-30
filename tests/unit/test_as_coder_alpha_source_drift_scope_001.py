@@ -56,18 +56,12 @@ def test_cc_p1_002_unowned_edit_must_not_stale_unrelated_project(
         {"path": "portal/README.md", "likely_project": "harbor-portal", "sha256": "1"},
         {"path": "shared/x.md", "sha256": "2"},
     ]
-    in_scope = [
-        item
-        for item in sources
-        if manifest_row_matches_scoped_project(item, "harbor-api")
-    ]
+    in_scope = [item for item in sources if manifest_row_matches_scoped_project(item, "harbor-api")]
     assert in_scope == []
     shared = tmp_path / "shared"
     shared.mkdir()
     (shared / "x.md").write_text("changed\n", encoding="utf-8")
-    assert not any(
-        manifest_row_matches_scoped_project(item, "harbor-api") for item in sources
-    )
+    assert not any(manifest_row_matches_scoped_project(item, "harbor-api") for item in sources)
 
 
 def test_symlink_escape_is_rejected(tmp_path: Path) -> None:

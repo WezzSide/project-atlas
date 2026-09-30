@@ -67,9 +67,7 @@ CERTIFIED_SUBCOMMAND_OPTIONS: dict[tuple[str, str], tuple[tuple[str, str], ...]]
 
 def _subparser_action(parser: argparse.ArgumentParser) -> argparse._SubParsersAction:
     actions = [
-        action
-        for action in parser._actions
-        if isinstance(action, argparse._SubParsersAction)
+        action for action in parser._actions if isinstance(action, argparse._SubParsersAction)
     ]
     assert len(actions) == 1, f"expected exactly one subparser group, found {len(actions)}"
     return actions[0]
@@ -81,11 +79,7 @@ def _commands(parser: argparse.ArgumentParser) -> dict[str, argparse.ArgumentPar
 
 def _options(parser: argparse.ArgumentParser) -> dict[str, str]:
     """option string -> dest, for every action on this parser."""
-    return {
-        option: action.dest
-        for action in parser._actions
-        for option in action.option_strings
-    }
+    return {option: action.dest for action in parser._actions for option in action.option_strings}
 
 
 @pytest.fixture(scope="module")
@@ -290,9 +284,7 @@ class _ParseBoundary(BaseException):
     turn a blocked mutation into a silent pass.
     """
 
-    def __init__(
-        self, parser: argparse.ArgumentParser, namespace: argparse.Namespace
-    ) -> None:
+    def __init__(self, parser: argparse.ArgumentParser, namespace: argparse.Namespace) -> None:
         super().__init__("parse-boundary")
         self.parser = parser
         self.namespace = namespace
@@ -352,9 +344,7 @@ def _parse_boundary(
     )
 
 
-def _descend(
-    parser: argparse.ArgumentParser, path: tuple[str, ...]
-) -> argparse.ArgumentParser:
+def _descend(parser: argparse.ArgumentParser, path: tuple[str, ...]) -> argparse.ArgumentParser:
     """Walk the captured parser down to a (sub)command, or fail closed."""
     current = parser
     for name in path:
@@ -391,9 +381,7 @@ def _assert_certified_dests(
     )
     if len(path) > 1:
         routed = {str(value) for value in vars(namespace).values()}
-        assert path[1] in routed, (
-            f"the namespace records no route to subcommand {path[1]!r}"
-        )
+        assert path[1] in routed, f"the namespace records no route to subcommand {path[1]!r}"
 
     exposed = _options(_descend(parser, path))
     for flag, dest in options:

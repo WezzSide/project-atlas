@@ -87,9 +87,7 @@ def test_kf2_namespace_entity_relationship_roundtrip(tmp_path: Path) -> None:
     validate_record(rel.as_dict(), "kf2-relationship")
     assert (vault / "generated" / "kf2" / "namespaces" / "portfolio.json").is_file()
     assert (vault / "generated" / "kf2" / "entities" / "svc-api.json").is_file()
-    assert (
-        vault / "generated" / "kf2" / "relationships" / "rel-web-depends-api.json"
-    ).is_file()
+    assert (vault / "generated" / "kf2" / "relationships" / "rel-web-depends-api.json").is_file()
 
 
 def test_kf2_requires_namespace_before_entity(tmp_path: Path) -> None:
@@ -108,9 +106,7 @@ def test_kf2_rejects_self_loop(tmp_path: Path) -> None:
     vault = tmp_path / "vault"
     vault.mkdir()
     register_namespace(vault, namespace_id="ns", display_name="NS")
-    register_entity(
-        vault, entity_id="e1", namespace_id="ns", display_name="E1"
-    )
+    register_entity(vault, entity_id="e1", namespace_id="ns", display_name="E1")
     with pytest.raises(Kf2Error, match="self-loop"):
         register_relationship(
             vault,

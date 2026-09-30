@@ -26,7 +26,11 @@ import os
 import tempfile
 from pathlib import Path
 
-from project_atlas.orchestration.autonomy.dev_contracts import Role, VerificationRequest
+from project_atlas.orchestration.autonomy.dev_contracts import (
+    Role,
+    VerificationRequest,
+    same_identity,
+)
 from project_atlas.orchestration.autonomy.dev_transport import (
     CHANNEL_FOR_KIND,
     ROLE_FOR_CHANNEL,
@@ -84,9 +88,9 @@ class SpoolTransport:
                 raise TransportError("spool file name does not match record seal")
             if channel is Channel.VERIFICATION:
                 assert isinstance(rec, VerificationRequest)
-                if identity == rec.executor_identity:
+                if same_identity(identity, rec.executor_identity):
                     raise TransportError("executor identity may not claim its own verification")
-                if identity != rec.verifier_identity:
+                if not same_identity(identity, rec.verifier_identity):
                     continue
             try:
                 os.rename(path, d / _CLAIMED / path.name)  # exactly one claimer wins

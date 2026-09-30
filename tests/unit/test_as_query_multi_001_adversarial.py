@@ -18,9 +18,7 @@ from project_atlas.query_plan import (
 
 _ROOT = Path(__file__).resolve().parents[2]
 _QUERY_PLAN = _ROOT / "src" / "project_atlas" / "query_plan.py"
-_SCHEMA = (
-    _ROOT / "src" / "project_atlas" / "schemas" / "query-multi-plan.schema.json"
-)
+_SCHEMA = _ROOT / "src" / "project_atlas" / "schemas" / "query-multi-plan.schema.json"
 
 
 def test_adv_001_plan_smuggle_as_answer_forbidden() -> None:

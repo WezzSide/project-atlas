@@ -22,9 +22,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Protocol
 
@@ -32,8 +35,10 @@ from project_atlas.orchestration.autonomy.dev_contracts import (
     ContractError,
     Finding,
     FindingCategory,
+    ResultRecord,
     Role,
     Verdict,
+    VerdictRecord,
     VerificationRequest,
     WorkItem,
     make_verdict,
@@ -83,6 +88,47 @@ class RunInfo:
 
 
 @dataclass(frozen=True)
+class CheckRun:
+    name: str
+    status: str
+    conclusion: str | None
+
+
+class DispatchDeferred(AdapterError):
+    code = "DEV_FABRIC_DEFERRED"
+
+
+class AmbiguousRun(AdapterError):
+    code = "DEV_FABRIC_AMBIGUOUS_RUN"
+
+
+DEFAULT_REQUIRED_CHECKS = frozenset(
+    {
+        "control-plane",
+        "quality (ubuntu-latest, 3.12, full)",
+        "quality (ubuntu-latest, 3.13, compat)",
+        "quality (windows-latest, 3.12, windows)",
+    }
+)
+CLOCK_SKEW = timedelta(seconds=120)
+_OK = frozenset({"success", "skipped", "neutral"})
+
+
+def _atomic_write(path: Path, text: str) -> None:
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".tmp-")
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(text)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, path)
+
+
+def _shift(iso: str, delta: timedelta) -> str:
+    t = datetime.fromisoformat(iso.replace("Z", "+00:00")) - delta
+    return t.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+@dataclass(frozen=True)
 class CompareInfo:
     merge_base: str
     files: tuple[str, ...]
@@ -97,7 +143,7 @@ class GitHubPort(Protocol):
     def compare(self, base: str, head: str) -> CompareInfo: ...
     def artifact_digests(self, run_id: int, name: str) -> tuple[str, ...]: ...
     def read_json_artifact(self, run_id: int, name: str, member: str) -> dict[str, object]: ...
-    def check_runs(self, sha: str) -> dict[str, tuple[str, str | None]]: ...
+    def check_runs(self, sha: str) -> list[CheckRun]: ...
     def ensure_draft_pr(self, head_branch: str, base: str, title: str, body: str) -> int: ...
 
 
@@ -171,7 +217,11 @@ class FabricAdapter:
         task_statement: Callable[[WorkItem], tuple[str, tuple[str, ...]]],
         executor_identity: str = EXECUTOR_IDENTITY,
         verifier_identity: str = VERIFIER_IDENTITY,
+        required_checks: frozenset[str] = DEFAULT_REQUIRED_CHECKS,
     ) -> None:
+        if not required_checks:
+            raise AdapterError("a non-empty required check set is mandatory")
+        self.required_checks = required_checks
         self.port, self.transport, self.xw = port, transport, crosswalk
         self.pending = Path(pending_dir)
         self.pending.mkdir(parents=True, exist_ok=True)
@@ -200,16 +250,18 @@ class FabricAdapter:
         if w is None:
             return None
         assert isinstance(w, WorkItem)
-        self._work_file(w.seal).write_text(encode(w), encoding="utf-8")
+        _atomic_write(self._work_file(w.seal), encode(w))
         self.works[w.seal] = w
         self.xw.bind_work(w)
         return w
 
-    def dispatch(self, work: WorkItem, port_ref_check: bool = True) -> DispatchPayload:
+    def dispatch(self, work: WorkItem) -> DispatchPayload:
         work.verify_seal()
         self.xw.bind_work(work)
         if self.xw.hop(work.seal, "DISPATCH") is not None:
             raise AdapterError("work item already dispatched; refusing to dispatch twice")
+        if self._unbound_dispatches(exclude=work.seal):
+            raise DispatchDeferred("another dispatch has not been bound to a run yet")
         if work.attempt == 1:
             base_branch = DEFAULT_BRANCH
         else:
@@ -217,7 +269,7 @@ class FabricAdapter:
             if found is None:
                 raise AdapterError("repair base revision has no known result branch")
             base_branch = found
-        if port_ref_check and self.port.branch_head(base_branch) != work.base_revision:
+        if self.port.branch_head(base_branch) != work.base_revision:
             raise AdapterError(f"{base_branch} is not at the sealed base revision")
         statement, commands = self.task_statement(work)
         payload = build_dispatch_payload(
@@ -230,8 +282,21 @@ class FabricAdapter:
         self.xw.bind_dispatch(
             work.seal, dispatched_at=self.clock(), payload_sha256=payload.sha256()
         )
-        self.port.dispatch_workflow(payload.workflow, payload.ref, payload.inputs)
+        try:
+            self.port.dispatch_workflow(payload.workflow, payload.ref, payload.inputs)
+        except AdapterError as exc:  # write-ahead already recorded: never retried, surfaced
+            raise RemoteExecutionFailed(f"dispatch failed: {exc}") from exc
         return payload
+
+    def _unbound_dispatches(self, *, exclude: str = "") -> list[str]:
+        """Seals dispatched but not yet bound to a run: correlation is serialised through these."""
+        return [
+            seal
+            for seal in self.works
+            if seal != exclude
+            and self.xw.hop(seal, "DISPATCH") is not None
+            and self.xw.hop(seal, "RUN") is None
+        ]
 
     def locate_run(self, work: WorkItem) -> RunInfo | None:
         """The single workflow_dispatch run created after our dispatch; ambiguity => refuse."""
@@ -243,7 +308,9 @@ class FabricAdapter:
         runs = [
             r
             for r in self.port.list_runs(
-                EXECUTE_WORKFLOW, event="workflow_dispatch", created_after=disp["dispatched_at"]
+                EXECUTE_WORKFLOW,
+                event="workflow_dispatch",
+                created_after=_shift(str(disp["dispatched_at"]), CLOCK_SKEW),
             )
             if r.head_branch == DEFAULT_BRANCH
         ]
@@ -255,7 +322,7 @@ class FabricAdapter:
         }
         runs = [r for r in runs if r.run_id not in already]
         if len(runs) > 1:
-            raise AdapterError("ambiguous run correlation; refusing to guess")
+            raise AmbiguousRun("ambiguous run correlation; refusing to guess")
         if not runs:
             return None
         r = runs[0]
@@ -298,9 +365,32 @@ class FabricAdapter:
             artifact_digests=self.port.artifact_digests(run.run_id, EVIDENCE_ARTIFACT),
             changed_paths=cmp.files,
         )
-        res = ingest_report(report, work, self.xw)
+        res = ingest_report(report, work, self.xw, bind=False)
+        # crash-safe order: durable copy -> ledger -> publish (recover() finishes any prefix)
+        _atomic_write(self._result_file(res.work_seal), encode(res))
+        self.xw.bind_result(res)
         self.transport.publish(res)
         return True
+
+    def _result_file(self, seal: str) -> Path:
+        return self.pending / f"result-{seal}.json"
+
+    def recover(self) -> list[str]:
+        """Finish interrupted hops: bind + (idempotently) publish results/verdicts on disk."""
+        out: list[str] = []
+        for f in sorted(self.pending.glob("result-*.json")):
+            rec = decode(f.read_text(encoding="utf-8"))
+            assert isinstance(rec, ResultRecord)
+            if self.xw.hop(rec.work_seal, "RESULT") is None:
+                self.xw.bind_result(rec)
+            if self.transport.publish(rec):
+                out.append(f"RESULT_REPUBLISHED:{rec.task_id}")
+        for f in sorted(self.pending.glob("verdict-*.json")):
+            v = decode(f.read_text(encoding="utf-8"))
+            assert isinstance(v, VerdictRecord)
+            if self.transport.publish(v):
+                out.append(f"VERDICT_REPUBLISHED:{v.task_id}")
+        return out
 
     # -- verifier side ------------------------------------------------------------------------
     def accept_verification(self) -> VerificationRequest | None:
@@ -310,7 +400,7 @@ class FabricAdapter:
         if req is None:
             return None
         assert isinstance(req, VerificationRequest)
-        (self.pending / f"verify-{req.seal}.json").write_text(encode(req), encoding="utf-8")
+        _atomic_write(self.pending / f"verify-{req.seal}.json", encode(req))
         return req
 
     def pending_verifications(self) -> list[VerificationRequest]:
@@ -335,15 +425,25 @@ class FabricAdapter:
     def collect_verdict(self, work: WorkItem, req: VerificationRequest) -> bool:
         """Publish a verdict once BOTH the independent verifier and result CI are conclusive."""
         run_hop = self.xw.hop(work.seal, "RUN")
+        res_hop = self.xw.hop(work.seal, "RESULT")
         assert run_hop is not None
+        if res_hop is None or (
+            req.result_seal != res_hop["result_seal"]
+            or req.result_revision != res_hop["result_revision"]
+            or req.result_tree != res_hop["result_tree"]
+        ):
+            raise AdapterError("verification request does not match the crosswalked result")
+        if self.xw.hop(work.seal, "VERDICT") is not None:
+            return True  # already decided (recover() republishes if needed)
         source_run = int(run_hop["run_id"])
         head = self.port.branch_head(str(run_hop["branch"]))
         if head != req.result_revision:
             raise AdapterError("result branch moved after ingestion; artifact identity changed")
         self.ensure_result_pr(work, req)
         checks = self.port.check_runs(req.result_revision)
-        if not checks or any(status != "completed" for status, _ in checks.values()):
-            return False
+        names = {c.name for c in checks}
+        if not self.required_checks <= names or any(c.status != "completed" for c in checks):
+            return False  # required task CI not (fully) reported/completed yet
         report = self._verification_report(source_run)
         if report is None:
             return False
@@ -359,23 +459,32 @@ class FabricAdapter:
                     message=f"independent verifier verdict {verdict_str} for run {source_run}",
                 )
             )
-        for name, (_, concl) in sorted(checks.items()):
-            if concl not in ("success", "skipped", "neutral"):
+        for c in sorted(checks, key=lambda x: (x.name, str(x.conclusion))):
+            ok = (
+                c.conclusion == "success"
+                if c.name in self.required_checks
+                else (c.conclusion in _OK)
+            )
+            if not ok:
+                fid = re.sub(r"[^A-Za-z0-9]+", "-", c.name).strip("-")
                 findings.append(
                     Finding(
-                        finding_id=f"CI-{re.sub(r'[^A-Za-z0-9]+', '-', name).strip('-')}",
+                        finding_id=f"CI-{fid}",
                         category=FindingCategory.DEFECT,
-                        message=f"check {name!r} concluded {concl} on the exact result head",
+                        message=f"check {c.name!r} concluded {c.conclusion} on the exact head",
                     )
                 )
+        unique = list({f.finding_id: f for f in findings}.values())
         v = make_verdict(
             req,
-            verdict=Verdict.FAIL if findings else Verdict.PASS,
-            findings=tuple(findings),
+            verdict=Verdict.FAIL if unique else Verdict.PASS,
+            findings=tuple(unique),
         )
-        self.transport.publish(v)
+        # crash-safe order: durable copy -> ledger (validates against the RESULT hop) -> publish
+        _atomic_write(self.pending / f"verdict-{v.seal}.json", encode(v))
         self.xw.bind_verification(work.seal, req)
         self.xw.bind_verdict(work.seal, v)
+        self.transport.publish(v)
         self._verify_file(req).unlink(missing_ok=True)
         return True
 
@@ -385,38 +494,49 @@ class FabricAdapter:
     def _verification_report(self, source_run: int) -> dict[str, object] | None:
         run = self.port.get_run(source_run)
         candidates = self.port.list_runs(
-            VERIFY_WORKFLOW, event="workflow_run", created_after=run.created_at
+            VERIFY_WORKFLOW, event="workflow_run", created_after=_shift(run.created_at, CLOCK_SKEW)
         )
-        if not candidates or any(c.status != "completed" for c in candidates):
-            return None
+        matches: list[dict[str, object]] = []
         for c in candidates:
             try:
                 rep = self.port.read_json_artifact(
                     c.run_id, REPORT_ARTIFACT, "verification-report.json"
                 )
             except AdapterError:
-                continue
-            if rep.get("source_run_id") == source_run:
-                return rep
-        return None
+                continue  # that run has no report (yet); it may belong to another lineage
+            try:
+                same = int(str(rep.get("source_run_id"))) == source_run
+            except ValueError:
+                same = False
+            if same:
+                matches.append(rep)
+        if len({str(m.get("verdict")) for m in matches}) > 1:
+            raise AdapterError("conflicting verifier reports for one source run")
+        return matches[-1] if matches else None
 
     # -- one scheduling tick (idempotent; state lives in crosswalk + spool + pending dir) ----
     def tick(self) -> list[str]:
-        events: list[str] = []
+        events: list[str] = list(self.recover())
         while (w := self.accept_work()) is not None:
             events.append(f"ACCEPTED:{w.task_id}")
         for seal, w in list(self.works.items()):
-            if self.xw.hop(seal, "DISPATCH") is None:
-                self.dispatch(w)
-                events.append(f"DISPATCHED:{w.task_id}")
-            if self.xw.hop(seal, "RESULT") is None:
-                try:
-                    if self.collect_result(w):
-                        events.append(f"RESULT:{w.task_id}")
-                except (RemoteExecutionFailed, CrosswalkError) as exc:  # this lineage only
-                    events.append(f"EXECUTION_FAILED:{w.task_id}:{exc}")
-                    self._work_file(seal).unlink(missing_ok=True)
-                    del self.works[seal]
+            try:
+                if self.xw.hop(seal, "DISPATCH") is None:
+                    try:
+                        self.dispatch(w)
+                    except DispatchDeferred:
+                        continue  # correlation is serialised; retry next tick
+                    events.append(f"DISPATCHED:{w.task_id}")
+                if self.xw.hop(seal, "RESULT") is None and self.collect_result(w):
+                    events.append(f"RESULT:{w.task_id}")
+            except (
+                RemoteExecutionFailed,
+                CrosswalkError,
+                AmbiguousRun,
+            ) as exc:  # this lineage only
+                events.append(f"EXECUTION_FAILED:{w.task_id}:{exc}")
+                self._work_file(seal).unlink(missing_ok=True)
+                del self.works[seal]
         while self.accept_verification() is not None:
             events.append("VERIFICATION_ACCEPTED")
         for req in self.pending_verifications():

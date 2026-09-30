@@ -110,10 +110,10 @@ def test_render_relationships_deterministic_order_and_labels() -> None:
 def test_render_absent_graph_state_no_speculation() -> None:
     md = render_relationships_markdown((), project_id="demo")
     assert "No speculative relationship content" in md
-    assert "source_state: \"absent\"" in md
+    assert 'source_state: "absent"' in md
     health_md = render_graph_health_markdown(None, project_id="demo")
     assert "No speculative health content" in health_md
-    assert "source_state: \"absent\"" in health_md
+    assert 'source_state: "absent"' in health_md
 
 
 def test_render_health_metadata_only() -> None:

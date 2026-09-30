@@ -666,8 +666,9 @@ def test_controlled_pilot_bounded_remediation() -> None:
 def test_cli_governor_discover(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     inventory = tmp_path / "inv.json"
     inventory.write_text(
-        _inventory(current_main=INITIAL_RETARGET_MAIN, current_tree=INITIAL_RETARGET_TREE)
-        .model_dump_json(),
+        _inventory(
+            current_main=INITIAL_RETARGET_MAIN, current_tree=INITIAL_RETARGET_TREE
+        ).model_dump_json(),
         encoding="utf-8",
     )
     code = main(
@@ -689,8 +690,9 @@ def test_cli_governor_discover(tmp_path: Path, capsys: pytest.CaptureFixture[str
 def test_cli_governor_pilot(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     inventory = tmp_path / "inv.json"
     inventory.write_text(
-        _inventory(current_main=INITIAL_RETARGET_MAIN, current_tree=INITIAL_RETARGET_TREE)
-        .model_dump_json(),
+        _inventory(
+            current_main=INITIAL_RETARGET_MAIN, current_tree=INITIAL_RETARGET_TREE
+        ).model_dump_json(),
         encoding="utf-8",
     )
     evidence = tmp_path / "ev"

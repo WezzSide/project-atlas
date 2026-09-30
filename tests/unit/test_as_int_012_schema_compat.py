@@ -53,9 +53,7 @@ def test_as_int_012_malformed_fail_closed(tmp_path: Path) -> None:
     target.parent.mkdir(parents=True)
     target.write_text("{not-json", encoding="utf-8")
     report = scan_compat(vault)
-    row = next(
-        r for r in report["findings"] if r["path"].endswith("event-tombstones.json")
-    )
+    row = next(r for r in report["findings"] if r["path"].endswith("event-tombstones.json"))
     assert row["result"] == "malformed"
     assert report["status"] == "error"
 
@@ -93,9 +91,7 @@ def test_as_int_012_migrate_candidate_on_drift(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     report = build_report(vault, mode="migrate-dry-run")
-    row = next(
-        r for r in report["findings"] if r["path"].endswith("event-tombstones.json")
-    )
+    row = next(r for r in report["findings"] if r["path"].endswith("event-tombstones.json"))
     assert row["result"] == "migrate-candidate"
     assert "no auto-apply" in row["detail"]
     assert report["counts"]["migrate_candidate"] == 1
@@ -114,9 +110,7 @@ def test_as_int_012_unknown_schema_kind(tmp_path: Path) -> None:
 
 
 def test_as_int_012_detect_schema_identity() -> None:
-    schema, version = detect_schema_identity(
-        {"schema": "atlas.x.v1", "schema_version": 1}
-    )
+    schema, version = detect_schema_identity({"schema": "atlas.x.v1", "schema_version": 1})
     assert schema == "atlas.x.v1"
     assert version == 1
 

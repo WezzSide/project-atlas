@@ -21,9 +21,7 @@ def test_obsidian_lens_registry_happy_path(tmp_path: Path) -> None:
     assert report["canonical_writes"] is False
     assert report["compat_snapshot_id"] == "atlas-1.0.0-compat"
     validate_record(report, "obsidian-lens-registry")
-    assert (
-        vault / "generated" / "ops" / "obsidian" / "default-lens-registry.json"
-    ).is_file()
+    assert (vault / "generated" / "ops" / "obsidian" / "default-lens-registry.json").is_file()
 
 
 def test_obsidian_rejects_bad_id(tmp_path: Path) -> None:

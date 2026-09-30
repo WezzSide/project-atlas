@@ -122,9 +122,7 @@ def test_cli_intent_empty_reconcile(tmp_path: Path, capsys: pytest.CaptureFixtur
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command")
     register_atlas3_parsers(sub)
-    args = parser.parse_args(
-        ["memory", "intent", "--vault", str(vault), "--project", "harbor-api"]
-    )
+    args = parser.parse_args(["memory", "intent", "--vault", str(vault), "--project", "harbor-api"])
     assert dispatch_atlas3(args) == 0
     rendered = capsys.readouterr().out
     payload = json.loads(rendered)

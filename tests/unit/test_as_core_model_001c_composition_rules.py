@@ -221,9 +221,7 @@ def test_a8_singleton_maturity_and_capability_stable(tmp_path: Path) -> None:
             emit_concepts=["architecture"],
         ),
     ]
-    maturity = derive_project_maturity(
-        declared_maturity=None, open_conflicts=0, entries=entries
-    )
+    maturity = derive_project_maturity(declared_maturity=None, open_conflicts=0, entries=entries)
     assert maturity is Maturity.MVP
     singleton = _concept("demo", [], entries, open_conflicts=0)
     assert singleton.concept_id == "demo"
@@ -370,9 +368,7 @@ def test_adv_c12_architecture_secret_title_fails_closed() -> None:
         )
     ]
     with pytest.raises(ValueError, match="secret-bearing allow-list"):
-        _normalize_architecture_declarations(
-            "demo", entries, frozenset({"architecture"})
-        )
+        _normalize_architecture_declarations("demo", entries, frozenset({"architecture"}))
 
 
 def test_adv_c12_decision_secret_title_fails_closed() -> None:
@@ -426,9 +422,9 @@ def test_at011_human_regions_preserved_with_multi_concept(tmp_path: Path) -> Non
             text="# Overview\nPurpose: preserve humans.",
         )
     ]
-    generated = render_bundle(
-        compile_knowledge("demo", entries, tmp_path), "demo"
-    )["projects/demo/concepts.md"]
+    generated = render_bundle(compile_knowledge("demo", entries, tmp_path), "demo")[
+        "projects/demo/concepts.md"
+    ]
     path = tmp_path / "projects/demo/concepts.md"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -441,9 +437,9 @@ def test_at011_human_regions_preserved_with_multi_concept(tmp_path: Path) -> Non
         ),
         encoding="utf-8",
     )
-    replay = render_bundle(
-        compile_knowledge("demo", entries, tmp_path), "demo"
-    )["projects/demo/concepts.md"]
+    replay = render_bundle(compile_knowledge("demo", entries, tmp_path), "demo")[
+        "projects/demo/concepts.md"
+    ]
     preserved = _generated_content(path, replay)
     assert preserved.startswith("---\n")
     assert "Human-owned note." in preserved

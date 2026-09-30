@@ -20,9 +20,7 @@ def test_as_web_accept_005_evidence_is_pinned_and_accepted() -> None:
 
 
 def test_as_web_accept_005_governor_decision_is_approved() -> None:
-    signoff = (ROOT / "docs" / "AS-WEB-ACCEPT-GOVERNOR-SIGNOFF.md").read_text(
-        encoding="utf-8"
-    )
+    signoff = (ROOT / "docs" / "AS-WEB-ACCEPT-GOVERNOR-SIGNOFF.md").read_text(encoding="utf-8")
     assert MAIN in signoff
     assert TREE in signoff
     assert "Governor decision | **APPROVED**" in signoff
@@ -33,9 +31,7 @@ def test_as_web_accept_005_governor_decision_is_approved() -> None:
 
 
 def test_as_web_accept_005_checklist_pin_and_item_10_closed() -> None:
-    checklist = (ROOT / "docs" / "AS-WEB-ACCEPT-001-checklist.md").read_text(
-        encoding="utf-8"
-    )
+    checklist = (ROOT / "docs" / "AS-WEB-ACCEPT-001-checklist.md").read_text(encoding="utf-8")
     assert MAIN in checklist
     assert TREE in checklist
     assert "| 10 | Governor sign-off artifact + tip pin recorded" in checklist

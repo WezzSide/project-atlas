@@ -392,9 +392,7 @@ def test_ready_owner_gated_node_never_leased_or_dispatched(
     owner_gate must stop the loop before any lease or dispatch, exactly
     like OWNER_HELD/MERGE_ELIGIBLE already does for gate A.
     """
-    gov = _governor(
-        _node("AS-ORCH-GATE-001", state=NodeState.READY, owner_gate=gate)
-    )
+    gov = _governor(_node("AS-ORCH-GATE-001", state=NodeState.READY, owner_gate=gate))
     calls: list[str] = []
     port = CallableDispatchPort(
         lambda _root: calls.append("dispatch") or {"dispatch_id": "x", "status": "COMPLETED"}
@@ -404,9 +402,7 @@ def test_ready_owner_gated_node_never_leased_or_dispatched(
     assert result.stop_reason is StopReason.OWNER_GATE
     assert calls == []
     assert result.dispatched is False
-    node = next(
-        item for item in gov.snapshot().nodes if item.package_id == "AS-ORCH-GATE-001"
-    )
+    node = next(item for item in gov.snapshot().nodes if item.package_id == "AS-ORCH-GATE-001")
     assert node.state is NodeState.READY
 
 
@@ -741,9 +737,7 @@ def test_validating_dangling_in_process_redrives_and_completes(tmp_path: Path) -
     package_id = "AS-ORCH-VALSTUCK-001"
     gov = _governor(_node(package_id))
     loop = _loop(tmp_path, gov)
-    lease = gov.lease(
-        package_id, loop._first_agent(), branch=loop._branch, worktree=loop._worktree
-    )
+    lease = gov.lease(package_id, loop._first_agent(), branch=loop._branch, worktree=loop._worktree)
     gov.execute_leased(lease.lease_id)  # node -> ACTIVE, mirrors _dispatch_leased()'s first step
     dispatch_id = f"in-process:{lease.lease_id}"
     _dangling_validating(
@@ -782,9 +776,7 @@ def test_validating_dangling_after_certified_finishes_without_illegal_transition
     package_id = "AS-ORCH-VALSTUCK-002"
     gov = _governor(_node(package_id))
     loop = _loop(tmp_path, gov)
-    lease = gov.lease(
-        package_id, loop._first_agent(), branch=loop._branch, worktree=loop._worktree
-    )
+    lease = gov.lease(package_id, loop._first_agent(), branch=loop._branch, worktree=loop._worktree)
     gov.execute_leased(lease.lease_id)
     gov.transition(package_id, NodeState.VERIFYING, "test-pre-interruption-verify")
     gov.complete_verification(package_id, passed=True)
@@ -819,8 +811,9 @@ def test_validating_dangling_external_dispatch_reobserves_before_redriving(tmp_p
     recover_calls: list[str] = []
     port = CallableDispatchPort(
         lambda _root: {"dispatch_id": "val-3", "status": "RUNNING"},
-        recover=lambda _root, dispatch_id: recover_calls.append(dispatch_id)
-        or {"status": "COMPLETED", "digest": "cc" * 32},
+        recover=lambda _root, dispatch_id: (
+            recover_calls.append(dispatch_id) or {"status": "COMPLETED", "digest": "cc" * 32}
+        ),
     )
     loop = _loop(tmp_path, gov, port)
     loop.tick()  # LEASED -> DISPATCHING -> AWAITING_RESULT
@@ -852,9 +845,7 @@ def test_validating_dangling_remediating_node_resumes_to_leased(tmp_path: Path) 
     package_id = "AS-ORCH-VALSTUCK-004"
     gov = _governor(_node(package_id))
     loop = _loop(tmp_path, gov)
-    lease = gov.lease(
-        package_id, loop._first_agent(), branch=loop._branch, worktree=loop._worktree
-    )
+    lease = gov.lease(package_id, loop._first_agent(), branch=loop._branch, worktree=loop._worktree)
     gov.execute_leased(lease.lease_id)
     gov.transition(package_id, NodeState.VERIFYING, "test-pre-interruption-verify")
     gov.complete_verification(package_id, passed=False)
@@ -882,14 +873,10 @@ def test_validating_dangling_blocked_node_stops_hard_blocker(tmp_path: Path) -> 
     no-op.
     """
     package_id = "AS-ORCH-VALSTUCK-005"
-    exhausted = _node(package_id).model_copy(
-        update={"retry_policy": RetryPolicy(cycles_used=3)}
-    )
+    exhausted = _node(package_id).model_copy(update={"retry_policy": RetryPolicy(cycles_used=3)})
     gov = _governor(exhausted)
     loop = _loop(tmp_path, gov)
-    lease = gov.lease(
-        package_id, loop._first_agent(), branch=loop._branch, worktree=loop._worktree
-    )
+    lease = gov.lease(package_id, loop._first_agent(), branch=loop._branch, worktree=loop._worktree)
     gov.execute_leased(lease.lease_id)
     gov.transition(package_id, NodeState.VERIFYING, "test-pre-interruption-verify")
     gov.complete_verification(package_id, passed=False)
@@ -918,9 +905,7 @@ def test_validating_dangling_ambiguous_node_state_fails_closed(tmp_path: Path) -
     package_id = "AS-ORCH-VALSTUCK-006"
     gov = _governor(_node(package_id))
     loop = _loop(tmp_path, gov)
-    lease = gov.lease(
-        package_id, loop._first_agent(), branch=loop._branch, worktree=loop._worktree
-    )
+    lease = gov.lease(package_id, loop._first_agent(), branch=loop._branch, worktree=loop._worktree)
     gov.execute_leased(lease.lease_id)
     gov.transition(package_id, NodeState.VERIFYING, "test-interrupted-mid-verify")
     node = next(item for item in gov.snapshot().nodes if item.package_id == package_id)
@@ -1022,8 +1007,9 @@ def test_crash_recover_does_not_respawn(tmp_path: Path) -> None:
     recover_calls: list[str] = []
     port = CallableDispatchPort(
         lambda _root: {"dispatch_id": "disp-crash", "status": "RUNNING"},
-        recover=lambda _root, did: recover_calls.append(did)
-        or {"dispatch_id": did, "status": "RUNNING"},
+        recover=lambda _root, did: (
+            recover_calls.append(did) or {"dispatch_id": did, "status": "RUNNING"}
+        ),
     )
     loop = _loop(tmp_path, gov, port)
     loop.tick()
@@ -1062,9 +1048,12 @@ def test_digest_roundtrip(tmp_path: Path) -> None:
     state = initial_loop_state(_anchor())
     persisted = persist_loop_state(tmp_path / "s", state)
     assert verify_loop_state(persisted).record_digest == hash_payload(persisted.unsigned_payload())
-    assert persisted.record_digest != seal_loop_state(
-        persisted.model_copy(update={"sequence": 1, "record_digest": "00" * 32})
-    ).record_digest
+    assert (
+        persisted.record_digest
+        != seal_loop_state(
+            persisted.model_copy(update={"sequence": 1, "record_digest": "00" * 32})
+        ).record_digest
+    )
 
 
 def test_package_id_constant() -> None:

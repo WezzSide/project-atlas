@@ -28,9 +28,7 @@ def test_mcp_rejects_live_server(tmp_path: Path) -> None:
     vault = tmp_path / "vault"
     vault.mkdir()
     with pytest.raises(McpRegistryError, match="live-server-forbidden"):
-        build_mcp_tool_registry(
-            vault, registry_id="default", enable_live_server=True
-        )
+        build_mcp_tool_registry(vault, registry_id="default", enable_live_server=True)
 
 
 def test_mcp_rejects_enabling_write(tmp_path: Path) -> None:

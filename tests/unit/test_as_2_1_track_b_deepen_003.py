@@ -73,9 +73,7 @@ def test_web_actions_recent_and_cap(tmp_path: Path) -> None:
     vault = tmp_path / "v"
     vault.mkdir()
     op = elevated_operator("web-op", extra={"web.action"})
-    submit_web_action(
-        vault, action_id="act-1", action_type="refresh-status", operator=op
-    )
+    submit_web_action(vault, action_id="act-1", action_type="refresh-status", operator=op)
     recent = list_recent_actions(vault, limit=5)
     assert recent["count"] == 1
     assert recent["authority"] is False
@@ -93,9 +91,7 @@ def test_perf_includes_mcp_list(tmp_path: Path) -> None:
 
 def test_docs_board_tip_not_empty() -> None:
     root = Path(__file__).resolve().parents[2]
-    board = (root / "docs" / "atlas-2.1" / "PACKAGE-BOARD.md").read_text(
-        encoding="utf-8"
-    )
+    board = (root / "docs" / "atlas-2.1" / "PACKAGE-BOARD.md").read_text(encoding="utf-8")
     assert "ATLAS_2_1_RELEASE_CERTIFIED = NO" in board
     assert "not** empty" in board or "not empty" in board.lower()
     assert "OWNER_BLOCKED" in board

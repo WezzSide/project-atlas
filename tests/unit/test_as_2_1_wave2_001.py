@@ -34,9 +34,7 @@ def test_chatgpt_bridge(tmp_path: Path) -> None:
 def test_collab_session_reconstructable(tmp_path: Path) -> None:
     vault = tmp_path / "v"
     vault.mkdir()
-    session = open_collab_session(
-        vault, session_id="sess-a", subject="review-item-1"
-    )
+    session = open_collab_session(vault, session_id="sess-a", subject="review-item-1")
     assert session["live_collab"] is True
     assert session["network_multiuser"] is False
     updated = append_collab_action(
@@ -52,9 +50,7 @@ def test_web_action_requires_capability(tmp_path: Path) -> None:
     vault = tmp_path / "v"
     vault.mkdir()
     with pytest.raises(AuthzError):
-        submit_web_action(
-            vault, action_id="act-a", action_type="refresh-status"
-        )
+        submit_web_action(vault, action_id="act-a", action_type="refresh-status")
 
 
 def test_web_action_ledger(tmp_path: Path) -> None:

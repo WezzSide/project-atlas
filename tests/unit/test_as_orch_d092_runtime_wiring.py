@@ -109,9 +109,7 @@ def test_job_fail_head_move_stale() -> None:
         failed_required_job_id="2",
         failure_digest="a" * 64,
     )
-    classified = classify_failure(
-        observation=obs, live_head="b" * 40, current_generation=90
-    )
+    classified = classify_failure(observation=obs, live_head="b" * 40, current_generation=90)
     assert classified.failure_class == "STALE_SUPERSEDED"
 
 
@@ -223,9 +221,7 @@ def test_scheduler_parks_transient_without_raising(tmp_path: Path) -> None:
 
 
 def test_package_registry_rejects_428_and_stale_gen(tmp_path: Path) -> None:
-    update_package_route_on_head_move(
-        tmp_path, head=HEAD, tree=TREE, dag_generation=90
-    )
+    update_package_route_on_head_move(tmp_path, head=HEAD, tree=TREE, dag_generation=90)
     with pytest.raises(SdkRuntimeError, match=r"STALE_LINEAGE"):
         require_mutating_route(
             tmp_path,

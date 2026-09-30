@@ -30,7 +30,7 @@ def test_canonical_identity_key_avoids_delimiter_collision() -> None:
 def test_canonical_identity_key_handles_unicode_and_whitespace() -> None:
     key = canonical_identity_key("pr\u00f6ject", "s\u00f6urce", "type", "f\u00efeld", "l\u00f2c")
     parsed = key
-    assert parsed.startswith("[\"v2\"")
+    assert parsed.startswith('["v2"')
     assert claim_id_from_key(key).startswith("claim-")
 
 
@@ -79,12 +79,7 @@ def test_compiler_and_migration_v2_claim_ids_match() -> None:
 
 def test_extract_claims_agrees_between_compiler_and_migration() -> None:
     """Rule parity: compiler and migration consume the same parsed candidates."""
-    text = (
-        "# Overview\n\n"
-        "purpose: test project\n\n"
-        "requires: nebula {#dep1}\n\n"
-        "roadmap: active\n"
-    )
+    text = "# Overview\n\npurpose: test project\n\nrequires: nebula {#dep1}\n\nroadmap: active\n"
     compiler_claims, _extraction = _extract(
         "project",
         {

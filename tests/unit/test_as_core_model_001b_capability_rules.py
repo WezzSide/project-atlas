@@ -158,9 +158,7 @@ def test_singleton_and_maturity_unaffected(tmp_path: Path) -> None:
             capabilities=[{"id": "search", "title": "Search"}],
         ),
     ]
-    maturity = derive_project_maturity(
-        declared_maturity=None, open_conflicts=0, entries=entries
-    )
+    maturity = derive_project_maturity(declared_maturity=None, open_conflicts=0, entries=entries)
     assert maturity is Maturity.MVP
     singleton = _concept("demo", [], entries, open_conflicts=0)
     assert singleton.concept_id == "demo"

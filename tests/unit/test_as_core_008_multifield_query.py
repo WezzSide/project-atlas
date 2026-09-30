@@ -139,9 +139,7 @@ def test_t01_two_field_mixed_authoritative_and_not_found(tmp_path: Path) -> None
 def test_three_field_success_mixed_statuses(tmp_path: Path) -> None:
     vault = _materialize_vault(tmp_path)
     base = json.loads(
-        (vault / "state" / "authoritative-state" / "project-atlas.json").read_text(
-            encoding="utf-8"
-        )
+        (vault / "state" / "authoritative-state" / "project-atlas.json").read_text(encoding="utf-8")
     )["authoritative_states"][0]
     _inject_auth_rows(
         vault,
@@ -231,9 +229,7 @@ def test_t03_duplicate_fields_request_invalid(tmp_path: Path) -> None:
 def test_t04_empty_fields_request_invalid(tmp_path: Path) -> None:
     vault = _materialize_vault(tmp_path)
     with pytest.raises(KnowledgeQueryError) as exc:
-        query_knowledge_fields(
-            vault, "project-atlas", "wp:AS-ID-001", [], kind="authoritative"
-        )
+        query_knowledge_fields(vault, "project-atlas", "wp:AS-ID-001", [], kind="authoritative")
     assert exc.value.code is KnowledgeQueryErrorCode.INVALID_INPUT
 
 
@@ -249,9 +245,7 @@ def test_empty_project_and_invalid_subject_request_invalid(tmp_path: Path) -> No
         query_knowledge_fields(vault, "project-atlas", "wp:AS-ID-001", ["title", "  "])
     assert exc3.value.code is KnowledgeQueryErrorCode.INVALID_INPUT
     with pytest.raises(KnowledgeQueryError) as exc4:
-        query_knowledge_fields(
-            vault, "project-atlas", "wp:BAD SUBJECT WITH SPACES", ["title"]
-        )
+        query_knowledge_fields(vault, "project-atlas", "wp:BAD SUBJECT WITH SPACES", ["title"])
     assert exc4.value.code is KnowledgeQueryErrorCode.INVALID_INPUT
 
 
@@ -404,15 +398,9 @@ def test_t10_replay_determinism_byte_identical(tmp_path: Path) -> None:
 def test_t11_zero_mutation_hash_proof(tmp_path: Path) -> None:
     vault = _materialize_vault(tmp_path)
     before = _hash_tree(vault)
-    query_knowledge_fields(
-        vault, "project-atlas", "wp:AS-ID-001", ["title", "package_status"]
-    )
-    query_knowledge_fields(
-        vault, "project-atlas", "wp:AS-ID-001", ["title"], kind="temporal"
-    )
-    query_knowledge_fields(
-        vault, "project-atlas", "wp:AS-ID-001", ["title"], kind="explain"
-    )
+    query_knowledge_fields(vault, "project-atlas", "wp:AS-ID-001", ["title", "package_status"])
+    query_knowledge_fields(vault, "project-atlas", "wp:AS-ID-001", ["title"], kind="temporal")
+    query_knowledge_fields(vault, "project-atlas", "wp:AS-ID-001", ["title"], kind="explain")
     with pytest.raises(KnowledgeQueryError):
         query_knowledge_fields(vault, "missing", "wp:AS-ID-001", ["title"])
     assert _hash_tree(vault) == before
@@ -436,9 +424,7 @@ def test_t13_item_semantic_equivalence_to_point_query(tmp_path: Path) -> None:
 
 def test_t12_point_query_path_unchanged(tmp_path: Path) -> None:
     vault = _materialize_vault(tmp_path)
-    point = query_knowledge(
-        vault, "project-atlas", "wp:AS-ID-001", "title", kind="authoritative"
-    )
+    point = query_knowledge(vault, "project-atlas", "wp:AS-ID-001", "title", kind="authoritative")
     assert point.package == "AS-CORE-007"
     assert point.value == "Durable Source Lineage Identity"
 
@@ -498,9 +484,7 @@ def test_cli_single_field_preserves_point_envelope(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     vault = _materialize_vault(tmp_path)
-    lib = answer_to_json(
-        query_knowledge(vault, "project-atlas", "wp:AS-ID-001", "title")
-    )
+    lib = answer_to_json(query_knowledge(vault, "project-atlas", "wp:AS-ID-001", "title"))
     code = cli_main(
         [
             "query",
@@ -567,18 +551,14 @@ def test_cli_duplicate_fields_exit_error(
 # --- T15 no AS-RET / T16 title / INV-003 no recompute -------------------------
 
 
-def test_t15_as_ret_not_consulted(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_t15_as_ret_not_consulted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     vault = _materialize_vault(tmp_path)
 
     def _boom(*_a: object, **_k: object) -> None:
         raise AssertionError("AS-RET must not be consulted")
 
     monkeypatch.setattr("project_atlas.retrieval.VaultRetriever", _boom, raising=False)
-    monkeypatch.setattr(
-        "project_atlas.retrieval.retrieve", _boom, raising=False
-    )
+    monkeypatch.setattr("project_atlas.retrieval.retrieve", _boom, raising=False)
     envelope = query_knowledge_fields(
         vault, "project-atlas", "wp:AS-ID-001", ["title", "package_status"]
     )
@@ -606,12 +586,8 @@ def test_no_authority_or_temporal_recompute(
     monkeypatch.setattr(
         "project_atlas.authority_evaluator.evaluate_authority", _boom, raising=False
     )
-    monkeypatch.setattr(
-        "project_atlas.temporal_evaluator.evaluate_conflicts", _boom, raising=False
-    )
-    query_knowledge_fields(
-        vault, "project-atlas", "wp:AS-ID-001", ["title", "package_status"]
-    )
+    monkeypatch.setattr("project_atlas.temporal_evaluator.evaluate_conflicts", _boom, raising=False)
+    query_knowledge_fields(vault, "project-atlas", "wp:AS-ID-001", ["title", "package_status"])
 
 
 def test_provenance_retained_on_authoritative_item(tmp_path: Path) -> None:
@@ -649,7 +625,5 @@ def test_single_snapshot_load_count(tmp_path: Path, monkeypatch: pytest.MonkeyPa
         return original(vault_path, project_id)
 
     monkeypatch.setattr("project_atlas.knowledge_query._load_snapshot", _counted)
-    query_knowledge_fields(
-        vault, "project-atlas", "wp:AS-ID-001", ["title", "package_status", "x"]
-    )
+    query_knowledge_fields(vault, "project-atlas", "wp:AS-ID-001", ["title", "package_status", "x"])
     assert calls["n"] == 1

@@ -184,8 +184,7 @@ def test_receipt_derives_work_package_not_receipt_subject() -> None:
     assert all(record.subject == "wp:AS-EXT-001A" for record in extraction.records)
     # Source is evidence; subject is the work package.
     assert not any(
-        record.subject and record.subject.startswith("evidence:")
-        for record in extraction.records
+        record.subject and record.subject.startswith("evidence:") for record in extraction.records
     )
 
 

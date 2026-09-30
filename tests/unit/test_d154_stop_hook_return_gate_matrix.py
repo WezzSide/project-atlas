@@ -48,9 +48,7 @@ def _write_d147_checkpoint(
     )
     payload: dict[str, Any] = {
         "directive": "D-147R",
-        "return_state": (
-            raw_return_state if raw_return_state is not None else state.model_dump()
-        ),
+        "return_state": (raw_return_state if raw_return_state is not None else state.model_dump()),
     }
     if counts:
         payload.update(counts)
@@ -96,9 +94,7 @@ def _assert_terminal_blocked(response: dict[str, str]) -> None:
         "valid_p0_p1",
     ],
 )
-def test_d154_stop_hook_blocks_when_counter_nonzero(
-    tmp_path: Path, field: str, value: int
-) -> None:
+def test_d154_stop_hook_blocks_when_counter_nonzero(tmp_path: Path, field: str, value: int) -> None:
     """Cases 2-11: nonzero executable counters forbid terminal/no-followup."""
     _write_d147_checkpoint(
         tmp_path,

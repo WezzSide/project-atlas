@@ -19,9 +19,7 @@ _ROOT = Path(__file__).resolve().parents[2]
 _MODULE = _ROOT / "src" / "project_atlas" / "ops_events.py"
 _HEALTH = _ROOT / "src" / "project_atlas" / "ops_health.py"
 _EVENT_SCHEMA = _ROOT / "src" / "project_atlas" / "schemas" / "ops-event.schema.json"
-_STREAM_SCHEMA = (
-    _ROOT / "src" / "project_atlas" / "schemas" / "ops-event-stream.schema.json"
-)
+_STREAM_SCHEMA = _ROOT / "src" / "project_atlas" / "schemas" / "ops-event-stream.schema.json"
 _DOCS = _ROOT / "docs" / "AS-OBS-002-ops-events.md"
 
 
@@ -122,9 +120,7 @@ def test_obs002_adv007_path_escape_and_non_events_writes_rejected(tmp_path: Path
     with pytest.raises(OpsEventError, match=r"escapes vault root"):
         _assert_ops_events_path(vault, tmp_path / "outside.json")
     # Legitimate path under owned tree is accepted.
-    ok = _assert_ops_events_path(
-        vault, vault / "generated" / "ops" / "events" / "stream.jsonl"
-    )
+    ok = _assert_ops_events_path(vault, vault / "generated" / "ops" / "events" / "stream.jsonl")
     assert "generated/ops/events" in ok.as_posix().replace("\\", "/")
 
 

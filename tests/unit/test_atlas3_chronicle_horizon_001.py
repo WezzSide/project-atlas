@@ -8,9 +8,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_chronicle_is_design_notes_only() -> None:
-    horizon = (ROOT / "docs" / "atlas-3" / "chronicle" / "HORIZON.md").read_text(
-        encoding="utf-8"
-    )
+    horizon = (ROOT / "docs" / "atlas-3" / "chronicle" / "HORIZON.md").read_text(encoding="utf-8")
     assert "ROADMAP_HORIZON" in horizon
     assert "Do not begin runtime implementation" in horizon
     assert not (ROOT / "src" / "project_atlas" / "atlas3" / "chronicle.py").exists()

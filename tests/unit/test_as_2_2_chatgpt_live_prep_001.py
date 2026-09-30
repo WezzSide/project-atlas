@@ -20,9 +20,7 @@ DOCS = {
     "contract": PREP / "CONTRACT.md",
     "invariants": PREP / "INVARIANTS.md",
     "fixture_plan": PREP / "FIXTURE-PLAN.md",
-    "adr": PREP
-    / "adr"
-    / "ADR-2.2-CHATGPT-LIVE-001-quarantine-first-live-bridge-prep.md",
+    "adr": PREP / "adr" / "ADR-2.2-CHATGPT-LIVE-001-quarantine-first-live-bridge-prep.md",
 }
 
 SCHEMA_FILES = {

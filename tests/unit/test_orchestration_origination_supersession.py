@@ -468,12 +468,8 @@ def test_reconcile_revision_closes_the_toctou_race_between_two_new_revisions(
         except BaseException as exc:
             errors.append(exc)
 
-    t1 = threading.Thread(
-        target=_race, args=(proposal_a.origination_identity, node_a)
-    )
-    t2 = threading.Thread(
-        target=_race, args=(proposal_b.origination_identity, node_b)
-    )
+    t1 = threading.Thread(target=_race, args=(proposal_a.origination_identity, node_a))
+    t2 = threading.Thread(target=_race, args=(proposal_b.origination_identity, node_b))
     t1.start()
     t2.start()
     t1.join(timeout=10)

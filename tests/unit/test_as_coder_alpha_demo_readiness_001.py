@@ -6,13 +6,7 @@ from pathlib import Path
 
 from project_atlas.demo_readiness import HONESTY, JOURNEY, STAMPS, run_demo_readiness
 
-FIXTURE = (
-    Path(__file__).resolve().parents[1]
-    / "fixtures"
-    / "demo"
-    / "estate"
-    / "harbor-api"
-)
+FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "demo" / "estate" / "harbor-api"
 
 
 def test_demo_readiness_harbor_journey_is_honest(tmp_path: Path) -> None:

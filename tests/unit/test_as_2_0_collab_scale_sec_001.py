@@ -27,9 +27,7 @@ def test_collab_rejects_live(tmp_path: Path) -> None:
     vault = tmp_path / "v"
     vault.mkdir()
     with pytest.raises(CollaborationStubError, match="live-forbidden"):
-        build_collaboration_stub_registry(
-            vault, record_id="collab-a", enable_live_collab=True
-        )
+        build_collaboration_stub_registry(vault, record_id="collab-a", enable_live_collab=True)
 
 
 def test_scale(tmp_path: Path) -> None:
@@ -59,9 +57,7 @@ def test_sec_adv_rejects_log(tmp_path: Path) -> None:
     vault = tmp_path / "v"
     vault.mkdir()
     with pytest.raises(SecurityAdvError, match="matched-content-log-forbidden"):
-        build_security_adv_matrix(
-            vault, record_id="secadv-a", log_matched_content=True
-        )
+        build_security_adv_matrix(vault, record_id="secadv-a", log_matched_content=True)
 
 
 def test_docs() -> None:

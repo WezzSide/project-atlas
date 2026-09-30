@@ -151,9 +151,7 @@ def test_knowledge_index_matches_linear_d084_semantics(tmp_path: Path) -> None:
         _candidate(inner, candidate_id="project-inner"),
         _candidate(foo, candidate_id="project-foo"),
     ]
-    by_key = {
-        str(item.fingerprint["path_key"]): item for item in projects
-    }
+    by_key = {str(item.fingerprint["path_key"]): item for item in projects}
     nested = _knowledge_sighting(notes)
     collision = _knowledge_sighting(sibling)
 
@@ -164,9 +162,7 @@ def test_knowledge_index_matches_linear_d084_semantics(tmp_path: Path) -> None:
         if _under_authorized(nested.path, Path(item.path))
         and canonical_path_key(nested.path) != str(item.fingerprint["path_key"])
     ]
-    assert {p.candidate_id for p in index_parents} == {
-        p.candidate_id for p in linear_parents
-    }
+    assert {p.candidate_id for p in index_parents} == {p.candidate_id for p in linear_parents}
     assert {p.candidate_id for p in index_parents} == {
         "project-outer",
         "project-inner",
@@ -230,9 +226,12 @@ def test_in_memory_selection_has_no_resolve_and_sub_quadratic_checks() -> None:
     assert perf.knowledge_project_ancestry_checks <= len(knowledge) * 8
     assert len(chosen) == 500
     assert len(suppressed) == 1500
-    assert all(has_selected_project_ancestor(item.path_key, {
-        str(p.fingerprint["path_key"]) for p in projects
-    }) for item in chosen)
+    assert all(
+        has_selected_project_ancestor(
+            item.path_key, {str(p.fingerprint["path_key"]) for p in projects}
+        )
+        for item in chosen
+    )
 
 
 def test_discover_estate_preserves_d084_policy_and_bounded_enrichment(
@@ -363,9 +362,7 @@ def test_single_parent_knowledge_still_matches(tmp_path: Path) -> None:
         _write(notes / name, "n\n")
     report = discover_estate(estate)
     nested = [
-        item
-        for item in report["candidates"]["knowledge"]
-        if Path(item["path"]).name == "research"
+        item for item in report["candidates"]["knowledge"] if Path(item["path"]).name == "research"
     ]
     assert nested
     assert nested[0]["knowledge_relation"] == "KNOWLEDGE_PROJECT_MATCHED"

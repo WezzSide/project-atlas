@@ -165,9 +165,12 @@ def test_lease_gate_rejects_leaseless_and_expired() -> None:
     with pytest.raises(SdkRuntimeError, match="expired"):
         require_valid_lease(lease, role=AgentRole.REMEDIATOR, dag_generation=88, mutating=True)
     good = _lease()
-    assert require_valid_lease(
-        good, role=AgentRole.REMEDIATOR, dag_generation=88, mutating=True
-    ).lease_id == "lease-test-1"
+    assert (
+        require_valid_lease(
+            good, role=AgentRole.REMEDIATOR, dag_generation=88, mutating=True
+        ).lease_id
+        == "lease-test-1"
+    )
 
 
 def test_allowed_paths_attacks() -> None:
@@ -273,9 +276,7 @@ def test_pr428_mutation_and_stale_directive() -> None:
         reject_superseded_pr_mutation(target_pr=428)
     reject_superseded_pr_mutation(target_pr=429)
     assert (
-        suppress_stale_directive(
-            directive_pr=428, directive_head=None, live_pr=429, live_head=HEAD
-        )
+        suppress_stale_directive(directive_pr=428, directive_head=None, live_pr=429, live_head=HEAD)
         == "STALE_DIRECTIVE_PR428"
     )
     assert (
@@ -288,9 +289,7 @@ def test_pr428_mutation_and_stale_directive() -> None:
         == "STALE_DIRECTIVE_HEAD_MOVED"
     )
     assert (
-        suppress_stale_directive(
-            directive_pr=429, directive_head=HEAD, live_pr=429, live_head=HEAD
-        )
+        suppress_stale_directive(directive_pr=429, directive_head=HEAD, live_pr=429, live_head=HEAD)
         is None
     )
 

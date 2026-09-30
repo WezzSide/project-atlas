@@ -88,9 +88,7 @@ def test_canonical_event_types_and_schema() -> None:
     for field in REQUIRED_FIELDS:
         assert field in event
     schema = json.loads(
-        (ROOT / "docs/atlas-3/contracts/engineering-event.schema.json").read_text(
-            encoding="utf-8"
-        )
+        (ROOT / "docs/atlas-3/contracts/engineering-event.schema.json").read_text(encoding="utf-8")
     )
     jsonschema.validate(event, schema)
 

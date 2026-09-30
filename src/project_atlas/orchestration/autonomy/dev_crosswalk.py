@@ -27,7 +27,9 @@ from project_atlas.orchestration.autonomy.dev_contracts import (
     VerdictRecord,
     VerificationRequest,
     WorkItem,
+    _matches,
     make_result,
+    norm_path,
 )
 
 
@@ -272,7 +274,9 @@ class RemoteExecutionReport(BaseModel):
     test_evidence_digests: tuple[str, ...] = ()
 
 
-def ingest_report(report: RemoteExecutionReport, work: WorkItem, xw: Crosswalk) -> ResultRecord:
+def ingest_report(
+    report: RemoteExecutionReport, work: WorkItem, xw: Crosswalk, *, bind: bool = True
+) -> ResultRecord:
     """Turn a remote report into a bound ResultRecord or refuse. Workflow success != result."""
     work.verify_seal()
     row = xw.resolve("work_seal", work.seal)
@@ -290,17 +294,15 @@ def ingest_report(report: RemoteExecutionReport, work: WorkItem, xw: Crosswalk) 
         raise CrosswalkError("result revision equals base: no artifact was produced")
     if not report.artifact_digests:
         raise CrosswalkError("no artifact digest bound to the result")
-    forbidden = [
-        p for p in report.changed_paths if any(p.startswith(f) for f in work.forbidden_paths)
-    ]
+    bad = [p for p in report.changed_paths if norm_path(p) is None]
+    if bad:
+        raise CrosswalkError(f"result has ill-formed or escaping paths: {bad}")
+    forbidden = [p for p in report.changed_paths if _matches(p, work.forbidden_paths)]
     if forbidden:
         raise CrosswalkError(f"result touches forbidden paths: {forbidden}")
-    if work.allowed_paths:
-        outside = [
-            p for p in report.changed_paths if not any(p.startswith(a) for a in work.allowed_paths)
-        ]
-        if outside:
-            raise CrosswalkError(f"result touches paths outside allowed_paths: {outside}")
+    outside = [p for p in report.changed_paths if not _matches(p, work.allowed_paths)]
+    if outside:  # an empty allowed scope allows nothing
+        raise CrosswalkError(f"result touches paths outside allowed_paths: {outside}")
     res = make_result(
         work,
         executor_identity=report.executor_identity,
@@ -310,5 +312,6 @@ def ingest_report(report: RemoteExecutionReport, work: WorkItem, xw: Crosswalk) 
         test_evidence_digests=report.test_evidence_digests,
         artifact_digests=report.artifact_digests,
     )
-    xw.bind_result(res)
+    if bind:
+        xw.bind_result(res)
     return res

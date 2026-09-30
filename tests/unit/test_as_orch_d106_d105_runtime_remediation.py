@@ -70,9 +70,7 @@ DIGEST = "b" * 64
 
 
 def _git(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["git", *args], cwd=str(root), capture_output=True, text=True, check=True
-    )
+    return subprocess.run(["git", *args], cwd=str(root), capture_output=True, text=True, check=True)
 
 
 def _init_git(root: Path) -> str:
@@ -138,9 +136,7 @@ def _payload() -> dict[str, object]:
 def _live(root: Path, gen: int, transitions: int) -> None:
     persist_live_dag(
         root,
-        LiveDagState(
-            dag_generation=gen, material_transitions=transitions, bound_head=HEAD
-        ),
+        LiveDagState(dag_generation=gen, material_transitions=transitions, bound_head=HEAD),
     )
 
 

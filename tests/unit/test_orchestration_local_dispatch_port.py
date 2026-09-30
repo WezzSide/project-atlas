@@ -43,9 +43,7 @@ from project_atlas.orchestration.local_process_transport import LocalProcessExec
 
 
 def _run_git(repo: Path, *args: str) -> str:
-    result = subprocess.run(
-        ["git", *args], cwd=repo, check=True, capture_output=True, text=True
-    )
+    result = subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True)
     return result.stdout.strip()
 
 
@@ -207,7 +205,11 @@ def test_a_ready_node_dispatches_to_a_real_local_process_and_certifies(tmp_path:
     script = "open('allowed/output.txt', 'w').write('real work happened\\n')"
     port = _port(argv=(sys.executable, "-c", script))
     loop = _loop(
-        repo, gov, current_main=main, current_tree=tree, dispatch=port,
+        repo,
+        gov,
+        current_main=main,
+        current_tree=tree,
+        dispatch=port,
         override=ExecutionHostClass.LOCAL_PROCESS,
     )
     # A single tick() only performs one state-machine step (lease OR
@@ -284,7 +286,11 @@ def test_c_stale_target_moved_refuses_lease_before_any_dispatch(tmp_path: Path) 
     # any tick, let alone a dispatch, could ever happen.
     with pytest.raises(LoopError) as exc:
         _loop(
-            repo, gov, current_main=main, current_tree=tree, dispatch=port,
+            repo,
+            gov,
+            current_main=main,
+            current_tree=tree,
+            dispatch=port,
             override=ExecutionHostClass.LOCAL_PROCESS,
         )
     assert exc.value.code == "TARGET_MOVED"
@@ -300,13 +306,19 @@ def test_d_owner_held_state_never_dispatched(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
     main, tree = _repo_main_tree(repo)
     node = _node(
-        "PRC-D-001", base_pin=main, state=NodeState.OWNER_HELD,
+        "PRC-D-001",
+        base_pin=main,
+        state=NodeState.OWNER_HELD,
         owner_gate=OwnerGateKind.D_SECURITY_GOVERNANCE_POLICY,
     )
     gov = _governor(repo, node, current_main=main, current_tree=tree)
     port = _port(argv=(sys.executable, "-c", "open('allowed/should_not_exist.txt','w').close()"))
     loop = _loop(
-        repo, gov, current_main=main, current_tree=tree, dispatch=port,
+        repo,
+        gov,
+        current_main=main,
+        current_tree=tree,
+        dispatch=port,
         override=ExecutionHostClass.LOCAL_PROCESS,
     )
     result = loop.run_until_stop()
@@ -318,13 +330,19 @@ def test_d_ready_but_owner_gated_never_dispatched(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
     main, tree = _repo_main_tree(repo)
     node = _node(
-        "PRC-D-002", base_pin=main, state=NodeState.READY,
+        "PRC-D-002",
+        base_pin=main,
+        state=NodeState.READY,
         owner_gate=OwnerGateKind.D_SECURITY_GOVERNANCE_POLICY,
     )
     gov = _governor(repo, node, current_main=main, current_tree=tree)
     port = _port(argv=(sys.executable, "-c", "open('allowed/should_not_exist.txt','w').close()"))
     loop = _loop(
-        repo, gov, current_main=main, current_tree=tree, dispatch=port,
+        repo,
+        gov,
+        current_main=main,
+        current_tree=tree,
+        dispatch=port,
         override=ExecutionHostClass.LOCAL_PROCESS,
     )
     result = loop.run_until_stop()
@@ -344,7 +362,11 @@ def test_e_unsatisfied_dependency_never_dispatched(tmp_path: Path) -> None:
     gov = _governor(repo, node, current_main=main, current_tree=tree)
     port = _port(argv=(sys.executable, "-c", "open('allowed/should_not_exist.txt','w').close()"))
     loop = _loop(
-        repo, gov, current_main=main, current_tree=tree, dispatch=port,
+        repo,
+        gov,
+        current_main=main,
+        current_tree=tree,
+        dispatch=port,
         override=ExecutionHostClass.LOCAL_PROCESS,
     )
     result = loop.run_until_stop()
@@ -376,7 +398,11 @@ def test_f_forbidden_path_write_is_rejected_node_not_certified(tmp_path: Path) -
     script = "open('main/tampered.txt', 'w').write('bad\\n')"
     port = _port(argv=(sys.executable, "-c", script))
     loop = _loop(
-        repo, gov, current_main=main, current_tree=tree, dispatch=port,
+        repo,
+        gov,
+        current_main=main,
+        current_tree=tree,
+        dispatch=port,
         override=ExecutionHostClass.LOCAL_PROCESS,
     )
     # A single tick from IDLE performs the ENTIRE lease -> dispatch ->
@@ -409,7 +435,11 @@ def test_g_out_of_scope_write_is_rejected_node_not_certified(tmp_path: Path) -> 
     script = "open('elsewhere.txt', 'w').write('out of scope\\n')"
     port = _port(argv=(sys.executable, "-c", script))
     loop = _loop(
-        repo, gov, current_main=main, current_tree=tree, dispatch=port,
+        repo,
+        gov,
+        current_main=main,
+        current_tree=tree,
+        dispatch=port,
         override=ExecutionHostClass.LOCAL_PROCESS,
     )
     loop.tick()
@@ -431,7 +461,11 @@ def test_h_nonzero_exit_is_a_controlled_failure_not_a_crash(tmp_path: Path) -> N
     gov = _governor(repo, node, current_main=main, current_tree=tree)
     port = _port(argv=(sys.executable, "-c", "import sys; sys.exit(1)"))
     loop = _loop(
-        repo, gov, current_main=main, current_tree=tree, dispatch=port,
+        repo,
+        gov,
+        current_main=main,
+        current_tree=tree,
+        dispatch=port,
         override=ExecutionHostClass.LOCAL_PROCESS,
     )
     result = loop.tick()  # must not raise
@@ -452,11 +486,13 @@ def test_i_timeout_is_a_controlled_failure_not_a_hang(tmp_path: Path) -> None:
     main, tree = _repo_main_tree(repo)
     node = _node("PRC-I-001", base_pin=main)
     gov = _governor(repo, node, current_main=main, current_tree=tree)
-    port = _port(
-        argv=(sys.executable, "-c", "import time; time.sleep(120)"), timeout_seconds=1
-    )
+    port = _port(argv=(sys.executable, "-c", "import time; time.sleep(120)"), timeout_seconds=1)
     loop = _loop(
-        repo, gov, current_main=main, current_tree=tree, dispatch=port,
+        repo,
+        gov,
+        current_main=main,
+        current_tree=tree,
+        dispatch=port,
         override=ExecutionHostClass.LOCAL_PROCESS,
     )
     result = loop.tick()  # must not raise, must not block for 120s
@@ -495,7 +531,8 @@ def test_k_a_genuinely_still_running_dispatch_blocks_a_second_one(tmp_path: Path
     # a real process to construct this state).
     dispatch_id_0 = f"{_dispatch_id_for(lease.lease_id)}:0"
     _write_receipt(
-        repo, dispatch_id_0,
+        repo,
+        dispatch_id_0,
         {
             "dispatch_id": dispatch_id_0,
             "lease_id": lease.lease_id,
@@ -547,7 +584,11 @@ def test_k_a_legitimate_remediation_retry_is_not_a_duplicate(tmp_path: Path) -> 
     gov = _governor(repo, node, current_main=main, current_tree=tree)
     port = _port(argv=(sys.executable, "-c", script))
     loop = _loop(
-        repo, gov, current_main=main, current_tree=tree, dispatch=port,
+        repo,
+        gov,
+        current_main=main,
+        current_tree=tree,
+        dispatch=port,
         override=ExecutionHostClass.LOCAL_PROCESS,
     )
     # A single tick from IDLE performs the ENTIRE lease -> dispatch(attempt
@@ -652,7 +693,11 @@ def test_l_duplicate_result_application_is_blocked(tmp_path: Path) -> None:
     gov = _governor(repo, node, current_main=main, current_tree=tree)
     port = _port(argv=(sys.executable, "-c", "open('allowed/x.txt','w').close()"))
     loop = _loop(
-        repo, gov, current_main=main, current_tree=tree, dispatch=port,
+        repo,
+        gov,
+        current_main=main,
+        current_tree=tree,
+        dispatch=port,
         override=ExecutionHostClass.LOCAL_PROCESS,
     )
     loop.run_until_stop()
@@ -683,7 +728,11 @@ def test_m_process_restart_recovers_without_rerunning_the_task(tmp_path: Path) -
     argv = (sys.executable, "-c", "open('allowed/marker.txt', 'w').write('ran\\n')")
     port_before = _port(argv=argv)
     loop_before = _loop(
-        repo, gov_before, current_main=main, current_tree=tree, dispatch=port_before,
+        repo,
+        gov_before,
+        current_main=main,
+        current_tree=tree,
+        dispatch=port_before,
         override=ExecutionHostClass.LOCAL_PROCESS,
     )
     lease = gov_before.lease(
@@ -706,7 +755,8 @@ def test_m_process_restart_recovers_without_rerunning_the_task(tmp_path: Path) -
 
     dispatch_id = f"{_dispatch_id_for(lease.lease_id)}:0"
     _write_receipt(
-        repo, dispatch_id,
+        repo,
+        dispatch_id,
         {
             "dispatch_id": dispatch_id,
             "lease_id": lease.lease_id,
@@ -722,7 +772,11 @@ def test_m_process_restart_recovers_without_rerunning_the_task(tmp_path: Path) -
     gov_after = _governor(repo, current_main=main, current_tree=tree)
     port_after = _port(argv=argv)
     loop_after = _loop(
-        repo, gov_after, current_main=main, current_tree=tree, dispatch=port_after,
+        repo,
+        gov_after,
+        current_main=main,
+        current_tree=tree,
+        dispatch=port_after,
         override=ExecutionHostClass.LOCAL_PROCESS,
     )
     assert loop_after.state.phase is LoopPhase.DISPATCHING  # reloaded from disk
@@ -747,7 +801,11 @@ def test_n_completed_local_process_lease_can_still_be_released(tmp_path: Path) -
     gov = _governor(repo, node, current_main=main, current_tree=tree)
     port = _port(argv=(sys.executable, "-c", "open('allowed/x.txt','w').close()"))
     loop = _loop(
-        repo, gov, current_main=main, current_tree=tree, dispatch=port,
+        repo,
+        gov,
+        current_main=main,
+        current_tree=tree,
+        dispatch=port,
         override=ExecutionHostClass.LOCAL_PROCESS,
     )
     loop.run_until_stop()
@@ -777,7 +835,11 @@ def test_envelope_authority_fields_come_from_the_lease_never_a_caller(tmp_path: 
     gov = _governor(repo, node, current_main=main, current_tree=tree)
     port = _port(argv=(sys.executable, "-c", "open('allowed/inside.txt', 'w').write('ok\\n')"))
     loop = _loop(
-        repo, gov, current_main=main, current_tree=tree, dispatch=port,
+        repo,
+        gov,
+        current_main=main,
+        current_tree=tree,
+        dispatch=port,
         override=ExecutionHostClass.LOCAL_PROCESS,
     )
     loop.run_until_stop()
@@ -801,13 +863,14 @@ def test_governor_lease_override_never_applies_without_explicit_opt_in(tmp_path:
 def test_lease_override_does_not_bypass_owner_gate_check(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
     main, tree = _repo_main_tree(repo)
-    node = _node(
-        "PRC-ENV-003", base_pin=main, owner_gate=OwnerGateKind.E_DESTRUCTIVE_OPS
-    )
+    node = _node("PRC-ENV-003", base_pin=main, owner_gate=OwnerGateKind.E_DESTRUCTIVE_OPS)
     gov = _governor(repo, node, current_main=main, current_tree=tree)
     with pytest.raises(GovernorError) as exc:
         gov.lease(
-            "PRC-ENV-003", "governor-pilot-local", branch="b", worktree="w",
+            "PRC-ENV-003",
+            "governor-pilot-local",
+            branch="b",
+            worktree="w",
             execution_host_class_override=ExecutionHostClass.LOCAL_PROCESS,
         )
     assert exc.value.code == "OWNER_GATE_REQUIRED"
@@ -841,7 +904,11 @@ def test_supervisor_checkout_integrity_guard_detects_escape_via_absolute_path(
     )
     port = _port(argv=(sys.executable, "-c", script))
     loop = _loop(
-        repo, gov, current_main=main, current_tree=tree, dispatch=port,
+        repo,
+        gov,
+        current_main=main,
+        current_tree=tree,
+        dispatch=port,
         override=ExecutionHostClass.LOCAL_PROCESS,
     )
     loop.tick()
@@ -883,7 +950,11 @@ def test_supervisor_checkout_integrity_guard_detects_governance_state_tamper(
     )
     port = _port(argv=(sys.executable, "-c", script))
     loop = _loop(
-        repo, gov, current_main=main, current_tree=tree, dispatch=port,
+        repo,
+        gov,
+        current_main=main,
+        current_tree=tree,
+        dispatch=port,
         override=ExecutionHostClass.LOCAL_PROCESS,
     )
     loop.tick()
@@ -917,7 +988,11 @@ def test_executor_created_commit_never_implies_merge_authority(tmp_path: Path) -
     )
     port = _port(argv=(sys.executable, "-c", script))
     loop = _loop(
-        repo, gov, current_main=main, current_tree=tree, dispatch=port,
+        repo,
+        gov,
+        current_main=main,
+        current_tree=tree,
+        dispatch=port,
         override=ExecutionHostClass.LOCAL_PROCESS,
     )
     result = loop.run_until_stop()
@@ -969,7 +1044,8 @@ def test_abandoned_worktree_from_a_prior_crashed_attempt_does_not_block_a_fresh_
     from project_atlas.orchestration.autonomy.local_dispatch_port import _write_receipt
 
     _write_receipt(
-        repo, abandoned_dispatch_id,
+        repo,
+        abandoned_dispatch_id,
         {
             "dispatch_id": abandoned_dispatch_id,
             "lease_id": lease.lease_id,
@@ -1172,7 +1248,8 @@ def test_supervisor_integrity_guard_detects_tampering_with_another_receipt(
     # the kind of durable record this guard must protect even though it
     # legitimately differs from the receipt this dispatch itself writes.
     _write_receipt(
-        repo, "local-process:LEASE-OTHER:0",
+        repo,
+        "local-process:LEASE-OTHER:0",
         {
             "dispatch_id": "local-process:LEASE-OTHER:0",
             "lease_id": "LEASE-OTHER",
@@ -1192,7 +1269,11 @@ def test_supervisor_integrity_guard_detects_tampering_with_another_receipt(
     )
     port = _port(argv=(sys.executable, "-c", script))
     loop = _loop(
-        repo, gov, current_main=main, current_tree=tree, dispatch=port,
+        repo,
+        gov,
+        current_main=main,
+        current_tree=tree,
+        dispatch=port,
         override=ExecutionHostClass.LOCAL_PROCESS,
     )
     loop.tick()

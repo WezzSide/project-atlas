@@ -23,8 +23,7 @@ def _write(path: Path, payload: object) -> None:
 def test_classify_decision_status_labels() -> None:
     """DECISIONS-003: ACTIVE_GOVERNING requires authority evidence."""
     assert (
-        _classify_decision_status("ADR-001 Ship package data", kind="claim")
-        == "ACTIVE_GOVERNING"
+        _classify_decision_status("ADR-001 Ship package data", kind="claim") == "ACTIVE_GOVERNING"
     )
     assert (
         _classify_decision_status(
@@ -35,23 +34,17 @@ def test_classify_decision_status_labels() -> None:
         == "ACTIVE_GOVERNING"
     )
     # Bare claim titles without formal shape are proposed, not governing.
-    assert (
-        _classify_decision_status("Ship package data", kind="claim")
-        == "OPEN_PROPOSED"
-    )
+    assert _classify_decision_status("Ship package data", kind="claim") == "OPEN_PROPOSED"
     assert (
         _classify_decision_status("Context", kind="imported-heading", path="docs/adr/001.md")
         == "NON_DECISION"
     )
     assert (
-        _classify_decision_status(
-            "Consequences", kind="adr-heading", path="docs/adr/ADR-001.md"
-        )
+        _classify_decision_status("Consequences", kind="adr-heading", path="docs/adr/ADR-001.md")
         == "NON_DECISION"
     )
     assert (
-        _classify_decision_status("Migration and validation", kind="project-note")
-        == "NON_DECISION"
+        _classify_decision_status("Migration and validation", kind="project-note") == "NON_DECISION"
     )
     assert (
         _classify_decision_status(
@@ -61,14 +54,8 @@ def test_classify_decision_status_labels() -> None:
         )
         == "ACTIVE_GOVERNING"
     )
-    assert (
-        _classify_decision_status("Superseded: old vault layout", kind="claim")
-        == "SUPERSEDED"
-    )
-    assert (
-        _classify_decision_status("Rejected proposal for cloud sync", kind="claim")
-        == "REJECTED"
-    )
+    assert _classify_decision_status("Superseded: old vault layout", kind="claim") == "SUPERSEDED"
+    assert _classify_decision_status("Rejected proposal for cloud sync", kind="claim") == "REJECTED"
     assert (
         _classify_decision_status("Proposed: optional MCP surface", kind="imported-heading")
         == "OPEN_PROPOSED"
@@ -119,9 +106,7 @@ def test_attention_action_required_for_authority_pending(tmp_path: Path) -> None
         },
     )
     report = classify_attention(vault, "proj")
-    pending_levels = {
-        item["level"] for item in report["items"] if item["kind"] == "pending_review"
-    }
+    pending_levels = {item["level"] for item in report["items"] if item["kind"] == "pending_review"}
     assert pending_levels == {"ACTION_REQUIRED"}
 
 
@@ -181,8 +166,7 @@ def test_attention_care_about_collapses_source_failures(tmp_path: Path) -> None:
         vault / "state" / "compilation-outcomes" / "proj.json",
         {
             "candidates": [
-                {"source_path": f"docs/f{index}.md", "outcome": "FAILED"}
-                for index in range(12)
+                {"source_path": f"docs/f{index}.md", "outcome": "FAILED"} for index in range(12)
             ]
         },
     )
@@ -369,10 +353,7 @@ def test_cli_attention_and_source_health(tmp_path: Path) -> None:
     connected = connect_project(project)
     vault = Path(connected["vault"])
     project_id = str(connected["bound_project_id"])
-    assert (
-        main(["attention", "--vault", str(vault), "--project", project_id, "--json"])
-        == EXIT_OK
-    )
+    assert main(["attention", "--vault", str(vault), "--project", project_id, "--json"]) == EXIT_OK
     assert (
         main(
             [

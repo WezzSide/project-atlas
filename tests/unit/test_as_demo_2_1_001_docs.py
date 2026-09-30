@@ -19,9 +19,7 @@ def _demo_doc_texts() -> dict[str, str]:
     texts: dict[str, str] = {}
     for path in sorted(_DEMO_DOCS.rglob("*")):
         if path.is_file() and path.suffix.lower() in {".md", ".txt"}:
-            texts[path.relative_to(_REPO_ROOT).as_posix()] = path.read_text(
-                encoding="utf-8"
-            )
+            texts[path.relative_to(_REPO_ROOT).as_posix()] = path.read_text(encoding="utf-8")
     assert texts, f"no markdown/text under {_DEMO_DOCS}"
     return texts
 

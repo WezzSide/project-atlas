@@ -45,9 +45,7 @@ def test_chatgpt_export_wraps_parser(tmp_path: Path) -> None:
         "User: What database?\nAssistant: Project uses PostgreSQL 16\n",
         encoding="utf-8",
     )
-    envelopes = import_chatgpt_export(
-        export, conversation_id="exp-1", project_id="harbor-api"
-    )
+    envelopes = import_chatgpt_export(export, conversation_id="exp-1", project_id="harbor-api")
     assert envelopes
     assert envelopes[0]["provider"] == "chatgpt"
     assert envelopes[0]["import_mode"] == "EXPORT"

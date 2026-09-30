@@ -152,9 +152,7 @@ def test_adv_malformed_args_fail_closed(tmp_path: Path) -> None:
     with pytest.raises(McpServerError, match="mcp-tool-missing"):
         handle_mcp_request_line(vault, json.dumps({"tool": 12}))
     with pytest.raises(McpServerError, match="mcp-request-unexpected-key"):
-        handle_mcp_request_line(
-            vault, json.dumps({"tool": "atlas.ops.health.read", "extra": 1})
-        )
+        handle_mcp_request_line(vault, json.dumps({"tool": "atlas.ops.health.read", "extra": 1}))
     with pytest.raises(McpServerError, match="mcp-tool-id-malformed"):
         invoke_mcp_tool(vault, "Atlas.Ops.Health.Read")
     with pytest.raises(McpServerError, match="mcp-tool-id-nul"):
@@ -177,18 +175,14 @@ def test_adv_replay_byte_identical(tmp_path: Path) -> None:
 def test_adv_docs_and_package_id() -> None:
     assert ADV_PACKAGE_ID == "AS-2.1-MCP-ADV-001"
     root = Path(__file__).resolve().parents[2]
-    suite = (root / "docs" / "atlas-2.1" / "ADV-LIVE-SUITE.md").read_text(
-        encoding="utf-8"
-    )
+    suite = (root / "docs" / "atlas-2.1" / "ADV-LIVE-SUITE.md").read_text(encoding="utf-8")
     assert "| ADV-2.1-23 | MCP ADV |" in suite
     assert "AS-2.1-MCP-ADV-001" in suite
     assert "AS-2.1-L3-JOB-MATRIX-ADV" in suite
     assert "AS-2.1-API-ADV-DEEPEN" in suite
     assert "| ADV-2.1-24 | L3 job-matrix ADV |" in suite
     assert "| ADV-2.1-30 | API |" in suite
-    board = (root / "docs" / "atlas-2.1" / "PACKAGE-BOARD.md").read_text(
-        encoding="utf-8"
-    )
+    board = (root / "docs" / "atlas-2.1" / "PACKAGE-BOARD.md").read_text(encoding="utf-8")
     assert "AS-2.1-MCP-ADV-001" in board
     assert "OPEN (this PR)" not in board
     assert "**MERGED** #165" in board

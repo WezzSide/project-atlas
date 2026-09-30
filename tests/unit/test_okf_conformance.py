@@ -88,9 +88,9 @@ def test_generated_region_can_be_regenerated_around_human_content(tmp_path: Path
         "sha256": "c" * 64,
         "text": "# Overview\nPurpose: preserve humans.",
     }
-    generated = render_bundle(
-        compile_knowledge("project-1", [entry], tmp_path), "project-1"
-    )["projects/project-1/concepts.md"]
+    generated = render_bundle(compile_knowledge("project-1", [entry], tmp_path), "project-1")[
+        "projects/project-1/concepts.md"
+    ]
     path = tmp_path / "projects/project-1/concepts.md"
     path.parent.mkdir(parents=True)
     path.write_text(
@@ -103,9 +103,9 @@ def test_generated_region_can_be_regenerated_around_human_content(tmp_path: Path
         ),
         encoding="utf-8",
     )
-    replay = render_bundle(
-        compile_knowledge("project-1", [entry], tmp_path), "project-1"
-    )["projects/project-1/concepts.md"]
+    replay = render_bundle(compile_knowledge("project-1", [entry], tmp_path), "project-1")[
+        "projects/project-1/concepts.md"
+    ]
     preserved = _generated_content(path, replay)
     assert "Human-owned note." in preserved
     assert "Human conclusion." in preserved

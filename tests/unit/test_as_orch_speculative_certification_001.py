@@ -80,9 +80,7 @@ def test_seal_and_promote_exact_pin(tmp_path: Path) -> None:
     receipts = _pass_all(tmp_path, generation=107)
     barrier = evaluate_barrier(tmp_path)
     assert barrier.state == CertificationState.CERTIFIED
-    promoted = promote_exact_pin_evidence(
-        tmp_path, live_head=HEAD, live_tree=TREE, live_main=MAIN
-    )
+    promoted = promote_exact_pin_evidence(tmp_path, live_head=HEAD, live_tree=TREE, live_main=MAIN)
     assert promoted.state == CertificationState.EVIDENCE_PROMOTED
     assert promoted.exact_pin_evidence_promoted is True
     assert promoted.certification_frozen is True
@@ -124,9 +122,7 @@ def test_tip_drift_cancels_and_blocks_promotion(tmp_path: Path) -> None:
     evaluate_barrier(tmp_path)
     cancelled = cancel_for_tip_drift(tmp_path, live_head=OTHER, live_tree=TREE)
     assert cancelled.state == CertificationState.CANCELLED_TIP_DRIFT
-    drifted = promote_exact_pin_evidence(
-        tmp_path, live_head=OTHER, live_tree=TREE, live_main=MAIN
-    )
+    drifted = promote_exact_pin_evidence(tmp_path, live_head=OTHER, live_tree=TREE, live_main=MAIN)
     assert drifted.state == CertificationState.CANCELLED_TIP_DRIFT
 
 
@@ -135,9 +131,7 @@ def test_target_moved_blocks_promotion(tmp_path: Path) -> None:
     _pass_all(tmp_path, generation=3)
     evaluate_barrier(tmp_path)
     with pytest.raises(SdkRuntimeError) as exc:
-        promote_exact_pin_evidence(
-            tmp_path, live_head=HEAD, live_tree=TREE, live_main=OTHER
-        )
+        promote_exact_pin_evidence(tmp_path, live_head=HEAD, live_tree=TREE, live_main=OTHER)
     assert exc.value.code == "SPECULATIVE_CERT_TARGET_MOVED"
 
 
@@ -163,17 +157,13 @@ def test_pass_then_fail_stale_rejected(tmp_path: Path) -> None:
     seal_candidate(tmp_path, generation=6, head=HEAD, tree=TREE, base_main=MAIN)
     record_lane_result(tmp_path, _receipt("CI", generation=6))
     with pytest.raises(SdkRuntimeError) as exc:
-        record_lane_result(
-            tmp_path, _receipt("CI", generation=6, result=LaneResult.FAIL)
-        )
+        record_lane_result(tmp_path, _receipt("CI", generation=6, result=LaneResult.FAIL))
     assert exc.value.code == "SPECULATIVE_CERT_STALE_RECEIPT"
 
 
 def test_fail_then_pass_rejected(tmp_path: Path) -> None:
     seal_candidate(tmp_path, generation=7, head=HEAD, tree=TREE, base_main=MAIN)
-    record_lane_result(
-        tmp_path, _receipt("CI", generation=7, result=LaneResult.FAIL)
-    )
+    record_lane_result(tmp_path, _receipt("CI", generation=7, result=LaneResult.FAIL))
     with pytest.raises(SdkRuntimeError) as exc:
         record_lane_result(tmp_path, _receipt("CI", generation=7))
     assert exc.value.code == "SPECULATIVE_CERT_STALE_RECEIPT"
@@ -301,9 +291,7 @@ def test_promotion_blocked_when_not_all_pass(tmp_path: Path) -> None:
     for lane in REQUIRED_LANES[:-1]:
         record_lane_result(tmp_path, _receipt(lane, generation=17))
     with pytest.raises(SdkRuntimeError) as exc:
-        promote_exact_pin_evidence(
-            tmp_path, live_head=HEAD, live_tree=TREE, live_main=MAIN
-        )
+        promote_exact_pin_evidence(tmp_path, live_head=HEAD, live_tree=TREE, live_main=MAIN)
     assert exc.value.code == "SPECULATIVE_CERT_NOT_CERTIFIED"
 
 
@@ -325,9 +313,7 @@ def test_package_cert_lanes_dogfood_path(tmp_path: Path) -> None:
     )
     receipts = _pass_all(tmp_path, generation=1, lanes=PACKAGE_CERT_LANES)
     barrier = evaluate_barrier(tmp_path)
-    promoted = promote_exact_pin_evidence(
-        tmp_path, live_head=HEAD, live_tree=TREE, live_main=MAIN
-    )
+    promoted = promote_exact_pin_evidence(tmp_path, live_head=HEAD, live_tree=TREE, live_main=MAIN)
     expect = oracle_evaluate(
         generation=1,
         head=HEAD,

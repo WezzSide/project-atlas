@@ -109,15 +109,11 @@ def test_compat_pin_expectation_fixture_invariants() -> None:
         jsonschema.validate(instance=row, schema=scenario_schema)
     inventory_schema = _load_json(CONTRACTS / "compat-pin-expectation.schema.json")
     assert isinstance(inventory_schema, dict)
-    assert inventory_schema["properties"]["package_id"]["const"] == (
-        "AS-2.2-COMPAT-PIN-PREP-001"
+    assert inventory_schema["properties"]["package_id"]["const"] == ("AS-2.2-COMPAT-PIN-PREP-001")
+    assert inventory_schema["properties"]["atlas_2_1_release_certified"]["const"] is False
+    assert (
+        inventory_schema["properties"]["future_compat_snapshot_id"]["const"] == "atlas-2.1.0-compat"
     )
-    assert inventory_schema["properties"]["atlas_2_1_release_certified"][
-        "const"
-    ] is False
-    assert inventory_schema["properties"]["future_compat_snapshot_id"][
-        "const"
-    ] == "atlas-2.1.0-compat"
 
 
 def test_compat_pin_negative_fixtures_present() -> None:

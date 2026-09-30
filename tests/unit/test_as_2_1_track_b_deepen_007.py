@@ -82,12 +82,8 @@ def test_l3_job_matrix_allowed_jobs(tmp_path: Path) -> None:
     vault = tmp_path / "v"
     vault.mkdir()
     arm_scheduler(vault, arm_id="arm-m")
-    op = elevated_operator(
-        "l3-m", extra={"autonomy.l3", "scheduler.dispatch"}
-    )
-    enable_bounded_l3(
-        vault, policy_id="pol-m", arm_id="arm-m", operator=op, max_jobs=3
-    )
+    op = elevated_operator("l3-m", extra={"autonomy.l3", "scheduler.dispatch"})
+    enable_bounded_l3(vault, policy_id="pol-m", arm_id="arm-m", operator=op, max_jobs=3)
     report = run_bounded_l3_loop(
         vault,
         policy_id="pol-m",
@@ -105,16 +101,10 @@ def test_l3_job_matrix_forbidden_disabled_and_exceed_max(tmp_path: Path) -> None
     vault = tmp_path / "v"
     vault.mkdir()
     arm_scheduler(vault, arm_id="arm-m2")
-    op = elevated_operator(
-        "l3-m2", extra={"autonomy.l3", "scheduler.dispatch"}
-    )
-    enable_bounded_l3(
-        vault, policy_id="pol-m2", arm_id="arm-m2", operator=op, max_jobs=2
-    )
+    op = elevated_operator("l3-m2", extra={"autonomy.l3", "scheduler.dispatch"})
+    enable_bounded_l3(vault, policy_id="pol-m2", arm_id="arm-m2", operator=op, max_jobs=2)
     with pytest.raises(AutonomyL3Error, match="job-forbidden"):
-        run_bounded_l3_loop(
-            vault, policy_id="pol-m2", jobs=["ingest"], operator=op
-        )
+        run_bounded_l3_loop(vault, policy_id="pol-m2", jobs=["ingest"], operator=op)
     with pytest.raises(AutonomyL3Error, match="jobs-exceed-max"):
         run_bounded_l3_loop(
             vault,
@@ -124,9 +114,7 @@ def test_l3_job_matrix_forbidden_disabled_and_exceed_max(tmp_path: Path) -> None
         )
     disable_bounded_l3(vault, policy_id="pol-m2", operator=op)
     with pytest.raises(AutonomyL3Error, match="policy-disabled"):
-        run_bounded_l3_loop(
-            vault, policy_id="pol-m2", jobs=["version"], operator=op
-        )
+        run_bounded_l3_loop(vault, policy_id="pol-m2", jobs=["version"], operator=op)
 
 
 def test_pages_keep_accepted_and_authentic_false() -> None:
@@ -137,9 +125,9 @@ def test_pages_keep_accepted_and_authentic_false() -> None:
     workspace = (
         root / "apps" / "web" / "src" / "pages" / "production" / "WorkspacePage.tsx"
     ).read_text(encoding="utf-8")
-    ops = (
-        root / "apps" / "web" / "src" / "pages" / "production" / "OpsHealthPage.tsx"
-    ).read_text(encoding="utf-8")
+    ops = (root / "apps" / "web" / "src" / "pages" / "production" / "OpsHealthPage.tsx").read_text(
+        encoding="utf-8"
+    )
     assert "APPLICATION ACCEPTED = YES" in mission
     assert "authentic_pilot=false" in mission
     assert "APPLICATION ACCEPTED = YES" in workspace

@@ -49,9 +49,7 @@ def test_review_decide_accept_and_unknown_drop(tmp_path: Path) -> None:
         reason="Owner verified claim from DECISIONS.md",
     )
     assert report["status"] == "ok"
-    disposition = json.loads(
-        (vault / report["disposition_path"]).read_text(encoding="utf-8")
-    )
+    disposition = json.loads((vault / report["disposition_path"]).read_text(encoding="utf-8"))
     assert disposition["decisions"]
     pending = json.loads(
         (vault / "review" / "pending" / f"{project_id}.json").read_text(encoding="utf-8")

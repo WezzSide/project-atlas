@@ -20,9 +20,7 @@ from project_atlas.schema import available_schemas, validate_record
 def test_context_composition(tmp_path: Path) -> None:
     vault = tmp_path / "vault"
     vault.mkdir()
-    report = build_context_pack_composition(
-        vault, composition_id="comp-a", pack_id="pack-a"
-    )
+    report = build_context_pack_composition(vault, composition_id="comp-a", pack_id="pack-a")
     assert report["estate_facts_invented"] is False
     validate_record(report, "context-pack-composition")
 

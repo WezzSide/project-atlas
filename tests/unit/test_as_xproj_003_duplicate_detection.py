@@ -134,9 +134,7 @@ def test_xp3_fx_006_lineage_and_explicit_successor() -> None:
             },
         ]
     )
-    assert any(
-        item.category == "lineage-retired-slot-collision" for item in lineage.candidates
-    )
+    assert any(item.category == "lineage-retired-slot-collision" for item in lineage.candidates)
 
     successor = detect_project_duplicates(
         [{"project_id": PID_B, "explicit_successor_of": PID_PRED}]
@@ -168,9 +166,7 @@ def test_xp3_fx_008_monorepo_without_approved_roots_no_emit() -> None:
 
 
 def test_xp3_fx_009_name_fields_in_observation_rejected() -> None:
-    result = detect_project_duplicates(
-        [{"project_id": PID_A, "display_name": "Widgets"}]
-    )
+    result = detect_project_duplicates([{"project_id": PID_A, "display_name": "Widgets"}])
     assert result.review_count == 0
     assert any(item.category == "invalid-observation" for item in result.rejects)
 

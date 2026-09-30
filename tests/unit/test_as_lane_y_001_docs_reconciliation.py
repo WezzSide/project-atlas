@@ -8,9 +8,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_as_lane_y_001_reconciliation_doc() -> None:
-    text = (ROOT / "docs" / "AS-LANE-Y-001-docs-reconciliation.md").read_text(
-        encoding="utf-8"
-    )
+    text = (ROOT / "docs" / "AS-LANE-Y-001-docs-reconciliation.md").read_text(encoding="utf-8")
     assert "WEB APPLICATION ACCEPTED" in text
     assert "RELEASE CERTIFIED" in text
 

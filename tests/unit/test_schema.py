@@ -179,7 +179,9 @@ def test_valid_records_pass() -> None:
     validate_record(prov, "provenance-reference")
     validate_record(
         ConflictRecord(
-            conflict_id="conf-1", subject="c-1", field="v",
+            conflict_id="conf-1",
+            subject="c-1",
+            field="v",
             claims=[{"source_id": "s-1", "claim": "a"}, {"source_id": "s-2", "claim": "b"}],
         ),
         "conflict-record",

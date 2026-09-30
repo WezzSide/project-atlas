@@ -24,9 +24,7 @@ def test_l3_enable_bounded(tmp_path: Path) -> None:
     vault.mkdir()
     arm_scheduler(vault, arm_id="arm-l3")
     op = elevated_operator("l3-op", extra={"autonomy.l3"})
-    report = enable_bounded_l3(
-        vault, policy_id="pol-a", arm_id="arm-l3", operator=op
-    )
+    report = enable_bounded_l3(vault, policy_id="pol-a", arm_id="arm-l3", operator=op)
     assert report["l3_bounded_autonomy"] is True
     assert report["levels_enabled"]["3"] is True
     assert report["levels_enabled"]["4"] is False

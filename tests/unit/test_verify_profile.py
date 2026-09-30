@@ -26,24 +26,15 @@ def test_expected_claims_with_distinct_subjects_and_locators() -> None:
         "yamlpath:as_ret_disposition.status",
     }
     assert by_locator["yamlpath:status"].normalized_value == "decided"
-    assert (
-        by_locator["yamlpath:decision"].normalized_value
-        == "formally-close-verify-as-superseded"
-    )
+    assert by_locator["yamlpath:decision"].normalized_value == "formally-close-verify-as-superseded"
     assert by_locator["yamlpath:verify_disposition.status"].normalized_value == "superseded"
     assert (
         by_locator["yamlpath:as_ret_disposition.status"].normalized_value
         == "may-proceed-to-governance-rereview"
     )
     # Distinct subjects: block-scoped review subjects, never one shared bucket (§7.6).
-    assert (
-        by_locator["yamlpath:verify_disposition.status"].subject
-        == "review:verify-disposition"
-    )
-    assert (
-        by_locator["yamlpath:as_ret_disposition.status"].subject
-        == "review:as-ret-disposition"
-    )
+    assert by_locator["yamlpath:verify_disposition.status"].subject == "review:verify-disposition"
+    assert by_locator["yamlpath:as_ret_disposition.status"].subject == "review:as-ret-disposition"
 
 
 def test_zero_collision() -> None:
@@ -114,9 +105,7 @@ def test_zero_whole_run_abort_on_bad_input() -> None:
     assert missing.records == ()
     assert missing.diagnostics
 
-    malformed = parse_verify_document(
-        "# T\n\nstatus: [unbalanced\n\n## Next\n", source_path="x.md"
-    )
+    malformed = parse_verify_document("# T\n\nstatus: [unbalanced\n\n## Next\n", source_path="x.md")
     assert malformed.records == ()
     assert any("metadata block rejected" in item for item in malformed.diagnostics)
 

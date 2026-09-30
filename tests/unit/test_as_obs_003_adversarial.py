@@ -118,9 +118,7 @@ def test_obs003_adv007_path_writes_confined_to_ops_report(tmp_path: Path) -> Non
     with pytest.raises(OpsReportError, match=r"refusing"):
         _assert_ops_report_path(vault, vault / "generated" / "ops" / "health-snapshot.json")
     with pytest.raises(OpsReportError, match=r"refusing"):
-        _assert_ops_report_path(
-            vault, vault / "generated" / "ops" / "events" / "stream.jsonl"
-        )
+        _assert_ops_report_path(vault, vault / "generated" / "ops" / "events" / "stream.jsonl")
     with pytest.raises(OpsReportError, match=r"refusing"):
         _assert_ops_report_path(vault, vault / "generated" / "compile-cache" / "x.json")
     with pytest.raises(OpsReportError, match=r"escapes vault root"):

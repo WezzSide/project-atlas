@@ -60,9 +60,7 @@ def test_merge_discovery_manifest_retains_prior_and_upserts_incoming() -> None:
         ],
     }
 
-    merged = merge_discovery_manifest(
-        prior, incoming, deleted_source_ids={"source-deleted"}
-    )
+    merged = merge_discovery_manifest(prior, incoming, deleted_source_ids={"source-deleted"})
 
     by_id = {item["source_id"]: item for item in merged["sources"]}
     assert set(by_id) == {"source-keep", "source-update", "source-new"}

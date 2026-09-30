@@ -120,12 +120,8 @@ def test_maturity_matrix_fixture_invariants() -> None:
         assert row["release_certified"] is False
         # Validate rows offline against the row stub (avoid remote $ref fetch).
         jsonschema.validate(instance=row, schema=row_schema)
-    assert matrix_schema["properties"]["package_id"]["const"] == (
-        "AS-2.2-DOC-CHARTER-PREP-001"
-    )
-    assert matrix_schema["properties"]["atlas_2_1_release_certified"][
-        "const"
-    ] is False
+    assert matrix_schema["properties"]["package_id"]["const"] == ("AS-2.2-DOC-CHARTER-PREP-001")
+    assert matrix_schema["properties"]["atlas_2_1_release_certified"]["const"] is False
 
 
 def test_package_card_non_claims() -> None:

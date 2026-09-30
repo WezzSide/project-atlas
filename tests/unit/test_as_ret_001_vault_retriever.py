@@ -178,9 +178,7 @@ def test_retrieve_alias_matches_lookup(tmp_path: Path) -> None:
     retriever = VaultRetriever(vault)
     via_lookup = retriever.lookup("concept", "beta-concept")
     via_retrieve = retriever.retrieve("concept", "beta-concept")
-    assert [item.record_id for item in via_lookup] == [
-        item.record_id for item in via_retrieve
-    ]
+    assert [item.record_id for item in via_lookup] == [item.record_id for item in via_retrieve]
     assert via_lookup[0].provenance == ({"source_lineage_id": "sline-beta"},)
 
 

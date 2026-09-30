@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -18,11 +19,18 @@ from typing import Any
 
 from project_atlas.orchestration.autonomy.dev_fabric_adapter import (
     AdapterError,
+    CheckRun,
     CompareInfo,
     RunInfo,
 )
 
 API = "https://api.github.com"
+_REPO = re.compile(r"[A-Za-z0-9._-]+/[A-Za-z0-9._-]+")
+_BRANCH = re.compile(r"[A-Za-z0-9._/-]+")
+_ARTIFACT_HOSTS = (".blob.core.windows.net", ".githubusercontent.com")
+_FILE_STATUS = frozenset({"added", "modified", "removed", "renamed", "copied", "changed"})
+MAX_BLOB = 5 * 1024 * 1024
+MAX_MEMBER = 1024 * 1024
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -45,6 +53,8 @@ def _run(d: dict[str, Any]) -> RunInfo:
 
 class GitHubRestPort:
     def __init__(self, repo: str, token: str, *, owner: str | None = None) -> None:
+        if not _REPO.fullmatch(repo):
+            raise AdapterError("invalid repository name")
         self.repo, self._token = repo, token
         self.owner = owner or repo.split("/", 1)[0]
 
@@ -71,6 +81,8 @@ class GitHubRestPort:
             if exc.code == 404:
                 return 404, None
             raise AdapterError(f"github {method} {path} -> {exc.code}") from exc
+        except (urllib.error.URLError, TimeoutError) as exc:
+            raise AdapterError(f"github {method} {path} unreachable: {exc}") from exc
 
     def dispatch_workflow(self, workflow: str, ref: str, inputs: dict[str, str]) -> None:
         st, _ = self._request(
@@ -93,6 +105,8 @@ class GitHubRestPort:
         return _run(d)
 
     def branch_head(self, branch: str) -> str | None:
+        if not _BRANCH.fullmatch(branch) or ".." in branch:
+            raise AdapterError("unsafe branch name")
         st, d = self._request("GET", f"/git/ref/heads/{branch}")
         if st == 404 or d is None:
             return None
@@ -112,9 +126,15 @@ class GitHubRestPort:
             raise AdapterError("compare unavailable or truncated")
         if len(d.get("files", [])) >= 300:
             raise AdapterError("compare file list may be truncated")
+        names: set[str] = set()
+        for f in d.get("files", []):
+            if f.get("status") not in _FILE_STATUS:
+                raise AdapterError(f"unknown file status {f.get('status')!r}")
+            names.add(str(f["filename"]))
+            if f.get("previous_filename"):  # a rename/copy also touches its source path
+                names.add(str(f["previous_filename"]))
         return CompareInfo(
-            merge_base=str(d["merge_base_commit"]["sha"]),
-            files=tuple(sorted(f["filename"] for f in d.get("files", []))),
+            merge_base=str(d["merge_base_commit"]["sha"]), files=tuple(sorted(names))
         )
 
     def _artifact(self, run_id: int, name: str) -> dict[str, Any]:
@@ -142,21 +162,31 @@ class GitHubRestPort:
             raise AdapterError("expected a redirect to artifact storage")
         except urllib.error.HTTPError as exc:
             loc = exc.headers.get("Location") if exc.code in (301, 302, 307) else None
-            if not loc or not loc.startswith("https://"):
-                raise AdapterError("artifact download redirect missing") from exc
+            host = urllib.parse.urlparse(loc or "").hostname or ""
+            if not loc or not loc.startswith("https://") or not host.endswith(_ARTIFACT_HOSTS):
+                raise AdapterError("artifact download redirect missing or untrusted") from exc
         with urllib.request.urlopen(loc, timeout=60) as r:
-            blob = r.read()
+            blob = r.read(MAX_BLOB + 1)
+        if len(blob) > MAX_BLOB:
+            raise AdapterError("artifact too large")
         with zipfile.ZipFile(io.BytesIO(blob)) as z:
-            return dict(json.loads(z.read(member)))
+            info = z.getinfo(member)
+            if info.file_size > MAX_MEMBER:
+                raise AdapterError("artifact member too large")
+            return dict(json.loads(z.read(info)))
 
-    def check_runs(self, sha: str) -> dict[str, tuple[str, str | None]]:
-        _, d = self._request("GET", f"/commits/{sha}/check-runs?per_page=100")
-        return {
-            c["name"]: (c["status"], c.get("conclusion")) for c in (d or {}).get("check_runs", [])
-        }
+    def check_runs(self, sha: str) -> list[CheckRun]:
+        out: list[CheckRun] = []
+        for page in range(1, 11):
+            _, d = self._request("GET", f"/commits/{sha}/check-runs?per_page=100&page={page}")
+            runs = (d or {}).get("check_runs", [])
+            out += [CheckRun(c["name"], c["status"], c.get("conclusion")) for c in runs]
+            if len(runs) < 100:
+                return out
+        raise AdapterError("too many check runs to page through")
 
     def ensure_draft_pr(self, head_branch: str, base: str, title: str, body: str) -> int:
-        q = urllib.parse.urlencode({"head": f"{self.owner}:{head_branch}", "state": "all"})
+        q = urllib.parse.urlencode({"head": f"{self.owner}:{head_branch}", "state": "open"})
         _, d = self._request("GET", f"/pulls?{q}")
         if d:
             return int(d[0]["number"])

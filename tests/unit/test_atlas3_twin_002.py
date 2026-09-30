@@ -61,9 +61,7 @@ def test_constructors_match_shipped_schemas() -> None:
         (ROOT / "docs/atlas-3/contracts/twin-node.schema.json").read_text(encoding="utf-8")
     )
     rel_schema = json.loads(
-        (ROOT / "docs/atlas-3/contracts/twin-relationship.schema.json").read_text(
-            encoding="utf-8"
-        )
+        (ROOT / "docs/atlas-3/contracts/twin-relationship.schema.json").read_text(encoding="utf-8")
     )
     jsonschema.validate(node, node_schema)
     jsonschema.validate(rel, rel_schema)

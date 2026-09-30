@@ -277,9 +277,7 @@ def test_note_write_rejects_symlink_escape(vault: Path, tmp_path: Path) -> None:
     outside.mkdir()
     obsidian_root = tmp_path / "obs"
     (obsidian_root / "00 Inbox").mkdir(parents=True)
-    (obsidian_root / "00 Inbox" / "Atlas Captures").symlink_to(
-        outside, target_is_directory=True
-    )
+    (obsidian_root / "00 Inbox" / "Atlas Captures").symlink_to(outside, target_is_directory=True)
 
     result = capture(vault, _request("escape attempt"), obsidian_root=obsidian_root)
     assert result["status"] == "partial"
@@ -467,9 +465,7 @@ def test_render_can_omit_content_body(vault: Path) -> None:
 # --------------------------------------------------------------------------
 
 
-def test_refuses_to_overwrite_a_note_atlas_does_not_manage(
-    vault: Path, tmp_path: Path
-) -> None:
+def test_refuses_to_overwrite_a_note_atlas_does_not_manage(vault: Path, tmp_path: Path) -> None:
     obsidian_root = tmp_path / "obs"
     obsidian_root.mkdir()
     record = json.loads(
@@ -536,9 +532,7 @@ def test_secret_bearing_capture_is_rejected_before_any_write(vault: Path) -> Non
         ("connection-string", "postgres://u:FAKEPW@db.internal:5432/x"),
     ],
 )
-def test_no_secret_class_reaches_generated_output(
-    vault: Path, pattern: str, secret: str
-) -> None:
+def test_no_secret_class_reaches_generated_output(vault: Path, pattern: str, secret: str) -> None:
     """Every canonical detector class fails closed, verified on disk bytes."""
     with pytest.raises(CaptureError) as excinfo:
         capture(vault, _request(f"line one\n{secret}\nline two"))
@@ -711,9 +705,7 @@ def test_clipboard_provider_selection_prefers_session_type() -> None:
     def which(name: str) -> str | None:
         return f"/usr/bin/{name}" if name in available else None
 
-    wayland = detect_clipboard_provider(
-        {"XDG_SESSION_TYPE": "wayland"}, which=which
-    )
+    wayland = detect_clipboard_provider({"XDG_SESSION_TYPE": "wayland"}, which=which)
     assert wayland.name == "wl-paste"
 
     x11 = detect_clipboard_provider({"XDG_SESSION_TYPE": "x11"}, which=which)
@@ -819,16 +811,12 @@ def test_render_note_is_a_pure_function_of_the_record(vault: Path) -> None:
 # --------------------------------------------------------------------------
 
 
-def test_raw_store_symlinked_out_of_the_vault_fails_closed(
-    vault: Path, tmp_path: Path
-) -> None:
+def test_raw_store_symlinked_out_of_the_vault_fails_closed(vault: Path, tmp_path: Path) -> None:
     """A junction/symlink planted at the capture store must not leak evidence."""
     stolen = tmp_path / "stolen"
     stolen.mkdir()
     (vault / "generated" / "ops").mkdir(parents=True, exist_ok=True)
-    (vault / "generated" / "ops" / "raw-captures").symlink_to(
-        stolen, target_is_directory=True
-    )
+    (vault / "generated" / "ops" / "raw-captures").symlink_to(stolen, target_is_directory=True)
 
     with pytest.raises(CaptureError) as excinfo:
         capture(vault, _request("secret evidence"))
@@ -977,18 +965,14 @@ def test_default_projection_root_symlink_fails_closed(
     assert record["content_hash"] == content_hash("exfiltrate me")
 
 
-def test_default_projection_symlink_chain_fails_closed(
-    vault: Path, tmp_path: Path
-) -> None:
+def test_default_projection_symlink_chain_fails_closed(vault: Path, tmp_path: Path) -> None:
     """A chained link must not be followed out of the vault either."""
     outside = tmp_path / "outside"
     outside.mkdir()
     middle = tmp_path / "middle"
     middle.symlink_to(outside, target_is_directory=True)
     (vault / "generated" / "obsidian").mkdir(parents=True, exist_ok=True)
-    (vault / "generated" / "obsidian" / "captures").symlink_to(
-        middle, target_is_directory=True
-    )
+    (vault / "generated" / "obsidian" / "captures").symlink_to(middle, target_is_directory=True)
 
     result = capture(vault, _request("chained"))
     assert result["status"] == "partial"
@@ -1034,16 +1018,12 @@ def test_normal_default_projection_still_writes_inside_the_vault(vault: Path) ->
     """R1-C: the ordinary path is unaffected by the remediation."""
     result = capture(vault, _request("ordinary"))
     assert result["status"] == "ok"
-    note = vault / "generated" / "obsidian" / "captures" / result["outputs"][0][
-        "relative_path"
-    ]
+    note = vault / "generated" / "obsidian" / "captures" / result["outputs"][0]["relative_path"]
     assert note.is_file()
     assert note.resolve().is_relative_to(vault.resolve())
 
 
-def test_explicit_external_obsidian_root_remains_supported(
-    vault: Path, tmp_path: Path
-) -> None:
+def test_explicit_external_obsidian_root_remains_supported(vault: Path, tmp_path: Path) -> None:
     """R1-D: the documented external opt-in must not become a failure."""
     external = tmp_path / "ExternalObsidianVault"
     external.mkdir()
@@ -1142,8 +1122,7 @@ def test_retry_preserves_human_edited_content(vault: Path) -> None:
     original = note_path.read_text(encoding="utf-8")
     edited = original.replace(
         "<!-- BEGIN HUMAN: notes -->\n<!-- END HUMAN: notes -->",
-        "<!-- BEGIN HUMAN: notes -->\nDo not delete this. -- a human\n"
-        "<!-- END HUMAN: notes -->",
+        "<!-- BEGIN HUMAN: notes -->\nDo not delete this. -- a human\n<!-- END HUMAN: notes -->",
     )
     assert edited != original, "the placeholder must actually be present to edit"
     note_path.write_text(edited, encoding="utf-8")
@@ -1230,18 +1209,20 @@ def test_duplicate_human_region_names_fail_closed(case: str, blocks: str) -> Non
     identity, not the payload -- so the identical-content and empty cases are
     rejected too.
     """
-    human = (
-        "<!-- BEGIN HUMAN: {name} -->\n{body}\n<!-- END HUMAN: {name} -->"
-    ).format
-    existing = GENERATED_START + GENERATED_END + blocks.format(
-        a=human(name="notes", body="FIRST"),
-        b=human(name="notes", body="SECOND"),
-        c=human(name="notes", body="THIRD"),
-        e=human(name="notes", body=""),
-        u=human(name="unique", body="KEEP"),
-        ua=human(name="\u5099\u8003", body="FIRST"),
-        ub=human(name="\u5099\u8003", body="SECOND"),
-        ws="<!--  BEGIN HUMAN: notes  -->\nFIRST\n<!-- END HUMAN: notes -->",
+    human = ("<!-- BEGIN HUMAN: {name} -->\n{body}\n<!-- END HUMAN: {name} -->").format
+    existing = (
+        GENERATED_START
+        + GENERATED_END
+        + blocks.format(
+            a=human(name="notes", body="FIRST"),
+            b=human(name="notes", body="SECOND"),
+            c=human(name="notes", body="THIRD"),
+            e=human(name="notes", body=""),
+            u=human(name="unique", body="KEEP"),
+            ua=human(name="\u5099\u8003", body="FIRST"),
+            ub=human(name="\u5099\u8003", body="SECOND"),
+            ws="<!--  BEGIN HUMAN: notes  -->\nFIRST\n<!-- END HUMAN: notes -->",
+        )
     )
     rendered = (
         f"{GENERATED_START}\nfresh\n{GENERATED_END}\n"
@@ -1263,7 +1244,8 @@ def test_duplicate_names_in_the_rendered_template_are_rejected() -> None:
         merge_protected_regions(existing=None, rendered=rendered, path="first.md")
 
     existing = (
-        GENERATED_START + GENERATED_END
+        GENERATED_START
+        + GENERATED_END
         + "<!-- BEGIN HUMAN: notes -->\nOLD\n<!-- END HUMAN: notes -->"
     )
     with pytest.raises(ProtectedRegionError, match="duplicate-protected-region-names"):
@@ -1289,7 +1271,8 @@ def test_extract_human_regions_refuses_duplicates_on_its_own() -> None:
 def test_distinct_region_names_are_unaffected() -> None:
     """The valid path must not become stricter: distinct names still merge."""
     existing = (
-        GENERATED_START + GENERATED_END
+        GENERATED_START
+        + GENERATED_END
         + "<!-- BEGIN HUMAN: notes -->\nKEEP A\n<!-- END HUMAN: notes -->"
         + "<!-- BEGIN HUMAN: todo -->\nKEEP B\n<!-- END HUMAN: todo -->"
     )
@@ -1318,9 +1301,7 @@ def _HUMAN_BEGIN_NAMES(text: str) -> list[str]:
         ("siblings-distinct", "{a}{b}"),
     ],
 )
-def test_duplicate_check_does_not_decide_nesting_policy(
-    case: str, existing_blocks: str
-) -> None:
+def test_duplicate_check_does_not_decide_nesting_policy(case: str, existing_blocks: str) -> None:
     """F1 refuses ambiguous *identity*; it does not rule on nesting.
 
     Nested regions with distinct names legitimately produce a merged document
@@ -1333,26 +1314,26 @@ def test_duplicate_check_does_not_decide_nesting_policy(
     Names are compared exactly, matching the identity contract the merge
     itself uses, so ``Notes`` and ``notes`` are two regions, not a duplicate.
     """
-    human = (
-        "<!-- BEGIN HUMAN: {name} -->\n{body}\n<!-- END HUMAN: {name} -->"
-    ).format
+    human = ("<!-- BEGIN HUMAN: {name} -->\n{body}\n<!-- END HUMAN: {name} -->").format
     inner = human(name="inner", body="INNER CONTENT")
-    existing = GENERATED_START + GENERATED_END + existing_blocks.format(
-        outer=human(name="outer", body=inner),
-        deep=human(name="a", body=human(name="b", body=human(name="c", body="X"))),
-        cap=human(name="Notes", body="CAPITALISED"),
-        low=human(name="notes", body="lowercase"),
-        a=human(name="alpha", body="A"),
-        b=human(name="beta", body="B"),
+    existing = (
+        GENERATED_START
+        + GENERATED_END
+        + existing_blocks.format(
+            outer=human(name="outer", body=inner),
+            deep=human(name="a", body=human(name="b", body=human(name="c", body="X"))),
+            cap=human(name="Notes", body="CAPITALISED"),
+            low=human(name="notes", body="lowercase"),
+            a=human(name="alpha", body="A"),
+            b=human(name="beta", body="B"),
+        )
     )
     rendered = (
         f"{GENERATED_START}\nfresh\n{GENERATED_END}\n"
         "<!-- BEGIN HUMAN: notes -->\n<!-- END HUMAN: notes -->"
     )
 
-    merged = merge_protected_regions(
-        existing=existing, rendered=rendered, path=f"{case}.md"
-    )
+    merged = merge_protected_regions(existing=existing, rendered=rendered, path=f"{case}.md")
 
     # Every distinct name survives; nothing is refused.
     for name in _HUMAN_BEGIN_NAMES(existing):
@@ -1361,33 +1342,31 @@ def test_duplicate_check_does_not_decide_nesting_policy(
 
 def test_nested_same_name_is_an_identity_failure_not_a_nesting_ruling() -> None:
     """The one nesting shape F1 does refuse, and why it is still about identity."""
-    human = (
-        "<!-- BEGIN HUMAN: {name} -->\n{body}\n<!-- END HUMAN: {name} -->"
-    ).format
+    human = ("<!-- BEGIN HUMAN: {name} -->\n{body}\n<!-- END HUMAN: {name} -->").format
     rendered = (
         f"{GENERATED_START}\nfresh\n{GENERATED_END}\n"
         "<!-- BEGIN HUMAN: notes -->\n<!-- END HUMAN: notes -->"
     )
-    nested_same = GENERATED_START + GENERATED_END + human(
-        name="notes", body=human(name="notes", body="INNER")
+    nested_same = (
+        GENERATED_START
+        + GENERATED_END
+        + human(name="notes", body=human(name="notes", body="INNER"))
     )
     # Structural pairing catches this before identity does: nothing in the
     # marker text says which END closes which BEGIN, so the document has no
     # single valid reading. Either way it fails closed and the note is
     # untouched -- the code is more precise, the verdict is unchanged.
     with pytest.raises(ProtectedRegionError, match="ambiguous-protected-region-nesting"):
-        merge_protected_regions(
-            existing=nested_same, rendered=rendered, path="nested-same.md"
-        )
+        merge_protected_regions(existing=nested_same, rendered=rendered, path="nested-same.md")
 
     # ...while the same shape with distinct names is accepted, so the refusal
     # is keyed on the repeated name and not on the nesting itself.
-    nested_distinct = GENERATED_START + GENERATED_END + human(
-        name="outer", body=human(name="inner", body="INNER")
+    nested_distinct = (
+        GENERATED_START
+        + GENERATED_END
+        + human(name="outer", body=human(name="inner", body="INNER"))
     )
-    merge_protected_regions(
-        existing=nested_distinct, rendered=rendered, path="nested-distinct.md"
-    )
+    merge_protected_regions(existing=nested_distinct, rendered=rendered, path="nested-distinct.md")
 
 
 @pytest.mark.parametrize(
@@ -1398,9 +1377,7 @@ def test_nested_same_name_is_an_identity_failure_not_a_nesting_ruling() -> None:
         ("container-dup-beside-a-unique-top-level", "{unique}{outer_dup}"),
     ],
 )
-def test_same_name_siblings_are_ambiguous_at_every_depth(
-    case: str, blocks: str
-) -> None:
+def test_same_name_siblings_are_ambiguous_at_every_depth(case: str, blocks: str) -> None:
     """Sibling ambiguity is scoped, not top-level-only.
 
     Regression for a fail-open: the containment walk compared sibling names
@@ -1410,14 +1387,16 @@ def test_same_name_siblings_are_ambiguous_at_every_depth(
     loss this module exists to prevent, just one level down from where it was
     being looked for.
     """
-    human = (
-        "<!-- BEGIN HUMAN: {name} -->\n{body}\n<!-- END HUMAN: {name} -->"
-    ).format
+    human = ("<!-- BEGIN HUMAN: {name} -->\n{body}\n<!-- END HUMAN: {name} -->").format
     dup_pair = human(name="notes", body="FIRST") + human(name="notes", body="SECOND")
-    existing = GENERATED_START + GENERATED_END + blocks.format(
-        outer_dup=human(name="outer", body=dup_pair),
-        deep_dup=human(name="a", body=human(name="b", body=dup_pair)),
-        unique=human(name="solo", body="KEEP"),
+    existing = (
+        GENERATED_START
+        + GENERATED_END
+        + blocks.format(
+            outer_dup=human(name="outer", body=dup_pair),
+            deep_dup=human(name="a", body=human(name="b", body=dup_pair)),
+            unique=human(name="solo", body="KEEP"),
+        )
     )
     rendered = (
         f"{GENERATED_START}\nfresh\n{GENERATED_END}\n"
@@ -1443,9 +1422,7 @@ def test_the_same_name_in_two_different_scopes_is_preserved_independently() -> N
     Both payloads must survive, and each must stay in its own container --
     preservation alone is not enough if the bytes land in the wrong scope.
     """
-    human = (
-        "<!-- BEGIN HUMAN: {name} -->\n{body}\n<!-- END HUMAN: {name} -->"
-    ).format
+    human = ("<!-- BEGIN HUMAN: {name} -->\n{body}\n<!-- END HUMAN: {name} -->").format
     existing = (
         f"{GENERATED_START}\nold\n{GENERATED_END}\n"
         + human(name="a", body=human(name="x", body="ONE"))
@@ -1483,9 +1460,7 @@ def _doc(body: str, generated: str = "generated") -> str:
 
 def _scope(text: str, name: str) -> str:
     """The bytes between a container's own markers."""
-    return text.split(f"<!-- BEGIN HUMAN: {name} -->")[1].split(
-        f"<!-- END HUMAN: {name} -->"
-    )[0]
+    return text.split(f"<!-- BEGIN HUMAN: {name} -->")[1].split(f"<!-- END HUMAN: {name} -->")[0]
 
 
 def test_f2_04_same_leaf_name_at_different_scopes_are_distinct_identities() -> None:
@@ -1573,14 +1548,12 @@ def test_f2_10_reordering_sibling_containers_moves_nothing_between_them() -> Non
 @pytest.mark.parametrize(
     ("case", "existing_body"),
     [
-        ("same-scope-siblings", '{dup}'),
-        ("same-scope-inside-a-container", '{outer_dup}'),
-        ("crossed-markers", '{crossed}'),
+        ("same-scope-siblings", "{dup}"),
+        ("same-scope-inside-a-container", "{outer_dup}"),
+        ("crossed-markers", "{crossed}"),
     ],
 )
-def test_f2_structurally_ambiguous_documents_fail_closed(
-    case: str, existing_body: str
-) -> None:
+def test_f2_structurally_ambiguous_documents_fail_closed(case: str, existing_body: str) -> None:
     """F2-02/F2-05/section 3: no unique identity means no write."""
     existing = _doc(
         existing_body.format(
@@ -1849,9 +1822,7 @@ def test_nested_distinct_names_survive_repeated_renders_like_pre_f1() -> None:
     change nested distinct-name behaviour at any generation -- that is F2's
     question, and refusing here would answer it by side effect.
     """
-    human = (
-        "<!-- BEGIN HUMAN: {name} -->\n{body}\n<!-- END HUMAN: {name} -->"
-    ).format
+    human = ("<!-- BEGIN HUMAN: {name} -->\n{body}\n<!-- END HUMAN: {name} -->").format
     document = (
         f"{GENERATED_START}\ngenerated v0\n{GENERATED_END}\n"
         + human(name="outer", body="outer text\n" + human(name="inner", body="INNER"))
@@ -1887,15 +1858,9 @@ def test_nested_distinct_document_is_stable_after_the_first_merge() -> None:
     another copy of the inner block, which would be silent growth rather than
     a refusal.
     """
-    human = (
-        "<!-- BEGIN HUMAN: {name} -->\n{body}\n<!-- END HUMAN: {name} -->"
-    ).format
+    human = ("<!-- BEGIN HUMAN: {name} -->\n{body}\n<!-- END HUMAN: {name} -->").format
     rendered = f"{GENERATED_START}\nstable\n{GENERATED_END}\n"
-    document = (
-        rendered
-        + human(name="outer", body="o\n" + human(name="inner", body="I"))
-        + "\n"
-    )
+    document = rendered + human(name="outer", body="o\n" + human(name="inner", body="I")) + "\n"
 
     first = merge_protected_regions(existing=document, rendered=rendered, path="n.md")
     second = merge_protected_regions(existing=first, rendered=rendered, path="n.md")

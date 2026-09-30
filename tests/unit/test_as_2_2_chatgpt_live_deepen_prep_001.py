@@ -22,9 +22,7 @@ DOCS = {
     "contract": PREP / "CONTRACT.md",
     "invariants": PREP / "INVARIANTS.md",
     "fixture_plan": PREP / "FIXTURE-PLAN.md",
-    "adr": PREP
-    / "adr"
-    / "ADR-2.2-CHATGPT-LIVE-001-quarantine-first-live-bridge-deepen-prep.md",
+    "adr": PREP / "adr" / "ADR-2.2-CHATGPT-LIVE-001-quarantine-first-live-bridge-deepen-prep.md",
 }
 
 SCHEMA_FILES = {
@@ -57,11 +55,7 @@ def test_prep_docs_exist_without_readme() -> None:
     for path in DOCS.values():
         assert path.is_file(), path
         text = path.read_text(encoding="utf-8")
-        assert (
-            "AS-2.2-CHATGPT-LIVE" in text
-            or "ChatGPT Live" in text
-            or "chatgpt" in text.lower()
-        )
+        assert "AS-2.2-CHATGPT-LIVE" in text or "ChatGPT Live" in text or "chatgpt" in text.lower()
         assert "PREP" in text.upper() or "prep" in text
     assert not (PREP / "README.md").exists()
     assert not any(PREP.rglob("README.md"))

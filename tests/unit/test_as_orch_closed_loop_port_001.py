@@ -41,9 +41,7 @@ class _StubHook:
     def progress_state(self, root: Path) -> dict[str, object]:
         return {"MISSION_GENERATION": 1, "PROGRESS_SEQUENCE": 1}
 
-    def closed_loop_tick(
-        self, root: Path, *, now: float | None = None
-    ) -> dict[str, object]:
+    def closed_loop_tick(self, root: Path, *, now: float | None = None) -> dict[str, object]:
         return {"REAL_WORKER_DISPATCH_COUNT": 1, "worker_id": "stub-w"}
 
 

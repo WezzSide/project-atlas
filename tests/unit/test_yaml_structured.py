@@ -140,8 +140,7 @@ def test_flat_locator() -> None:
 def test_nested_locator() -> None:
     assert yaml_path_locator(("validation", "pytest_all")) == "yamlpath:validation.pytest_all"
     assert (
-        yaml_path_locator(("verify_disposition", "status"))
-        == "yamlpath:verify_disposition.status"
+        yaml_path_locator(("verify_disposition", "status")) == "yamlpath:verify_disposition.status"
     )
 
 

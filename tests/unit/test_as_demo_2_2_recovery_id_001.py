@@ -116,9 +116,7 @@ def test_write_atomic_survives_parent_symlink_swap(tmp_path: Path) -> None:
 
     assert not (evil / "vault.json").exists()
     # Either no marker under the symlink, or ensure failed before publish.
-    assert not (vault / ".atlas" / "vault.json").is_file() or (
-        vault / ".atlas"
-    ).is_symlink()
+    assert not (vault / ".atlas" / "vault.json").is_file() or (vault / ".atlas").is_symlink()
 
 
 def test_ensure_fails_closed_on_symlinked_identity(tmp_path: Path) -> None:

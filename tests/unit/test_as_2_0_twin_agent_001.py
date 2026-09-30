@@ -29,9 +29,7 @@ def test_twin_rejects_prod(tmp_path: Path) -> None:
     vault = tmp_path / "v"
     vault.mkdir()
     with pytest.raises(TwinFixtureScenarioError, match="production-ready-forbidden"):
-        build_twin_fixture_scenario(
-            vault, record_id="scen-a", claim_production_ready=True
-        )
+        build_twin_fixture_scenario(vault, record_id="scen-a", claim_production_ready=True)
 
 
 def test_agent_eval(tmp_path: Path) -> None:
@@ -47,9 +45,7 @@ def test_agent_eval_rejects_subjective(tmp_path: Path) -> None:
     vault = tmp_path / "v"
     vault.mkdir()
     with pytest.raises(AgentEvalShadowError, match="subjective-score-forbidden"):
-        build_agent_eval_shadow_receipt(
-            vault, record_id="eval-a", allow_subjective_score=True
-        )
+        build_agent_eval_shadow_receipt(vault, record_id="eval-a", allow_subjective_score=True)
 
 
 def test_docs() -> None:

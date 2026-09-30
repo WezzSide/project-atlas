@@ -48,9 +48,7 @@ def test_authorized_source_root_rejects_symlink(tmp_path: Path) -> None:
 def test_redact_text_removes_full_pem_block() -> None:
     """SEC-SCAN-A-021: PEM body must not survive redact_text."""
     text = (
-        "-----BEGIN RSA PRIVATE KEY-----\n"
-        "MIIEfakekeymaterialCANARY\n"
-        "-----END RSA PRIVATE KEY-----"
+        "-----BEGIN RSA PRIVATE KEY-----\nMIIEfakekeymaterialCANARY\n-----END RSA PRIVATE KEY-----"
     )
     assert [f.pattern for f in scan_text(text)] == ["private-key"]
     red = redact_text(text)

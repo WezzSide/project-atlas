@@ -148,9 +148,7 @@ def test_hybrid_retrieve_missing_scope_rejected(tmp_path: Path) -> None:
 def test_compile_context_missing_scope_rejected(tmp_path: Path) -> None:
     """(c) compile_context also rejects empty project scope fail-closed."""
     vault = _multi_project_vault(tmp_path)
-    with pytest.raises(
-        Runtime22Error, match="runtime-context-project-scope-required"
-    ):
+    with pytest.raises(Runtime22Error, match="runtime-context-project-scope-required"):
         compile_context(
             vault,
             pack_id="no-scope",

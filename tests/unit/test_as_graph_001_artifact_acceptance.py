@@ -215,19 +215,11 @@ def test_no_truth_layer_mutation(tmp_path: Path) -> None:
         path = vault / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text('{"sentinel":true}\n', encoding="utf-8")
-    before = {
-        path: path.read_bytes()
-        for path in vault.rglob("*")
-        if path.is_file()
-    }
+    before = {path: path.read_bytes() for path in vault.rglob("*") if path.is_file()}
     root = tmp_path / "graphify-present"
     shutil.copytree(FIXTURE, root)
     accept_graphify_artifacts(project_root=root, manifest=_manifest_for(root), strict=True)
-    after = {
-        path: path.read_bytes()
-        for path in vault.rglob("*")
-        if path.is_file()
-    }
+    after = {path: path.read_bytes() for path in vault.rglob("*") if path.is_file()}
     assert before == after
     assert not (vault / "relationships").exists()
 

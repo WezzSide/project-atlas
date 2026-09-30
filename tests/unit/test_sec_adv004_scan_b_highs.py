@@ -143,9 +143,7 @@ def test_cli_source_has_no_inline_self_grant() -> None:
 def test_start_script_hardens_stderr_acl() -> None:
     root = Path(__file__).resolve().parents[2]
     start = (root / "scripts" / "windows" / "atlas-start.ps1").read_text(encoding="utf-8")
-    common = (root / "scripts" / "windows" / "_AtlasCommon.ps1").read_text(
-        encoding="utf-8"
-    )
+    common = (root / "scripts" / "windows" / "_AtlasCommon.ps1").read_text(encoding="utf-8")
     assert "Protect-AtlasSensitiveFile" in common
     assert "Clear-AtlasSecretFromLog" in common
     assert "ATLAS_API_TOKEN_FILE" in start

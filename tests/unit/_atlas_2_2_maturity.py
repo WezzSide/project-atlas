@@ -115,9 +115,7 @@ def branch_changes(root: Path = ROOT, *, include_worktree: bool = True) -> set[s
         )
         if diff.returncode == 0:
             changed = {
-                line.strip().replace("\\", "/")
-                for line in diff.stdout.splitlines()
-                if line.strip()
+                line.strip().replace("\\", "/") for line in diff.stdout.splitlines() if line.strip()
             }
     if include_worktree:
         status = subprocess.check_output(

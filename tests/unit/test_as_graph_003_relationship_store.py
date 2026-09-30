@@ -297,9 +297,7 @@ def test_g3_fx_008_replay_idempotent(tmp_path: Path) -> None:
     vault = tmp_path / "vault"
     vault.mkdir()
     written_a = write_relationship_outputs(first, vault=vault)
-    bytes_a = {
-        rel: (vault / rel).read_bytes() for rel in written_a
-    }
+    bytes_a = {rel: (vault / rel).read_bytes() for rel in written_a}
     written_b = write_relationship_outputs(second, vault=vault)
     assert written_a == written_b
     for rel in written_b:

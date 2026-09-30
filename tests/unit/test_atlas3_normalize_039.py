@@ -102,9 +102,7 @@ def test_malformed_provider_fails_closed() -> None:
 
 def test_module_does_not_touch_2x_bridges() -> None:
     root = Path(__file__).resolve().parents[2]
-    source = (root / "src/project_atlas/atlas3/memory/normalize.py").read_text(
-        encoding="utf-8"
-    )
+    source = (root / "src/project_atlas/atlas3/memory/normalize.py").read_text(encoding="utf-8")
     for name in (
         "from project_atlas.chatgpt_bridge",
         "from project_atlas.chatgpt_capture",

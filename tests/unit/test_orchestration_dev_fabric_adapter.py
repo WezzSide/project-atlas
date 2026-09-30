@@ -10,6 +10,7 @@ from project_atlas.orchestration.autonomy.dev_contracts import make_work
 from project_atlas.orchestration.autonomy.dev_crosswalk import Crosswalk
 from project_atlas.orchestration.autonomy.dev_fabric_adapter import (
     AdapterError,
+    CheckRun,
     CompareInfo,
     FabricAdapter,
     RunInfo,
@@ -72,7 +73,10 @@ class FakeGitHub:
         return self.verify_reports[run_id]
 
     def check_runs(self, sha):
-        return self.checks.get(sha, {})
+        v = self.checks.get(sha, {})
+        if isinstance(v, list):
+            return v
+        return [CheckRun(n, st, c) for n, (st, c) in v.items()]
 
     def ensure_draft_pr(self, head_branch, base, title, body):
         if head_branch not in self.prs:
@@ -131,6 +135,7 @@ def build(tmp_path, gh):
         pending_dir=tmp_path / "pending",
         clock=lambda: "2026-09-30T15:59:00Z",
         task_statement=statement,
+        required_checks=frozenset({"quality"}),
     )
     planner = Planner(spool, identity="planner", verifier_identities=(adapter.verifier_identity,))
     item = QueueItem(task_id="DEVQ-1", title="t", category=Category.RELIABILITY, severity=2)
@@ -227,6 +232,7 @@ def test_dispatch_is_at_most_once_even_across_adapter_restart(tmp_path):
         pending_dir=tmp_path / "pending",
         clock=lambda: "x",
         task_statement=statement,
+        required_checks=frozenset({"quality"}),
     )
     ad2.tick()
     assert len(gh.dispatches) == 1
@@ -248,8 +254,7 @@ def test_ambiguous_run_is_refused_and_failed_run_blocks_only_that_lineage(tmp_pa
     ad.tick()
     gh.executor_finishes(None, "")
     gh.executor_finishes(None, "")
-    with pytest.raises(AdapterError, match="ambiguous"):
-        ad.tick()
+    assert any("EXECUTION_FAILED:DEVQ-1:ambiguous" in e for e in ad.tick())
     gh2 = FakeGitHub()
     _, _, ad2, _ = build(tmp_path / "b", gh2)
     ad2.tick()
@@ -315,3 +320,129 @@ def test_rejected_verifier_evidence_fails_even_with_green_ci_and_moved_branch_is
     assert "VERDICT:DEVQ-1" in ad.tick()
     pl.pump()
     assert pl.lineages["DEVQ-1"].phase is Phase.REPAIR_DISPATCHED
+
+
+# ---- IV #1034 repairs ------------------------------------------------------------------------
+
+
+def _to_verifying(tmp_path, gh):
+    spool, xw, ad, pl = build(tmp_path, gh)
+    ad.tick()
+    rid = gh.executor_finishes(R1, T1)
+    ad.tick()
+    pl.pump()
+    ad.tick()
+    return spool, xw, ad, pl, rid
+
+
+def test_partial_check_set_never_yields_a_verdict(tmp_path):
+    gh = FakeGitHub()
+    _s, _x, ad, _pl, rid = _to_verifying(tmp_path, gh)
+    gh.verifier_runs(rid, "VERIFIED")
+    gh.checks[R1] = {"lint": ("completed", "success")}  # required 'quality' not reported yet
+    assert "VERDICT:DEVQ-1" not in ad.tick()
+    gh.checks[R1] = {"quality": ("in_progress", None)}
+    assert "VERDICT:DEVQ-1" not in ad.tick()
+
+
+def test_check_name_collision_cannot_mask_a_failure(tmp_path):
+    gh = FakeGitHub()
+    _s, _x, ad, pl, rid = _to_verifying(tmp_path, gh)
+    gh.verifier_runs(rid, "VERIFIED")
+    gh.checks[R1] = [
+        CheckRun("quality", "completed", "failure"),
+        CheckRun("quality", "completed", "success"),
+    ]
+    assert "VERDICT:DEVQ-1" in ad.tick()
+    pl.pump()
+    assert pl.lineages["DEVQ-1"].phase is Phase.REPAIR_DISPATCHED
+
+
+def test_required_check_must_be_success_not_merely_skipped(tmp_path):
+    gh = FakeGitHub()
+    _s, _x, ad, pl, rid = _to_verifying(tmp_path, gh)
+    gh.verifier_runs(rid, "VERIFIED")
+    gh.checks[R1] = [CheckRun("quality", "completed", "skipped")]
+    assert "VERDICT:DEVQ-1" in ad.tick()
+    pl.pump()
+    assert pl.lineages["DEVQ-1"].phase is Phase.REPAIR_DISPATCHED
+
+
+def test_crash_between_result_bind_and_publish_is_recovered(tmp_path, monkeypatch):
+    gh = FakeGitHub()
+    spool, _xw, ad, pl = build(tmp_path, gh)
+    ad.tick()
+    gh.executor_finishes(R1, T1)
+    orig = spool.publish
+    calls = {"n": 0}
+
+    def flaky(rec):
+        if rec.KIND.value == "RESULT" and calls["n"] == 0:
+            calls["n"] += 1
+            raise RuntimeError("crash")
+        return orig(rec)
+
+    monkeypatch.setattr(spool, "publish", flaky)
+    with pytest.raises(RuntimeError):
+        ad.tick()
+    monkeypatch.undo()
+    ad2 = FabricAdapter(
+        gh,
+        spool,
+        Crosswalk(tmp_path / "xw.jsonl"),
+        pending_dir=tmp_path / "pending",
+        clock=lambda: "2026-09-30T15:59:00Z",
+        task_statement=statement,
+        required_checks=frozenset({"quality"}),
+    )
+    assert "RESULT_REPUBLISHED:DEVQ-1" in ad2.tick()
+    pl.pump()
+    assert pl.lineages["DEVQ-1"].phase is Phase.VERIFYING
+
+
+def test_second_work_is_deferred_until_the_first_is_bound_to_a_run(tmp_path):
+    gh = FakeGitHub()
+    _spool, _xw, ad, pl = build(tmp_path, gh)
+    item = QueueItem(task_id="DEVQ-2", title="t", category=Category.RELIABILITY, severity=1)
+    pl.dispatch(item, **FIELDS)
+    ev = ad.tick()
+    assert ev.count("DISPATCHED:DEVQ-1") + ev.count("DISPATCHED:DEVQ-2") == 1
+    assert len(gh.dispatches) == 1
+    gh.executor_finishes(None, "", conclusion="failure")  # first run appears -> bound
+    ad.tick()
+    ad.tick()
+    assert len(gh.dispatches) == 2  # the deferred one went out after the binding
+
+
+def test_dispatch_api_failure_blocks_only_that_lineage_and_is_never_retried(tmp_path):
+    gh = FakeGitHub()
+
+    def boom(*a):
+        raise AdapterError("503")
+
+    gh.dispatch_workflow = boom
+    _s, _xw, ad, _pl = build(tmp_path, gh)
+    ev = ad.tick()
+    assert any(e.startswith("EXECUTION_FAILED:DEVQ-1") and "dispatch failed" in e for e in ev)
+    assert ad.works == {}
+    assert ad.tick() == []
+
+
+def test_verification_request_must_match_the_crosswalked_result(tmp_path):
+    gh = FakeGitHub()
+    _spool, _xw, ad, _pl, rid = _to_verifying(tmp_path, gh)
+    req = ad.pending_verifications()[0]
+    forged = req.model_copy(update={"result_seal": "z" * 16}).sealed()
+    gh.verifier_runs(rid, "VERIFIED")
+    gh.checks[R1] = {"quality": ("completed", "success")}
+    with pytest.raises(AdapterError, match="crosswalked"):
+        ad.collect_verdict(next(iter(ad.works.values())), forged)
+
+
+def test_string_source_run_id_matches_and_conflicting_reports_are_refused(tmp_path):
+    gh = FakeGitHub()
+    _s, _x, ad, _pl, rid = _to_verifying(tmp_path, gh)
+    gh.verifier_runs(rid, "VERIFIED")
+    gh.verify_reports[rid + 1000]["source_run_id"] = str(rid)
+    gh.checks[R1] = {"quality": ("completed", "success")}
+    assert "VERDICT:DEVQ-1" in ad.tick()

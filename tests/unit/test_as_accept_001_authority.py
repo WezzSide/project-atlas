@@ -205,9 +205,7 @@ def test_ax_auth_004_cross_domain_title_does_not_force_package_status(
     INV-003 — domains isolated; status remains non-authoritative under MVP.
     """
     vault = _materialize_vault(tmp_path)
-    title = query_knowledge(
-        vault, "project-atlas", "wp:AS-ID-001", "title", kind="authoritative"
-    )
+    title = query_knowledge(vault, "project-atlas", "wp:AS-ID-001", "title", kind="authoritative")
     status = query_knowledge(
         vault, "project-atlas", "wp:AS-ID-001", "package_status", kind="authoritative"
     )
@@ -237,9 +235,7 @@ def test_ax_auth_005_forged_trust_root_fail_closed_or_regenerate(
 
     consume_fail_closed = False
     try:
-        query_knowledge(
-            vault, "project-atlas", "wp:AS-ID-001", "title", kind="authoritative"
-        )
+        query_knowledge(vault, "project-atlas", "wp:AS-ID-001", "title", kind="authoritative")
     except KnowledgeQueryError:
         consume_fail_closed = True
 

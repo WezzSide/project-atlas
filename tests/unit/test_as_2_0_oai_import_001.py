@@ -41,15 +41,9 @@ def test_openai_import_receipt_quarantines_without_live_api(tmp_path: Path) -> N
     assert report["quarantine_envelope"]["package_id"] == "AS-2.0-PROV-001"
     assert report["quarantine_envelope"]["status"] == "quarantined"
     validate_record(report, "openai-import-fixture-receipt")
+    assert (vault / "generated" / "ops" / "openai-import-fixtures" / "sample-1.json").is_file()
     assert (
-        vault / "generated" / "ops" / "openai-import-fixtures" / "sample-1.json"
-    ).is_file()
-    assert (
-        vault
-        / "generated"
-        / "ops"
-        / "provider-quarantine"
-        / "oai-import-sample-1.json"
+        vault / "generated" / "ops" / "provider-quarantine" / "oai-import-sample-1.json"
     ).is_file()
 
 
@@ -59,8 +53,7 @@ def test_openai_import_rejects_secret_payload(tmp_path: Path) -> None:
     dirty = tmp_path / "dirty.md"
     secret = "ABCDEFGHIJKLMNOPQRSTUVWXYZ012345"
     dirty.write_text(
-        f"# dirty\n\n```text\nUser: api_key = '{secret}'\n"
-        "Assistant: redacted\n```\n",
+        f"# dirty\n\n```text\nUser: api_key = '{secret}'\nAssistant: redacted\n```\n",
         encoding="utf-8",
     )
     report = build_openai_import_fixture_receipt(
@@ -80,11 +73,7 @@ def test_openai_import_rejects_secret_payload(tmp_path: Path) -> None:
     assert secret not in receipt_blob
     assert all(turn["text"] == "[redacted]" for turn in report["turns"])
     qblob = (
-        vault
-        / "generated"
-        / "ops"
-        / "provider-quarantine"
-        / "oai-import-dirty-1.json"
+        vault / "generated" / "ops" / "provider-quarantine" / "oai-import-dirty-1.json"
     ).read_text(encoding="utf-8")
     assert secret not in qblob
 
@@ -119,9 +108,9 @@ def test_openai_import_empty_turns_fail_closed(tmp_path: Path) -> None:
 def test_oai_docs_and_schema() -> None:
     assert "openai-import-fixture-receipt" in available_schemas()
     assert (ROOT / "docs" / "AS-2.0-OAI-IMPORT-001.md").is_file()
-    readme = (
-        ROOT / "docs" / "atlas-2.0" / "fixtures" / "openai-importer" / "README.md"
-    ).read_text(encoding="utf-8")
+    readme = (ROOT / "docs" / "atlas-2.0" / "fixtures" / "openai-importer" / "README.md").read_text(
+        encoding="utf-8"
+    )
     assert "No live API" in readme or "no live API" in readme.lower()
     expected = (
         ROOT

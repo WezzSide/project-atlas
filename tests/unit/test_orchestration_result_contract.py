@@ -153,9 +153,7 @@ def test_unexpected_authority_fields_rejected() -> None:
 
 def test_coerced_observation_types_rejected() -> None:
     """JSON Schema must see the raw payload; bool/int swaps must not pass."""
-    confused = _valid_payload(
-        observations={"target_moved": 0, "unauthorized_mutations": False}
-    )
+    confused = _valid_payload(observations={"target_moved": 0, "unauthorized_mutations": False})
     with pytest.raises(SchemaValidationError):
         validate_record(confused, "agent-result-envelope")
     decision = validate_and_classify(confused)

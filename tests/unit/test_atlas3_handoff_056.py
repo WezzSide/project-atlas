@@ -34,9 +34,7 @@ def test_capability_keeps_live_multi_account_blocked() -> None:
 
 def test_chatgpt_fixture_serves_to_claude() -> None:
     payload = json.loads(FIXTURE.read_text(encoding="utf-8"))
-    chatgpt = next(
-        conv for conv in payload["conversations"] if conv["provider"] == "chatgpt"
-    )
+    chatgpt = next(conv for conv in payload["conversations"] if conv["provider"] == "chatgpt")
     report = fixture_provider_handoff(
         chatgpt["turns"],
         source_provider="chatgpt",
@@ -94,9 +92,7 @@ def test_cross_project_turn_fails_closed() -> None:
 
 def test_module_does_not_touch_certified_surfaces() -> None:
     root = Path(__file__).resolve().parents[2]
-    source = (root / "src/project_atlas/atlas3/memory/handoff.py").read_text(
-        encoding="utf-8"
-    )
+    source = (root / "src/project_atlas/atlas3/memory/handoff.py").read_text(encoding="utf-8")
     for name in (
         "from project_atlas.runtime_22",
         "from project_atlas.chatgpt_bridge",

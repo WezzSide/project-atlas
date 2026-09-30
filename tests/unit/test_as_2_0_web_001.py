@@ -104,11 +104,11 @@ def test_no_canonical_mutation_affordances() -> None:
     page = PAGE.read_text(encoding="utf-8")
     hook = HOOK.read_text(encoding="utf-8")
     api = API.read_text(encoding="utf-8")
-    for forbidden in ("Approve", "Resolve", "Accept", "method: \"POST\"", "method: 'POST'"):
+    for forbidden in ("Approve", "Resolve", "Accept", 'method: "POST"', "method: 'POST'"):
         assert forbidden not in page
         assert forbidden not in hook
     assert "liveApiFetch" in hook
-    assert "method: \"POST\"" not in hook
+    assert 'method: "POST"' not in hook
     assert "function liveApiFetch" in api
 
 

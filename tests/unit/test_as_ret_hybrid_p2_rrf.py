@@ -182,13 +182,9 @@ def test_hybrid_rrf_empty_query_fail_closed(tmp_path: Path) -> None:
     vault.mkdir()
     _seed_vault(vault)
     with pytest.raises(HybridRetrievalError, match="value-empty"):
-        build_hybrid_rrf_fusion(
-            vault, kind="concept", value="  ", project_id="demo"
-        )
+        build_hybrid_rrf_fusion(vault, kind="concept", value="  ", project_id="demo")
     with pytest.raises(HybridRetrievalError, match="value-empty"):
-        build_hybrid_retrieval_plan(
-            vault, kind="concept", value="", project_id="demo"
-        )
+        build_hybrid_retrieval_plan(vault, kind="concept", value="", project_id="demo")
 
 
 def test_hybrid_rrf_rejects_semantic_authority(tmp_path: Path) -> None:
@@ -210,9 +206,7 @@ def test_hybrid_rrf_does_not_write_vault(tmp_path: Path) -> None:
     vault.mkdir()
     _seed_vault(vault)
     before = _vault_fingerprint(vault)
-    build_hybrid_rrf_fusion(
-        vault, kind="concept", value="token", project_id="demo"
-    )
+    build_hybrid_rrf_fusion(vault, kind="concept", value="token", project_id="demo")
     assert _vault_fingerprint(vault) == before
 
 
@@ -221,14 +215,10 @@ def test_hybrid_rrf_repeat_run_byte_identical(tmp_path: Path) -> None:
     vault.mkdir()
     _seed_vault(vault)
     a = fusion_to_json(
-        build_hybrid_rrf_fusion(
-            vault, kind="concept", value="auth", project_id="demo"
-        )
+        build_hybrid_rrf_fusion(vault, kind="concept", value="auth", project_id="demo")
     )
     b = fusion_to_json(
-        build_hybrid_rrf_fusion(
-            vault, kind="concept", value="auth", project_id="demo"
-        )
+        build_hybrid_rrf_fusion(vault, kind="concept", value="auth", project_id="demo")
     )
     assert a == b
 
@@ -390,19 +380,13 @@ def test_hybrid_rrf_rejects_too_many_query_terms(tmp_path: Path) -> None:
     _seed_vault(vault)
     query = " ".join(f"term{n}" for n in range(300))
     with pytest.raises(HybridRetrievalError, match="query-too-many-terms"):
-        build_hybrid_rrf_fusion(
-            vault, kind="concept", value=query, project_id="demo"
-        )
+        build_hybrid_rrf_fusion(vault, kind="concept", value=query, project_id="demo")
 
 
 def test_hybrid_rrf_missing_indexes_hybrid_error_contract(tmp_path: Path) -> None:
     empty = tmp_path / "empty"
     empty.mkdir()
     with pytest.raises(HybridRetrievalError, match="hybrid-retrieval-substrate"):
-        build_hybrid_rrf_fusion(
-            empty, kind="concept", value="auth", project_id="demo"
-        )
+        build_hybrid_rrf_fusion(empty, kind="concept", value="auth", project_id="demo")
     with pytest.raises(HybridRetrievalError, match="hybrid-retrieval-substrate"):
-        build_hybrid_retrieval_plan(
-            empty, kind="concept", value="auth", project_id="demo"
-        )
+        build_hybrid_retrieval_plan(empty, kind="concept", value="auth", project_id="demo")

@@ -114,9 +114,7 @@ def test_xproj_fabric_inventory_fixture_invariants() -> None:
     assert inventory_schema["properties"]["package_id"]["const"] == (
         "AS-2.2-XPROJ-CONTRACT-PREP-001"
     )
-    assert inventory_schema["properties"]["atlas_2_1_release_certified"][
-        "const"
-    ] is False
+    assert inventory_schema["properties"]["atlas_2_1_release_certified"]["const"] is False
 
 
 def test_xproj_lens_fixtures_validate_and_stay_non_authority() -> None:
