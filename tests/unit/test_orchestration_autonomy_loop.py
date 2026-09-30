@@ -1068,7 +1068,19 @@ def test_validating_dangling_ambiguous_node_state_fails_closed(tmp_path: Path) -
     whether the original observation was `passed=True` or `passed=False`.
     """
     package_id = "AS-ORCH-VALSTUCK-006"
-    gov = _governor(_node(package_id))
+    # A node that does NOT require independent certification has no IV-routing
+    # rest state, so VERIFYING here is still an interrupted complete_verification()
+    # (a certification-required node legitimately rests in VERIFYING, see
+    # test_validating_dangling_after_iv_routing_finishes_bookkeeping_only).
+    gov = _governor(
+        _node(package_id).model_copy(
+            update={
+                "iv_requirements": IvRequirements(
+                    certification_required=False, adversarial_required=False
+                )
+            }
+        )
+    )
     loop = _loop(tmp_path, gov)
     lease = gov.lease(
         package_id, loop._first_agent(), branch=loop._branch, worktree=loop._worktree
@@ -1341,3 +1353,50 @@ def test_failed_local_process_result_keeps_remediation_contract(tmp_path: Path) 
     loop.apply_observed_result("disp-local-fail", "dd" * 32, passed=False)
     node = next(n for n in gov.snapshot().nodes if n.package_id == "AS-ORCH-LOCAL-FAIL-001")
     assert node.state is not NodeState.BLOCKED
+
+
+def test_mailbox_successor_cannot_take_host_class_override(tmp_path: Path) -> None:
+    """IV finding (Lane D): a guard-registered mailbox successor is
+    EXTERNAL_AGENT-only; a caller-supplied override must be refused."""
+    from project_atlas.orchestration.autonomy.governor import GovernorError
+
+    gov = _governor(_node("MBX-SUCC-OVR-001", host=ExecutionHostClass.EXTERNAL_AGENT))
+    gov._register_mailbox_materialization_guards(
+        "MBX-SUCC-OVR-001", execution_guard=lambda: True, recovery_guard=lambda *_a: True
+    )
+    loop = _loop(tmp_path, gov)
+    with pytest.raises(GovernorError) as exc:
+        gov.lease(
+            "MBX-SUCC-OVR-001",
+            loop._first_agent(),
+            branch=loop._branch,
+            worktree=loop._worktree,
+            execution_host_class_override=ExecutionHostClass.IN_PROCESS,
+        )
+    assert exc.value.code == "HOST_NOT_AUTHORIZED"
+
+
+def test_validating_dangling_after_iv_routing_finishes_bookkeeping_only(tmp_path: Path) -> None:
+    """IV finding (Lane D): VERIFYING is the normal post-routing state of a
+    certification-required node. A crash after routing but before LoopState
+    bookkeeping must finish the bookkeeping without certifying or re-routing."""
+    package_id = "AS-ORCH-VALSTUCK-IVROUTED-001"
+    gov = _governor(_node(package_id))
+    loop = _loop(tmp_path, gov)
+    lease = gov.lease(
+        package_id, loop._first_agent(), branch=loop._branch, worktree=loop._worktree
+    )
+    gov.execute_leased(lease.lease_id)  # -> ACTIVE
+    gov.transition(package_id, NodeState.VERIFYING, "TEST_IV_ROUTED")  # already routed
+    dispatch_id = f"in-process:{lease.lease_id}"
+    _dangling_validating(
+        loop, package_id=package_id, lease_id=lease.lease_id, dispatch_id=dispatch_id
+    )
+
+    result = loop.tick()
+
+    assert result.phase is LoopPhase.IDLE
+    assert dispatch_id in loop.state.completed_dispatch_ids
+    node = next(item for item in gov.snapshot().nodes if item.package_id == package_id)
+    assert node.state is NodeState.VERIFYING
+    assert gov.snapshot().certification_state.value != "CERTIFIED"

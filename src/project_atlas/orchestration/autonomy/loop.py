@@ -977,6 +977,24 @@ class AutonomousLoop:
                     code="VALIDATION_STATE_AMBIGUOUS",
                 )
             return self._finalize_validated(dispatch_id, digest, recovered=True)
+        if node.state == NodeState.VERIFYING and node.iv_requirements.certification_required:
+            # EXECUTION_SUCCESS != CERTIFICATION: a successful implementer
+            # result on a certification-required node is routed to
+            # independent IV and legitimately rests in VERIFYING until a
+            # separately bound verifier verdict. Only the LoopState
+            # bookkeeping tail remained; finish it without any governor
+            # mutation (never certifies, never re-routes).
+            observed_passed, digest = self._reobserve_dispatch_outcome(
+                dispatch_id, in_process=is_in_process
+            )
+            if not observed_passed:
+                self._fail(
+                    f"node {package_id!r} is awaiting independent verification "
+                    f"but the dispatch outcome now reobserves as failed for "
+                    f"{dispatch_id!r} -- durable evidence is inconsistent",
+                    code="VALIDATION_STATE_AMBIGUOUS",
+                )
+            return self._finalize_validated(dispatch_id, digest, recovered=True)
         # VERIFYING (complete_verification() itself was interrupted -- no
         # normal, synchronous code path leaves a node here, see the
         # docstring above) or any other state this crash window has no

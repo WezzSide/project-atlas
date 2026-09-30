@@ -708,6 +708,15 @@ class AutonomousGovernor:
             except OwnerGateError as exc:
                 raise GovernorError(str(exc), code="OWNER_GATE_REQUIRED") from exc
         self._require_execution_guard(package_id)
+        if execution_host_class_override is not None and (
+            package_id in self._mailbox_materialization_guards or package_id.startswith("MBX-SUCC-")
+        ):
+            # A mailbox successor is EXTERNAL_AGENT-only; no caller-supplied
+            # host-class selection may redirect it (IV finding, Lane D).
+            raise GovernorError(
+                "mailbox successor cannot take a host-class override",
+                code="HOST_NOT_AUTHORIZED",
+            )
         if would_overlap(tuple(self._nodes), node):
             raise GovernorError("surface overlap forbids lease", code="SURFACE_OVERLAP")
         agent = self._require_agent(agent_id)
