@@ -5,6 +5,22 @@ exact commands run, exact results, deviations, and remaining risks.
 
 ---
 
+## AT3-005-F2 — missing vault identity is not compatibility
+
+Base: `b87b4a226f4aa8b2f669edf112aa3476454f754f` / tree `46d1989b026a2f15920ec5e1c78a106799bd1249`.
+
+`prove_compatibility` defaulted `NO_PROJECT_ID_ROTATION=True` and only
+re-evaluated when `.atlas/vault.json` existed. A missing identity file
+left `passed=True`. Empty files already failed.
+
+Fix: require a non-empty identity file before claiming the invariant.
+Regression in `tests/unit/test_atlas3_compat_005.py`.
+
+Does not merge, wake OPT, or treat compatibility as owner authority.
+`MERGE_AUTHORIZATION = NOT_GRANTED`.
+
+---
+
 ## D-193 — Atlas 3.0 foundation convergence
 
 **Date:** 2026-08-25

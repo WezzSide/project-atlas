@@ -25,3 +25,13 @@ def test_compatibility_receipt_passes_on_isolated_vault(tmp_path: Path) -> None:
     assert set(receipt["invariants"]) == set(INVARIANTS)
     assert (vault / "generated" / "ops" / "atlas3" / "compat" / "receipt.json").is_file()
     assert not (vault / "state" / "claims").exists()
+
+
+def test_compatibility_fails_when_vault_identity_missing(tmp_path: Path) -> None:
+    """AT3-005-F2: missing .atlas/vault.json is not NO_PROJECT_ID_ROTATION."""
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    receipt = prove_compatibility(vault)
+    assert receipt["passed"] is False
+    assert "NO_PROJECT_ID_ROTATION" in receipt["failed"]
+    assert receipt["checks"]["NO_PROJECT_ID_ROTATION"] is False

@@ -37,9 +37,11 @@ def prove_compatibility(vault: Any) -> dict[str, Any]:
     checks: dict[str, bool] = {}
 
     identity = root / ".atlas" / "vault.json"
-    checks["NO_PROJECT_ID_ROTATION"] = True
-    if identity.is_file():
-        checks["NO_PROJECT_ID_ROTATION"] = identity.stat().st_size > 0
+    # Absence cannot prove identity was not rotated. Empty file already
+    # failed; missing file previously stayed True (fail-open).
+    checks["NO_PROJECT_ID_ROTATION"] = (
+        identity.is_file() and identity.stat().st_size > 0
+    )
 
     layer_b = root / "state" / "claims"
     atlas3_claims = root / OPS_RELATIVE / "claims"
