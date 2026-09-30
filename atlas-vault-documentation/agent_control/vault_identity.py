@@ -17,9 +17,30 @@ class VaultIdentity:
     name: str
 
 
+def _require_identity_path_contained(vault_root: Path, marker: Path) -> Path:
+    """Refuse symlink / reparse escapes of ``.atlas/vault.json`` (SEC-ADV004B)."""
+    atlas_dir = marker.parent
+    if atlas_dir.is_symlink() or marker.is_symlink():
+        raise ValueError(
+            "refusing vault identity outside vault root (symlink/reparse escape): "
+            f"{marker}"
+        )
+    real_root = Path(os.path.realpath(vault_root))
+    real_marker = Path(os.path.realpath(marker))
+    try:
+        real_marker.relative_to(real_root)
+    except ValueError as exc:
+        raise ValueError(
+            "refusing vault identity outside vault root (symlink/reparse escape): "
+            f"{marker}"
+        ) from exc
+    return marker
+
+
 def read(root: Path) -> VaultIdentity:
     resolved = root.expanduser().resolve()
     marker = resolved / ".atlas" / "vault.json"
+    _require_identity_path_contained(resolved, marker)
     if not marker.is_file():
         raise ValueError(f"Atlas Vault identity is missing: {marker}")
     data = json.loads(marker.read_text(encoding="utf-8"))
