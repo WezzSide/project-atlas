@@ -6,12 +6,14 @@ authority escalation, freshness regression, or owner-gate regression.
 
 from __future__ import annotations
 
+import json
 from typing import Any, Final
 
 from project_atlas.atlas3.contracts import (
     FULL_LIVE_DEMO_READY,
     MERGE_AUTHORIZATION,
     OPS_RELATIVE,
+    Atlas3Error,
     honesty_block,
     require_vault,
     write_json_atomic,
@@ -37,9 +39,27 @@ def prove_compatibility(vault: Any) -> dict[str, Any]:
     checks: dict[str, bool] = {}
 
     identity = root / ".atlas" / "vault.json"
-    checks["NO_PROJECT_ID_ROTATION"] = True
-    if identity.is_file():
-        checks["NO_PROJECT_ID_ROTATION"] = identity.stat().st_size > 0
+    if identity.is_symlink() or (identity.exists() and not identity.is_file()):
+        raise Atlas3Error(
+            "IDENTITY_PATH_NOT_FILE",
+            "vault identity must be a regular file to prove NO_PROJECT_ID_ROTATION",
+        )
+    if not identity.is_file():
+        checks["NO_PROJECT_ID_ROTATION"] = False
+    else:
+        try:
+            raw = json.loads(identity.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise Atlas3Error(
+                "IDENTITY_CORRUPT",
+                "vault identity is not valid JSON; cannot prove NO_PROJECT_ID_ROTATION",
+            ) from exc
+        if not isinstance(raw, dict) or not raw:
+            raise Atlas3Error(
+                "IDENTITY_CORRUPT",
+                "vault identity must be a non-empty object",
+            )
+        checks["NO_PROJECT_ID_ROTATION"] = True
 
     layer_b = root / "state" / "claims"
     atlas3_claims = root / OPS_RELATIVE / "claims"
