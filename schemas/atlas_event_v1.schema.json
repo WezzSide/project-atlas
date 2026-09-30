@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ATLAS_EVENT_V1",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema",
+    "event_id",
+    "timestamp_utc",
+    "actor",
+    "role",
+    "session_id",
+    "lane",
+    "event",
+    "state"
+  ],
+  "properties": {
+    "schema": {
+      "const": "ATLAS_EVENT_V1"
+    },
+    "event_id": {
+      "type": "string",
+      "minLength": 8
+    },
+    "timestamp_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "actor": {
+      "type": "string",
+      "minLength": 1
+    },
+    "role": {
+      "type": "string"
+    },
+    "session_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "lane": {
+      "type": "string",
+      "minLength": 1
+    },
+    "pr": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1
+    },
+    "head": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^[0-9a-f]{7,40}$"
+    },
+    "tree": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^[0-9a-f]{7,40}$"
+    },
+    "event": {
+      "type": "string",
+      "enum": [
+        "HEAD_MOVED",
+        "CI_COMPLETED",
+        "IV_COMPLETED",
+        "NEW_FINDING",
+        "FINDING_RECLASSIFIED",
+        "CLAIM_INTEGRITY_CHANGED",
+        "OWNER_CLAIMED",
+        "OWNER_RELEASED",
+        "HUMAN_GATE_REQUIRED",
+        "CURRENT_MAIN_COMPATIBILITY_CHANGED",
+        "MERGE_ELIGIBLE",
+        "MERGED",
+        "SEALED",
+        "ZERO_RUNNABLE_FRONTIER"
+      ]
+    },
+    "state": {
+      "type": "string",
+      "minLength": 1
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "invalidates": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "dependencies": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "next_actions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

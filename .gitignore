@@ -1,5 +1,8 @@
 # Python environments and caches
 .venv/
+
+# Atlas DAG coordinator runtime state (disposable, D-006)
+.atlas-runtime/
 venv/
 env/
 __pycache__/
