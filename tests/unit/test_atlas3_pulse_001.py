@@ -5,6 +5,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
+from project_atlas.atlas3.contracts import Atlas3Error
 from project_atlas.atlas3.ledger import append_event
 from project_atlas.atlas3.pulse import compile_pulse
 
@@ -45,6 +48,40 @@ def test_pulse_composes_changed_and_failures(tmp_path: Path) -> None:
     assert report["questions"]["what_failed"]["items"]
     assert report["questions"]["what_requires_attention"]["status"] == "derived"
     assert report["questions"]["what_requires_attention"]["items"]
+
+
+def test_foreign_answer_project_id_fails_closed(tmp_path: Path) -> None:
+    vault = _vault(tmp_path)
+    answers = vault / "generated" / "answers"
+    answers.mkdir(parents=True)
+    (answers / "ans-changed-harbor-api.json").write_text(
+        json.dumps(
+            {
+                "status": "derived",
+                "summary": "FOREIGN-ANSWER",
+                "project_id": "other-api",
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(Atlas3Error) as exc:
+        compile_pulse(vault, "harbor-api")
+    assert exc.value.code == "PROJECT_MISMATCH"
+    assert not (vault / "generated" / "ops" / "atlas3" / "pulse" / "harbor-api.json").exists()
+
+
+def test_unlabeled_answer_still_composes(tmp_path: Path) -> None:
+    vault = _vault(tmp_path)
+    answers = vault / "generated" / "answers"
+    answers.mkdir(parents=True)
+    (answers / "ans-changed-harbor-api.json").write_text(
+        json.dumps({"status": "derived", "summary": "compose.yml changed"}, sort_keys=True),
+        encoding="utf-8",
+    )
+    report = compile_pulse(vault, "harbor-api")
+    assert report["questions"]["what_changed"]["status"] == "derived"
+    assert report["project_id"] == "harbor-api"
 
 
 def test_pulse_stale_is_not_changed_and_attention_unknown(tmp_path: Path) -> None:
