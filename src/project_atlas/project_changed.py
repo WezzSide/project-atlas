@@ -138,13 +138,29 @@ def _project_paths(paths: list[str], project_id: str, inventory: dict[str, Any])
     rows = inventory.get("sources")
     if not isinstance(rows, list):
         return [path for path in paths if path]
-    owned = {
-        str(row.get("path"))
-        for row in rows
-        if isinstance(row, dict) and str(row.get("project_id")) == project_id
-    }
-    # Also include pathless matches by prefix project id folder conventions.
-    return [path for path in paths if path in owned or path.split("/", 1)[0] == project_id]
+    claimed: dict[str, str] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        path = str(row.get("path") or "")
+        owner = str(row.get("project_id") or "").strip()
+        if path and owner:
+            claimed[path] = owner
+    owned = {path for path, owner in claimed.items() if owner == project_id}
+    scoped: list[str] = []
+    for path in paths:
+        if not path:
+            continue
+        claimed_owner = claimed.get(path)
+        if claimed_owner == project_id or path in owned:
+            scoped.append(path)
+            continue
+        if claimed_owner:
+            # Sibling-owned path under this project's folder prefix.
+            continue
+        if path.split("/", 1)[0] == project_id:
+            scoped.append(path)
+    return scoped
 
 
 def _semantic_class_for_path(path: str) -> str | None:

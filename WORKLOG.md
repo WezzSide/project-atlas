@@ -5,6 +5,23 @@ exact commands run, exact results, deviations, and remaining risks.
 
 ---
 
+## AS-CHANGED-PREFIX-OWNERSHIP-001 — folder prefix is not ownership
+
+Base: `b87b4a226f4aa8b2f669edf112aa3476454f754f` / tree `46d1989b026a2f15920ec5e1c78a106799bd1249`.
+
+`_project_paths` included any path whose first segment equaled
+`project_id`. Sibling-owned `demo/portal-secret.txt` (`project_id=portal`)
+was therefore scoped onto the `demo` what-changed lens.
+
+Fix: claimed foreign owners are excluded; unclaimed prefix paths and
+explicit owned paths remain. Regression in
+`tests/unit/test_as_changed_prefix_ownership_001.py`.
+
+Does not merge, wake OPT, or treat the changed lens as authority.
+`MERGE_AUTHORIZATION = NOT_GRANTED`.
+
+---
+
 ## D-193 — Atlas 3.0 foundation convergence
 
 **Date:** 2026-08-25
