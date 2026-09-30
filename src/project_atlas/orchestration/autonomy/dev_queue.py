@@ -98,6 +98,8 @@ def _check_types(i: QueueItem) -> None:
 def validate(items: Iterable[QueueItem]) -> tuple[QueueItem, ...]:
     """Reject duplicate ids, self/unknown dependencies, malformed severity and dependency cycles."""
     seq = tuple(items)
+    for i in seq:
+        _check_types(i)  # first: unhashable/odd ids must raise QueueError, not TypeError
     ids = [i.task_id for i in seq]
     if len(set(ids)) != len(ids):
         raise QueueError("duplicate task_id")
