@@ -74,11 +74,7 @@ def final_response_precheck(state: AutonomyReturnState) -> dict[str, object]:
     """Machine-enforced precheck before outer agent final response."""
     work = autonomous_work_exists(state)
     allowed = may_emit_final_return(state)
-    frontier = (
-        state.genuine_owner_frontier
-        or state.external_hard_blocker
-        or state.project_terminal
-    )
+    frontier = state.genuine_owner_frontier or state.external_hard_blocker or state.project_terminal
     return {
         "package_id": PACKAGE_ID,
         "autonomous_work_exists": work,

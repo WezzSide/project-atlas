@@ -434,7 +434,11 @@ def _supervisor_git_status(root: Path) -> str:
     check (tracked files); see ``_protected_state_digest`` for the
     other half (the gitignored durable governance state)."""
     result = subprocess.run(
-        ["git", "status", "--porcelain"], cwd=root, check=True, capture_output=True, text=True,
+        ["git", "status", "--porcelain"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
         timeout=30,
     )
     return result.stdout

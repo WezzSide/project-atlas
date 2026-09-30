@@ -13,7 +13,7 @@ PACKAGE_ID: Final[str] = "AS-D147R-EXACT-MAIN-CLOSURE-001"
 
 _RUNBOOK_REL = Path("docs/productization/CLEAN-MACHINE-PREP-RUNBOOK.md")
 _RUNBOOK_HEAD_RE = re.compile(r'\$TARGET_HEAD\s*=\s*"([0-9a-f]{40})"')
-_RUNBOOK_TREE_LINE_RE = re.compile(r'`TREE`\s*=\s*`([0-9a-f]{40})`')
+_RUNBOOK_TREE_LINE_RE = re.compile(r"`TREE`\s*=\s*`([0-9a-f]{40})`")
 _SHA40_RE = re.compile(r"^[0-9a-f]{40}$")
 _POST_CERT_METADATA_PREFIXES: Final[tuple[str, ...]] = (
     "docs/",
@@ -103,9 +103,7 @@ def delta_paths(repo: Path, ancestor: str, descendant: str) -> list[str] | None:
     return [line.strip() for line in proc.stdout.splitlines() if line.strip()]
 
 
-def is_metadata_only_post_cert_delta(
-    repo: Path, ancestor: str, descendant: str
-) -> bool:
+def is_metadata_only_post_cert_delta(repo: Path, ancestor: str, descendant: str) -> bool:
     """Post-cert main advance must touch orchestration/docs/tests surfaces only."""
     if ancestor == descendant:
         return True
@@ -161,9 +159,7 @@ def inspect_closure_integrity(
     cert_ancestor = is_ancestor(repo, certification_target_head, live.head)
     pins_match = pin_head == certification_target_head and pin_tree == cert_tree
     advanced = live.head != certification_target_head and cert_ancestor
-    metadata_only = is_metadata_only_post_cert_delta(
-        repo, certification_target_head, live.head
-    )
+    metadata_only = is_metadata_only_post_cert_delta(repo, certification_target_head, live.head)
     integrated_main = is_integrated_main_head(repo, live.head)
     return ClosureIntegrity(
         live_main_head=live.head,
@@ -217,9 +213,9 @@ def closure_integrity_report(integrity: ClosureIntegrity) -> dict[str, Any]:
     return {
         "package_id": PACKAGE_ID,
         "closure_integrity_pass": ok,
-        "HEAD_TREE_COHERENCE": "PASS" if (
-            integrity.live_head_tree_coherent and integrity.cert_target_head_tree_coherent
-        ) else "FAIL",
+        "HEAD_TREE_COHERENCE": "PASS"
+        if (integrity.live_head_tree_coherent and integrity.cert_target_head_tree_coherent)
+        else "FAIL",
         "LIVE_MAIN_CLASSIFICATION": _live_main_classification(integrity),
         "CERTIFICATION_PIN_SEMANTICS": (
             "PASS" if integrity.operational_pins_match_cert_target else "FAIL"

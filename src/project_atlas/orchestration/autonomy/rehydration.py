@@ -294,8 +294,7 @@ def rehydrate_governor(
     lease_id = loop_state.active_lease_id
     if package_id is None or lease_id is None:
         raise RehydrationError(
-            f"{loop_state.phase.value} phase is missing active_package_id or "
-            f"active_lease_id",
+            f"{loop_state.phase.value} phase is missing active_package_id or active_lease_id",
             code="STATE_INCONSISTENT",
         )
     try:
@@ -463,9 +462,7 @@ def _originate(
                 continue
             try:
                 if (candidate.package_id, candidate.base_pin) in released_revisions:
-                    governor.add_node(
-                        candidate.model_copy(update={"state": NodeState.CERTIFIED})
-                    )
+                    governor.add_node(candidate.model_copy(update={"state": NodeState.CERTIFIED}))
                     known.add(candidate.package_id)
                     continue
                 if candidate.base_pin != inventory.current_main:
@@ -527,9 +524,7 @@ def _restore_leased_node(
                     "risk resuming against a swapped revision's authority",
                     code="REVISION_IDENTITY_UNVERIFIABLE",
                 )
-            origination_node = find_materialized_work_node(
-                origination_projection_store, package_id
-            )
+            origination_node = find_materialized_work_node(origination_projection_store, package_id)
         if origination_node is None:
             # No pilot factory, and no durable origination record either
             # (or none was even configured for this caller) -- there is
@@ -537,8 +532,7 @@ def _restore_leased_node(
             # WorkNode from. Same fail-closed outcome as before this
             # parameter existed.
             raise RehydrationError(
-                f"package {package_id!r} has no durable node definition to "
-                f"rehydrate from",
+                f"package {package_id!r} has no durable node definition to rehydrate from",
                 code="NODE_NOT_REHYDRATABLE",
             )
 
@@ -608,8 +602,7 @@ def _restore_leased_node(
         # structured RehydrationError instead of letting a raw
         # ValidationError crash `run_governor_loop_tick()` uncaught.
         raise RehydrationError(
-            f"projected lease {lease_id!r} does not reconstruct into a valid "
-            f"AgentLease: {exc}",
+            f"projected lease {lease_id!r} does not reconstruct into a valid AgentLease: {exc}",
             code="STATE_CORRUPT",
         ) from exc
 
@@ -720,14 +713,12 @@ def _validate_lease_row_against_node(
     agent = next((item for item in agents if item.agent_id == row.agent_id), None)
     if agent is None:
         raise RehydrationError(
-            f"projected lease {row.lease_id!r} references unregistered agent "
-            f"{row.agent_id!r}",
+            f"projected lease {row.lease_id!r} references unregistered agent {row.agent_id!r}",
             code="UNKNOWN_AGENT",
         )
     if not agent.available:
         raise RehydrationError(
-            f"projected lease {row.lease_id!r} references unavailable agent "
-            f"{row.agent_id!r}",
+            f"projected lease {row.lease_id!r} references unavailable agent {row.agent_id!r}",
             code="AGENT_UNAVAILABLE",
         )
     have = frozenset(agent.capabilities)

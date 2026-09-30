@@ -723,8 +723,7 @@ def _build_standalone_parser() -> argparse.ArgumentParser:
         "--repair-reason",
         type=str,
         default=None,
-        help="Non-empty reason for the TrustRepairCarrier exception "
-        "(requires --repair-pr too).",
+        help="Non-empty reason for the TrustRepairCarrier exception (requires --repair-pr too).",
     )
     release_stalled = sub.add_parser(
         "release-stalled-lease",
