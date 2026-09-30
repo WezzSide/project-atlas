@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from atlas_contracts.identity import safe_relative_component
+from project_atlas.secrets import scan_text
 
 PACKAGE_ID = "AS-CODER-ALPHA-HUMAN-LOOP-001"
 GENERATOR_ID = "atlas-coder-alpha-human-loop-001"
@@ -24,6 +25,27 @@ ALLOWED_DECISIONS = frozenset({"accept", "reject"})
 
 class HumanLoopError(ValueError):
     """Fail-closed human-loop error."""
+
+
+def _omit_decoded_secrets(value: Any) -> Any:
+    """Omit decoded secret keys/values after ``json.loads``.
+
+    AS-SEC-SCAN-HUMAN-LOOP-PENDING-REWRITE-JSON-ESC-001: decide rewrites
+    the loaded pending queue. ``scan_text`` on raw ``\\u0041KI…`` escapes
+    is empty; persist must not echo the decoded TOKEN as a key or value.
+    """
+    if isinstance(value, dict):
+        cleaned: dict[str, Any] = {}
+        for key, item in value.items():
+            if isinstance(key, str) and scan_text(key):
+                continue
+            cleaned[key] = _omit_decoded_secrets(item)
+        return cleaned
+    if isinstance(value, list):
+        return [_omit_decoded_secrets(item) for item in value]
+    if isinstance(value, str) and scan_text(value):
+        return "unknown"
+    return value
 
 
 def _write_atomic(path: Path, content: bytes) -> None:
@@ -128,6 +150,11 @@ def apply_review_decision(
     subject_id = str(entry.get("subject_id") or "")
     if not subject_id:
         raise HumanLoopError("pending review missing subject_id")
+    # AS-SEC-SCAN-HUMAN-LOOP-SUBJECT-JSON-ESC-001: json.loads of pending
+    # reviews can decode \\u subject escapes that scan_text misses on raw
+    # bytes. Fail closed before any disposition persist.
+    if scan_text(subject_id) or scan_text(category) or scan_text(reason_text):
+        raise HumanLoopError("secret-content")
     winner: str | None = None
     if decision_norm == "accept" and category == "conflict":
         if not winner_claim_id:
@@ -185,6 +212,9 @@ def apply_review_decision(
         if isinstance(item, dict):
             updated_entries.append(item)
     pending_payload["entries"] = updated_entries
+    pending_payload = _omit_decoded_secrets(pending_payload)
+    if not isinstance(pending_payload, dict):
+        raise HumanLoopError("pending reviews invalid")
 
     disposition_path = decisions_path(vault, project_id)
     receipt_path = vault / RECEIPT_DIR / f"{project_id}-{review_id}.json"
