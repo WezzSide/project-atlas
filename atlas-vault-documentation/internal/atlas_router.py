@@ -156,6 +156,10 @@ def _write_failure(
         "recorded_at": provenance.utc_timestamp(),
     }
     target = vault_root / settings.failures_root / f"{event_id}.{category}.json"
+    # Fail closed: discovered routing.failures_root must not write outside
+    # the vault. Success-path staging already calls ensure_inside_root;
+    # the failure writer previously skipped that check.
+    verification.ensure_inside_root(vault_root, target)
     target.parent.mkdir(parents=True, exist_ok=True)
     provenance.atomic_replace(
         target, json.dumps(record, ensure_ascii=False, indent=2) + "\n"
@@ -199,11 +203,15 @@ def route(
     receipt_id = receipt_id_for(event, identity.project_id)
 
     def fail(category: str, message: str, problems: tuple[str, ...] = ()) -> RouteResult:
-        _write_failure(
-            vault_root, settings, event_id=event.event_id,
-            project_id=identity.project_id, category=category, message=message,
-            redact=redact,
-        )
+        try:
+            _write_failure(
+                vault_root, settings, event_id=event.event_id,
+                project_id=identity.project_id, category=category, message=message,
+                redact=redact,
+            )
+        except ValueError:
+            # Escaped failures_root must not write outside; still return failed.
+            pass
         return RouteResult(
             ok=False, status="failed", event_id=event.event_id,
             project_id=identity.project_id, receipt_id=None, plan_sha256=None,

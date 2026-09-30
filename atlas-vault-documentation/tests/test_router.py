@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -320,3 +321,42 @@ def test_generated_regions_preserve_human_text_and_fail_closed() -> None:
             pass
         else:
             raise AssertionError("malformed generated region was accepted")
+
+
+def test_escaped_failures_root_does_not_write_outside_vault(tmp_path: Path) -> None:
+    """P1: discovered routing.failures_root must not write outside the vault.
+
+    _write_failure previously skipped ensure_inside_root. A held lock
+    triggers lock-unavailable, which used to materialize the failure
+    JSON at vault/../outside/.
+    """
+    vault = (tmp_path / "vault").resolve()
+    outside = (tmp_path / "outside").resolve()
+    vault.mkdir()
+    outside.mkdir()
+    event = _accepted(vault)
+    identity = ProjectIdentity(
+        project_id="project-atlas",
+        display_name="Project Atlas",
+        source="verified-event",
+        confidence="authoritative",
+    )
+    lock = vault / "routing" / "state" / "project-atlas.lock"
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.write_text("held\n", encoding="utf-8")
+    rel_fail = os.path.relpath(outside, vault)
+    result = atlas_router.route(
+        event,
+        identity,
+        vault_root=vault,
+        settings=atlas_router.RoutingSettings(
+            failures_root=rel_fail,
+            lock_wait_seconds=0.05,
+            stale_lock_seconds=3600,
+        ),
+        redact=lambda text: text,
+    )
+    assert result.status == "failed"
+    assert result.category == "lock-unavailable"
+    assert list(outside.rglob("*")) == []
+    assert not (vault / "routing" / "failures").exists()
