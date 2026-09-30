@@ -208,3 +208,8 @@ def test_owner_and_irreversible_reasons_when_sole_failure():
     assert a.skipped == (("a", "OWNER_INPUT_REQUIRED:SECRET"),)
     b = select_next([item("b", reversible=False)])
     assert b.skipped == (("b", "IRREVERSIBLE"),)
+
+
+def test_unhashable_task_id_raises_queue_error_not_type_error():
+    with pytest.raises(QueueError):
+        select_next([QueueItem(task_id=["x"], title="x", category=Category.RELIABILITY)])  # type: ignore[arg-type]
