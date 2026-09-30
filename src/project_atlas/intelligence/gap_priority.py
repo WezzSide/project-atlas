@@ -75,13 +75,17 @@ def prioritize_evidence_gaps(
     """Classify gaps into discrete priority classes. Never scores."""
     if GAP_PRIORITY_IS_FACT != "NO":
         raise RuntimeError("gap-priority-fact-flag-broken")
+    source = project_id.strip()
+    if not source:
+        raise ValueError("project_id is required")
+    scoped = tuple(item for item in coerce_claims(claims) if item.project_id == source)
     gaps = detect_evidence_gaps(
         IntelligenceQuery(
-            project_id=project_id,
+            project_id=source,
             kind=IntelligenceQueryKind.GAPS,
             as_of_valid_time=as_of_valid_time,
         ),
-        coerce_claims(claims),
+        scoped,
         sources=sources,
         validity_windows=validity_windows,
         identity_ambiguous_claim_ids=identity_ambiguous_claim_ids,
