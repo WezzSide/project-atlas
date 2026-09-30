@@ -25,6 +25,7 @@ from project_atlas.graph_resolution import (
     write_resolution_outputs,
 )
 from project_atlas.schema import available_schemas, validate_record
+from project_atlas.secrets import scan_text
 from project_atlas.source_identity import lineage_id, validate_project_uuid
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "graphify-present"
@@ -413,3 +414,47 @@ def test_optional_write_validates_under_atlas_validate(tmp_path: Path) -> None:
     report = validate(vault)
     graph_errors = [e for e in report["errors"] if "graph resolution" in e]
     assert graph_errors == []
+
+
+def test_json_escape_graphify_node_id_is_not_persisted(tmp_path: Path) -> None:
+    """AS-SEC-SCAN-GRAPH-NODEID-JSON-ESC-001: decoded JSON-\\u node ids must not persist."""
+    token = "AKIAAAAAAAAAAAAAAAAA"
+    src_root = tmp_path / "graph-src"
+    out_dir = src_root / "graphify-out"
+    out_dir.mkdir(parents=True)
+    node_line = '{"id":"\\u0041KIAAAAAAAAAAAAAAAAA","type":"decision","label":"ship"}'
+    nodes_path = out_dir / "nodes.jsonl"
+    nodes_path.write_text(node_line + "\n", encoding="utf-8")
+    sha = hashlib.sha256(nodes_path.read_bytes()).hexdigest()
+    manifest = {
+        "schema_version": 1,
+        "project_id": "harbor-api",
+        "sources": [
+            {
+                "source_id": "source-nodes",
+                "path": "graphify-out/nodes.jsonl",
+                "media_type": "application/json",
+                "sha256": sha,
+                "size_bytes": nodes_path.stat().st_size,
+                "classification_state": "unclassified",
+                "authority": {"level": "derived"},
+            }
+        ],
+    }
+    from project_atlas.scaffold import create_scaffold
+
+    vault = tmp_path / "vault"
+    create_scaffold(vault)
+    assert scan_text(node_line) == []
+    assert token not in node_line
+    _receipt, resolution = resolve_from_acceptance(
+        project_root=src_root,
+        manifest=manifest,
+        strict=False,
+    )
+    written = write_resolution_outputs(resolution, vault=vault)
+    written_text = "\n".join((vault / path).read_text(encoding="utf-8") for path in written)
+    assert token not in written_text
+    assert token not in "".join(written)
+    assert scan_text(written_text) == []
+    assert token not in [node.graphify_node_id for node in resolution.nodes]
