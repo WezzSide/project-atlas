@@ -302,6 +302,8 @@ def test_build_runs_on_the_permitted_worker_network_never_host(tmp_path):
     assert proc.returncode == 0, proc.stdout.decode()
     (build,) = repo.docker.calls("build")
     assert "--network atlas-runner-net" in build and "host" not in build
+    # classic builder is load-bearing: BuildKit cannot join a custom bridge network
+    assert (repo.docker.state / "build-buildkit.log").read_text().split() == ["0"]
     (probe,) = [c for c in repo.docker.calls("run") if "create_connection" in c]
     assert "--network atlas-runner-net" in probe and "--cap-drop ALL" in probe
     # the probe uses the Dockerfile's own FROM image
@@ -322,7 +324,7 @@ def test_unreachable_build_network_fails_fast_before_building_or_activating(tmp_
     before = Path(env["ATLAS_CURRENT_LINK"]).resolve()
     proc, _ = _deploy(repo, tmp_path, REV_B, FAKE_DOCKER_NET_FAILS="1")
     assert proc.returncode != 0
-    assert b"cannot reach deb.debian.org" in proc.stdout
+    assert b"build preflight failed on network" in proc.stdout
     assert len(repo.docker.calls("build")) == 1  # only REV_A's build; none for REV_B
     assert Path(env["ATLAS_CURRENT_LINK"]).resolve() == before
 
@@ -330,3 +332,11 @@ def test_unreachable_build_network_fails_fast_before_building_or_activating(tmp_
 def test_dockerfile_apt_waits_are_bounded():
     dockerfile = (Path(__file__).resolve().parents[1] / "Dockerfile").read_text(encoding="utf-8")
     assert "Acquire::http::Timeout=20" in dockerfile and "Acquire::Retries=1" in dockerfile
+
+
+def test_preflight_failure_output_is_surfaced_for_diagnosis(tmp_path):
+    repo = FakeGitRepo(tmp_path, remote_url=REMOTE)
+    proc, _ = _deploy(repo, tmp_path, REV_A, FAKE_DOCKER_NET_FAILS="1")
+    out = proc.stdout.decode()
+    assert proc.returncode != 0 and "preflight output (tail)" in out
+    assert "docker network inspect atlas-runner-net" in out

@@ -181,6 +181,7 @@ class FakeDocker:
             '    tag="${@: -1}"; f="$S/images/${tag}"\n'
             '    [ -f "$f" ] || exit 1; cat "$f" ;;\n'
             "  build)\n"
+            '    echo "${DOCKER_BUILDKIT:-unset}" >> "$S/build-buildkit.log"\n'
             '    [ "${FAKE_DOCKER_BUILD_FAILS:-0}" = 1 ] && { echo "build failed" >&2; exit 1; }\n'
             '    tag=; label=\n'
             '    while [ $# -gt 0 ]; do case "$1" in\n'
@@ -194,7 +195,10 @@ class FakeDocker:
             '    echo "$id $label" > "$S/images/${tag}" ;;\n'
             "  run)\n"
             '    case "$*" in *create_connection*)\n'
-            '      [ "${FAKE_DOCKER_NET_FAILS:-0}" = 1 ] && exit 1; exit 0 ;;\n'
+            '      if [ "${FAKE_DOCKER_NET_FAILS:-0}" = 1 ]; then\n'
+            '        echo "Temporary failure resolving deb.debian.org" >&2; exit 1\n'
+            "      fi\n"
+            "      exit 0 ;;\n"
             "    esac\n"
             '    ver="${FAKE_DOCKER_PY:-3.12.14}"; IFS=. read -r a b _ <<<"$ver"\n'
             '    if [ "$a" -gt 3 ] || { [ "$a" -eq 3 ] && [ "$b" -ge 12 ]; }; then\n'

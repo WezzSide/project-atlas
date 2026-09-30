@@ -182,11 +182,13 @@ fi
 if [ "${reuse}" -eq 0 ]; then
     # Fast, diagnosable preflight (seconds, not a 12-minute apt timeout): the build
     # network must resolve and reach the Debian mirror the Dockerfile uses.
-    BASE_IMAGE="$(awk '/^FROM /{print $2; exit}' "${RELEASE_DIR}/Dockerfile")"
+    BASE_IMAGE="$(awk '/^FROM /{for (i = 2; i <= NF; i++) if ($i !~ /^--/) { print $i; exit }}' "${RELEASE_DIR}/Dockerfile")"
     [ -n "${BASE_IMAGE}" ] || die "cannot determine the Dockerfile base image; release NOT activated"
-    timeout 120 "${DOCKER}" run --rm --network "${BUILD_NET}" --cap-drop ALL --security-opt no-new-privileges \
-        --entrypoint python3 "${BASE_IMAGE}" -c 'import socket; socket.create_connection(("deb.debian.org", 80), timeout=15).close()' >/dev/null 2>&1 \
-        || die "worker image build network '${BUILD_NET}' cannot reach deb.debian.org (check the worker network and atlas-runner-firewall); release NOT activated"
+    if ! probe_out="$(timeout 120 "${DOCKER}" run --rm --network "${BUILD_NET}" --cap-drop ALL --security-opt no-new-privileges \
+        --entrypoint python3 "${BASE_IMAGE}" -c 'import socket; socket.create_connection(("deb.debian.org", 80), timeout=15).close()' 2>&1)"; then
+        log "preflight output (tail): $(printf '%s' "${probe_out}" | tail -n 5)"
+        die "worker image build preflight failed on network '${BUILD_NET}' (network missing, base image pull failed, or deb.debian.org unreachable; check docker network inspect ${BUILD_NET} and the atlas-runner-firewall permit); release NOT activated"
+    fi
 fi
 if [ "${reuse}" -eq 1 ]; then
     log "worker image ${IMAGE_TAG} already built for ${REV}; reusing after validation"
