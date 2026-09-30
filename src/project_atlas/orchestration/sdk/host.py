@@ -22,6 +22,13 @@ _HELD_LOCKS_GUARD = threading.Lock()
 _HELD_INSTANCE_IDS: dict[str, str] = {}
 
 
+#: Upper bound for the short Windows process probes below (``tasklist``,
+#: ``powershell``). They answer a question about a PID, so they either respond
+#: quickly or something is wrong; without a bound a wedged child would hang the
+#: caller indefinitely, and these run from a resident driver's polling loop.
+_WINDOWS_PROBE_TIMEOUT_SECONDS = 30
+
+
 def no_window_creationflags() -> int:
     """Windows-only ``creationflags`` for a subprocess call that must
     never show a console window, no-op (``0``) everywhere else.
@@ -83,13 +90,18 @@ def pid_is_alive(pid: int) -> bool:
     if pid <= 0:
         return False
     if os.name == "nt":
-        proc = subprocess.run(
-            ["tasklist", "/FI", f"PID eq {pid}"],
-            capture_output=True,
-            text=True,
-            check=False,
-            creationflags=no_window_creationflags(),
-        )
+        try:
+            proc = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}"],
+                capture_output=True,
+                text=True,
+                check=False,
+                creationflags=no_window_creationflags(),
+                stdin=subprocess.DEVNULL,
+                timeout=_WINDOWS_PROBE_TIMEOUT_SECONDS,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return False
         return str(pid) in (proc.stdout or "")
     try:
         os.kill(pid, 0)
@@ -182,6 +194,7 @@ def process_start_identity(pid: int) -> str:
                 [
                     "powershell",
                     "-NoProfile",
+                    "-NonInteractive",
                     "-Command",
                     ps_cmd,
                 ],
@@ -189,11 +202,13 @@ def process_start_identity(pid: int) -> str:
                 text=True,
                 check=False,
                 creationflags=no_window_creationflags(),
+                stdin=subprocess.DEVNULL,
+                timeout=_WINDOWS_PROBE_TIMEOUT_SECONDS,
             )
             ticks = (proc.stdout or "").strip()
             if proc.returncode == 0 and ticks.isdigit():
                 return f"win:{ticks}"
-        except OSError:
+        except (OSError, subprocess.TimeoutExpired):
             pass
         return "unknown"
     try:
