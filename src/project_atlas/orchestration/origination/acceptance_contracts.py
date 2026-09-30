@@ -70,6 +70,7 @@ from project_atlas.orchestration.origination.adapter import (
     EligibleRoadmapItem,
     _safe_project_file,
 )
+from project_atlas.secrets import scan_text
 
 _MARKER_NAMES: tuple[str, ...] = (".atlas-project.yaml", ".atlas/project.yaml")
 _MARKER_KEY = "origination_acceptance_contracts"
@@ -85,6 +86,23 @@ _MAX_SCOPE_ENTRIES = 64
 #: contracts() independently re-checks the actual merged total too).
 _MAX_EVIDENCE_ENTRIES = 15
 _MAX_CONTRACTS = 512
+
+
+def _reject_secret_scalars(value: object, *, where: str) -> None:
+    """AS-SEC-SCAN-ORIGIN-YAML-CONTRACT-001: YAML ``\\u``-decoded secrets
+    must not reach ``persist_proposed``."""
+    if isinstance(value, str):
+        if scan_text(value):
+            raise AcceptanceContractConfigError(f"secret-content in {where}")
+        return
+    if isinstance(value, dict):
+        for key, child in value.items():
+            _reject_secret_scalars(key, where=where)
+            _reject_secret_scalars(child, where=where)
+        return
+    if isinstance(value, list):
+        for child in value:
+            _reject_secret_scalars(child, where=where)
 
 
 class AcceptanceContractConfigError(ValueError):
@@ -245,6 +263,7 @@ def load_acceptance_contracts(project_root: Path) -> tuple[AcceptanceContract, .
             f"acceptance-contracts file must parse to a mapping, "
             f"got {type(contracts_raw).__name__}: {contracts_path}"
         )
+    _reject_secret_scalars(contracts_raw, where=str(contracts_path))
     entries = contracts_raw.get("contracts")
     if not isinstance(entries, list) or not entries:
         raise AcceptanceContractConfigError(
