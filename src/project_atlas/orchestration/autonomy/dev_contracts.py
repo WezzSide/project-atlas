@@ -235,6 +235,12 @@ class VerificationRequest(_Sealed):
     def _who(cls, v: str) -> str:
         return validate_identity(v)
 
+    @model_validator(mode="after")
+    def _independent(self) -> VerificationRequest:
+        if same_identity(self.executor_identity, self.verifier_identity):
+            raise ValueError("verifier identity must differ from the executor identity")
+        return self
+
 
 class Finding(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -266,6 +272,14 @@ class VerdictRecord(_Sealed):
     @classmethod
     def _who(cls, v: str) -> str:
         return validate_identity(v)
+
+    @model_validator(mode="after")
+    def _verdict_findings_invariant(self) -> VerdictRecord:
+        if self.verdict is Verdict.PASS and self.findings:
+            raise ValueError("PASS cannot carry findings")
+        if self.verdict is Verdict.FAIL and not self.findings:
+            raise ValueError("FAIL requires at least one finding")
+        return self
 
 
 def _err(exc: ValidationError) -> ContractError:

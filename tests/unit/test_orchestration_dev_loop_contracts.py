@@ -13,8 +13,11 @@ from project_atlas.orchestration.autonomy.dev_contracts import (
     Finding,
     FindingCategory,
     FindingClass,
+    ResultRecord,
     Role,
     Verdict,
+    VerdictRecord,
+    VerificationRequest,
     classify_finding,
     make_result,
     make_verdict,
@@ -621,3 +624,77 @@ def test_planner_verifier_list_rejects_duplicates_and_self():
         Planner(t, identity="vps3-plan", verifier_identities=("v1", "V1"))
     with pytest.raises(PlannerError, match="own verifiers"):
         Planner(t, identity="vps3-plan", verifier_identities=("VPS3-plan",))
+
+
+def test_round4_direct_sealed_records_keep_their_invariants():
+    w = work()
+    r = result(w)
+    with pytest.raises(Exception, match="differ"):
+        VerificationRequest(
+            task_id=w.task_id,
+            execution_id=w.execution_id,
+            repository=w.repository,
+            base_revision=BASE,
+            result_revision=REV1,
+            result_tree=TREE1,
+            executor_identity=IMPL,
+            verifier_identity=IMPL.upper(),
+            result_seal=r.seal,
+        ).sealed()
+    req = make_verification_request(w, r, verifier_identity=VER)
+    base = dict(
+        task_id=req.task_id,
+        execution_id=req.execution_id,
+        verifier_identity=VER,
+        result_revision=REV1,
+        result_tree=TREE1,
+        request_seal=req.seal,
+    )
+    secret = Finding(finding_id="F", category=FindingCategory.SECRET_REQUIRED)
+    with pytest.raises(Exception, match="PASS cannot"):
+        VerdictRecord(verdict=Verdict.PASS, findings=(secret,), **base).sealed()
+    with pytest.raises(Exception, match="FAIL requires"):
+        VerdictRecord(verdict=Verdict.FAIL, **base).sealed()
+
+
+def test_result_with_foreign_execution_repository_or_base_is_quarantined():
+    t = InMemoryTransport()
+    p = planner(t)
+    p.dispatch(qi("A"), **FIELDS)
+    w = p.lineages["A"].work
+    bad = ResultRecord(
+        task_id="A",
+        execution_id="OTHER",
+        executor_identity=IMPL,
+        repository=w.repository,
+        base_revision=w.base_revision,
+        result_revision=REV1,
+        result_tree=TREE1,
+        work_seal=w.seal,
+    ).sealed()
+    t.publish(bad)
+    p.pump()
+    assert p.lineages["A"].phase is Phase.DISPATCHED
+    assert any("does not match" in q[2] for q in p.quarantined)
+
+
+def test_poisoned_result_flood_does_not_starve_the_verdict_channel():
+    class Flood:
+        def __init__(self):
+            self.left = {Channel.RESULT: 100, Channel.VERDICT: 3}
+
+        def publish(self, record):
+            return True
+
+        def claim(self, channel, *, role, identity):
+            if self.left[channel] > 0:
+                self.left[channel] -= 1
+                raise TransportError("poison")
+            return None
+
+    f = Flood()
+    p = Planner(f, identity="vps3-plan", verifier_identities=(VER,))
+    p.pump()
+    assert f.left[Channel.VERDICT] == 0
+    with pytest.raises(PlannerError):
+        Planner(f, identity="vps3-plan", verifier_identities="abc")
