@@ -51,3 +51,80 @@ def test_registry_matches_shipped_schema() -> None:
     )
     for capability in REGISTRY.values():
         jsonschema.validate(capability, schema)
+
+
+def test_register_rejects_authority_security_class() -> None:
+    """Catalog must not mint authority as a capability security class."""
+    with pytest.raises(Atlas3Error) as exc:
+        register_capability(
+            {
+                "capability_id": "atlas3.forged-authority",
+                "semantic_contract": "AT3-004-FORGED",
+                "truth_dependency": "none",
+                "required_evidence": [],
+                "available_surfaces": ["python"],
+                "maturity": "implementation-unlocked",
+                "demo_required": False,
+                "security_class": "authority",
+            }
+        )
+    assert exc.value.code == "AUTHORITY_SECURITY_CLASS"
+    assert "atlas3.forged-authority" not in REGISTRY
+
+
+def test_register_rejects_unknown_security_class() -> None:
+    with pytest.raises(Atlas3Error) as exc:
+        register_capability(
+            {
+                "capability_id": "atlas3.forged-unknown-class",
+                "semantic_contract": "AT3-004-UNKNOWN-CLASS",
+                "truth_dependency": "none",
+                "required_evidence": [],
+                "available_surfaces": ["python"],
+                "maturity": "implementation-unlocked",
+                "demo_required": False,
+                "security_class": "truth-core",
+            }
+        )
+    assert exc.value.code == "UNKNOWN_SECURITY_CLASS"
+    assert "atlas3.forged-unknown-class" not in REGISTRY
+
+
+def test_register_rejects_authority_claim_key() -> None:
+    with pytest.raises(Atlas3Error) as exc:
+        register_capability(
+            {
+                "capability_id": "atlas3.forged-authority-flag",
+                "semantic_contract": "AT3-004-FORGED-FLAG",
+                "truth_dependency": "none",
+                "required_evidence": [],
+                "available_surfaces": ["python"],
+                "maturity": "implementation-unlocked",
+                "demo_required": False,
+                "security_class": "owner-gated",
+                "is_authority": True,
+            }
+        )
+    assert exc.value.code == "AUTHORITY_CLAIM_FORBIDDEN"
+    assert "atlas3.forged-authority-flag" not in REGISTRY
+
+
+def test_register_accepts_closed_security_class() -> None:
+    cid = "atlas3.honest-owner-gated"
+    try:
+        registered = register_capability(
+            {
+                "capability_id": cid,
+                "semantic_contract": "AT3-004-HONEST",
+                "truth_dependency": "owner-gate",
+                "required_evidence": ["owner_decision"],
+                "available_surfaces": ["python"],
+                "maturity": "implementation-unlocked",
+                "demo_required": False,
+                "security_class": "owner-gated",
+            }
+        )
+        assert registered["security_class"] == "owner-gated"
+        assert get_capability(cid)["security_class"] == "owner-gated"
+    finally:
+        REGISTRY.pop(cid, None)
