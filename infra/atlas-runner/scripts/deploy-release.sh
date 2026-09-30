@@ -193,6 +193,21 @@ fi
 if [ "${reuse}" -eq 1 ]; then
     log "worker image ${IMAGE_TAG} already built for ${REV}; reusing after validation"
 else
+    # Classic-builder capability probe (TRANSITIONAL compatibility mechanism; docker has
+    # deprecated the legacy builder - follow-up ATLAS_BUILDKIT_NETWORK_MODERNIZATION).
+    # Fail fast and diagnostically if the host docker no longer supports it: no silent
+    # fallback to BuildKit/another network mode, no host networking.
+    log "docker server version: $("${DOCKER}" version --format '{{.Server.Version}}' 2>/dev/null || echo unknown)"
+    if ! builder_out="$(printf 'FROM scratch\n' | DOCKER_BUILDKIT=0 "${DOCKER}" build --network "${BUILD_NET}" --quiet - 2>&1)"; then
+        log "classic builder probe output (tail): $(printf '%s' "${builder_out}" | tail -n 5)"
+        die "host docker does not support the classic (legacy) builder required for build network '${BUILD_NET}'; refusing to fall back to BuildKit or host networking; release NOT activated (see ATLAS_BUILDKIT_NETWORK_MODERNIZATION)"
+    fi
+    case "${builder_out}" in
+        *"[internal] load build definition"*|*"building with"*)
+            die "docker used BuildKit despite DOCKER_BUILDKIT=0 (cannot honour --network ${BUILD_NET}); refusing to fall back; release NOT activated (see ATLAS_BUILDKIT_NETWORK_MODERNIZATION)" ;;
+    esac
+    probe_id="$(printf '%s' "${builder_out}" | tail -n 1)"
+    [ -z "${probe_id}" ] || "${DOCKER}" rmi -f "${probe_id}" >/dev/null 2>&1 || true
     log "building worker image ${IMAGE_TAG} from ${RELEASE_DIR}"
     # Classic builder: BuildKit only accepts default|none|host for --network and
     # cannot join the permitted worker bridge; host networking is never used.

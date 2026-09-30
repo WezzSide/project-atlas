@@ -40,6 +40,11 @@ def _deploy(repo: FakeGitRepo, tmp_path: Path, rev: str, **extra: str):
     return _run(["bash", str(DEPLOY), rev, "--skip-tests"], env=env), env
 
 
+def _builds(repo: FakeGitRepo) -> list[str]:
+    """Real image builds (the classic-builder capability probe carries no --tag)."""
+    return [c for c in repo.docker.calls("build") if "--tag" in c]
+
+
 def _binding(env: dict, rev: str) -> dict:
     return json.loads((Path(env["ATLAS_RELEASES_DIR"]) / rev / "worker-image.json").read_text())
 
@@ -57,7 +62,7 @@ def test_deploy_builds_revision_image_validates_python_and_binds_identity(tmp_pa
     assert binding["tag"] == f"atlas-runner-worker:{REV_A}" == expected_tag(REV_A)
     assert binding["revision"] == REV_A and binding["python_version"] == "3.12.14"
     assert binding["image_id"].startswith("sha256:") and len(binding["image_id"]) == 71
-    builds = repo.docker.calls("build")
+    builds = _builds(repo)
     assert len(builds) == 1
     assert f"atlas.runner.revision={REV_A}" in builds[0] and "latest" not in builds[0]
     # the Python contract is proven in the exact built image (by ID), isolated
@@ -118,7 +123,7 @@ def test_stale_prior_image_under_the_tag_is_rebuilt_never_trusted(tmp_path):
     repo.docker.seed(REV_A, stale_id, label_revision=REV_B)  # tag exists, wrong revision label
     proc, env = _deploy(repo, tmp_path, REV_A)
     assert proc.returncode == 0, proc.stdout.decode()
-    assert len(repo.docker.calls("build")) == 1
+    assert len(_builds(repo)) == 1
     assert _binding(env, REV_A)["image_id"] != stale_id
 
 
@@ -128,7 +133,7 @@ def test_redeploy_of_same_revision_reuses_the_image_and_is_deterministic(tmp_pat
     first = _binding(env, REV_A)
     proc2, _ = _deploy(repo, tmp_path, REV_A)
     assert proc1.returncode == proc2.returncode == 0
-    assert len(repo.docker.calls("build")) == 1  # no rebuild
+    assert len(_builds(repo)) == 1  # no rebuild
     # Python contract re-proven each deploy (the network preflight only runs when building)
     assert len([c for c in repo.docker.calls("run") if "sys.version_info" in c]) == 2
     assert _binding(env, REV_A) == first
@@ -300,10 +305,11 @@ def test_build_runs_on_the_permitted_worker_network_never_host(tmp_path):
     repo = FakeGitRepo(tmp_path, remote_url=REMOTE)
     proc, _ = _deploy(repo, tmp_path, REV_A)
     assert proc.returncode == 0, proc.stdout.decode()
-    (build,) = repo.docker.calls("build")
+    (build,) = _builds(repo)
     assert "--network atlas-runner-net" in build and "host" not in build
     # classic builder is load-bearing: BuildKit cannot join a custom bridge network
-    assert (repo.docker.state / "build-buildkit.log").read_text().split() == ["0"]
+    # (capability probe + real build both force the classic builder)
+    assert set((repo.docker.state / "build-buildkit.log").read_text().split()) == {"0"}
     (probe,) = [c for c in repo.docker.calls("run") if "create_connection" in c]
     assert "--network atlas-runner-net" in probe and "--cap-drop ALL" in probe
     # the probe uses the Dockerfile's own FROM image
@@ -314,7 +320,7 @@ def test_worker_network_name_is_overridable_for_the_host(tmp_path):
     repo = FakeGitRepo(tmp_path, remote_url=REMOTE)
     proc, _ = _deploy(repo, tmp_path, REV_A, ATLAS_WORKER_NET="custom-net")
     assert proc.returncode == 0
-    (build,) = repo.docker.calls("build")
+    (build,) = _builds(repo)
     assert "--network custom-net" in build
 
 
@@ -325,7 +331,7 @@ def test_unreachable_build_network_fails_fast_before_building_or_activating(tmp_
     proc, _ = _deploy(repo, tmp_path, REV_B, FAKE_DOCKER_NET_FAILS="1")
     assert proc.returncode != 0
     assert b"build preflight failed on network" in proc.stdout
-    assert len(repo.docker.calls("build")) == 1  # only REV_A's build; none for REV_B
+    assert len(_builds(repo)) == 1  # only REV_A's build; none for REV_B
     assert Path(env["ATLAS_CURRENT_LINK"]).resolve() == before
 
 
@@ -340,3 +346,29 @@ def test_preflight_failure_output_is_surfaced_for_diagnosis(tmp_path):
     out = proc.stdout.decode()
     assert proc.returncode != 0 and "preflight output (tail)" in out
     assert "docker network inspect atlas-runner-net" in out
+
+
+def test_missing_classic_builder_fails_fast_with_a_diagnostic_and_no_fallback(tmp_path):
+    repo = FakeGitRepo(tmp_path, remote_url=REMOTE)
+    _, env = _deploy(repo, tmp_path, REV_A)
+    before = Path(env["ATLAS_CURRENT_LINK"]).resolve()
+    proc, _ = _deploy(repo, tmp_path, REV_B, FAKE_DOCKER_CLASSIC_UNSUPPORTED="1")
+    out = proc.stdout.decode()
+    assert proc.returncode != 0
+    assert "does not support the classic (legacy) builder" in out
+    assert "refusing to fall back to BuildKit or host networking" in out
+    assert "ATLAS_BUILDKIT_NETWORK_MODERNIZATION" in out
+    assert "classic builder probe output (tail)" in out
+    # no real build for REV_B, no activation, never a host-network attempt
+    assert [c for c in _builds(repo) if f"atlas-runner-worker:{REV_B}" in c] == []
+    assert Path(env["ATLAS_CURRENT_LINK"]).resolve() == before
+    assert all("host" not in c for c in repo.docker.calls("build") + repo.docker.calls("run"))
+
+
+def test_silent_buildkit_fallback_is_detected_and_refused(tmp_path):
+    repo = FakeGitRepo(tmp_path, remote_url=REMOTE)
+    proc, env = _deploy(repo, tmp_path, REV_A, FAKE_DOCKER_BUILDKIT_FALLBACK="1")
+    assert proc.returncode != 0
+    assert b"used BuildKit despite DOCKER_BUILDKIT=0" in proc.stdout
+    assert not Path(env["ATLAS_CURRENT_LINK"]).exists()
+    assert not (Path(env["ATLAS_RELEASES_DIR"]) / REV_A / "worker-image.json").exists()
