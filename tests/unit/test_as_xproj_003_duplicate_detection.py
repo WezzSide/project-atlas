@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
 from project_atlas.schema import available_schemas, validate_record
+from project_atlas.secrets import scan_text
 from project_atlas.xproj_duplicates import (
     AUTHORITY_LEVEL,
     PACKAGE_ID,
@@ -249,3 +251,23 @@ def test_adv_candidate_shape_no_winner() -> None:
     assert both_projects_remain_ingestable(candidate)
     assert "winning_choice" not in candidate.as_dict()
     validate_record(candidate.as_dict(), "xproj-duplicate-candidate")
+
+
+def test_json_escape_project_id_is_not_persisted(tmp_path: Path) -> None:
+    """AS-SEC-SCAN-XPROJ-DUP-JSON-ESC-001: decoded JSON-\\u project_id must not persist."""
+    token = "AKIAAAAAAAAAAAAAAAAA"
+    raw = (
+        '{"projects":['
+        '{"project_id":"harbor-api","canonical_remote_url":"https://github.com/example/harbor.git"},'
+        '{"project_id":"\\u0041KIAAAAAAAAAAAAAAAAA","canonical_remote_url":"https://github.com/example/harbor.git"}'
+        "]}"
+    )
+    assert scan_text(raw) == []
+    payload = json.loads(raw)
+    result = detect_project_duplicates(payload["projects"])
+    written = write_duplicate_outputs(result, vault=tmp_path)
+    blob = "".join((tmp_path / path).read_text(encoding="utf-8") for path in written)
+    assert token not in blob
+    assert token not in "".join(written)
+    assert scan_text(blob) == []
+    assert any(item.category == "secret-finding" for item in result.rejects)
