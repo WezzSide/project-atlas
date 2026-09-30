@@ -70,6 +70,9 @@ ROLE_FOR_CHANNEL: dict[Channel, Role] = {
 Record = WorkItem | ResultRecord | VerificationRequest | VerdictRecord
 
 
+MAX_REJECTED = 1000
+
+
 class TransportError(ContractError):
     code = "DEV_TRANSPORT_REFUSED"
 
@@ -107,9 +110,8 @@ class InMemoryTransport:
         self._queues: dict[Channel, deque[str]] = defaultdict(deque)
         self._seen: set[tuple[Channel, str]] = set()
         self.claims: list[tuple[Channel, str, str]] = []  # (channel, seal, claimer identity)
-        self.rejected: list[
-            tuple[Channel, str]
-        ] = []  # undecodable/tampered wires, kept as evidence
+        # undecodable/tampered wires, kept as bounded evidence (newest MAX_REJECTED)
+        self.rejected: list[tuple[Channel, str]] = []
 
     def publish(self, record: Record) -> bool:
         channel = CHANNEL_FOR_KIND[record.KIND]
@@ -131,13 +133,14 @@ class InMemoryTransport:
             except ContractError:
                 del q[idx]  # a poisoned wire must not block the channel: reject it exactly once
                 self.rejected.append((channel, wire))
+                del self.rejected[: max(0, len(self.rejected) - MAX_REJECTED)]
                 raise
             if channel is Channel.VERIFICATION:
                 assert isinstance(rec, VerificationRequest)
-                if same_identity(identity, rec.executor_identity):
-                    raise TransportError("executor identity may not claim its own verification")
                 if not same_identity(identity, rec.verifier_identity):
                     continue  # addressed to a different verifier; leave it queued
+                if same_identity(identity, rec.executor_identity):
+                    raise TransportError("executor identity may not claim its own verification")
             del q[idx]
             self.claims.append((channel, rec.seal, identity))
             return rec
