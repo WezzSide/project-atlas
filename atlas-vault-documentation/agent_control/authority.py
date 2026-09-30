@@ -21,6 +21,8 @@ import secrets
 from pathlib import Path
 from typing import Any
 
+from .agent_identity import SAFE
+
 
 PURPOSE_PROMOTE_READINESS = "promote-readiness"
 ISSUER_ENV = "ATLAS_AUTHORITY_ISSUER_KEY"
@@ -87,7 +89,7 @@ def issue_grant(
         "receipt_is_authority": False,
     }
     payload["mac"] = mac_for(payload, key)
-    target = store / "grants" / f"{grant_id}.json"
+    target = _safe_grant_file(store, grant_id, folder="grants")
     target.parent.mkdir(parents=True, exist_ok=True)
     content = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     if target.is_file():
@@ -96,9 +98,21 @@ def issue_grant(
     return payload
 
 
+def _safe_grant_file(store: Path, grant_id: str, *, folder: str) -> Path:
+    """AS-CTRL-GRANT-F1: grant_id is a filename stem, never a relative path."""
+    if not isinstance(grant_id, str) or not SAFE.fullmatch(grant_id):
+        raise ValueError(f"unsafe grant id: {grant_id!r}")
+    root = Path(store)
+    folder_path = (root / folder).resolve()
+    target = (root / folder / f"{grant_id}.json").resolve()
+    if not target.is_relative_to(folder_path):
+        raise ValueError(f"unsafe grant id: {grant_id!r}")
+    return target
+
+
 def revoke_grant(*, store: Path, grant_id: str, issuer_key: str | None = None) -> dict[str, Any]:
     key = resolve_issuer_key(issuer_key)
-    path = store / "grants" / f"{grant_id}.json"
+    path = _safe_grant_file(store, grant_id, folder="grants")
     if not path.is_file():
         raise ValueError(f"authority grant not found: {grant_id}")
     grant = json.loads(path.read_text(encoding="utf-8"))
@@ -108,7 +122,7 @@ def revoke_grant(*, store: Path, grant_id: str, issuer_key: str | None = None) -
     grant["revoked"] = True
     grant["mac"] = mac_for(grant, key)
     path.write_text(json.dumps(grant, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    rev = store / "revocations" / f"{grant_id}.json"
+    rev = _safe_grant_file(store, grant_id, folder="revocations")
     rev.parent.mkdir(parents=True, exist_ok=True)
     rev.write_text(
         json.dumps({"grant_id": grant_id, "revoked": True}, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
