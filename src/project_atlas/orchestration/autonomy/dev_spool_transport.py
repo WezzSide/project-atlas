@@ -27,6 +27,7 @@ import tempfile
 from pathlib import Path
 
 from project_atlas.orchestration.autonomy.dev_contracts import (
+    ContractError,
     Role,
     VerificationRequest,
     same_identity,
@@ -83,7 +84,17 @@ class SpoolTransport:
                 wire = path.read_text(encoding="utf-8")
             except FileNotFoundError:
                 continue  # another claimer consumed it between listing and reading
-            rec = decode(wire)  # tamper => ContractError, record stays unconsumed
+            try:
+                rec = decode(wire)
+            except ContractError:
+                # reject exactly once, keep the bytes as evidence, never wedge the channel
+                rej = d / "rejected"
+                rej.mkdir(exist_ok=True)
+                try:
+                    os.rename(path, rej / path.name)
+                except FileNotFoundError:
+                    continue
+                raise
             if rec.seal != path.stem:
                 raise TransportError("spool file name does not match record seal")
             if channel is Channel.VERIFICATION:

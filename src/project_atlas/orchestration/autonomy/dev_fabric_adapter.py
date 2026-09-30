@@ -111,6 +111,7 @@ DEFAULT_REQUIRED_CHECKS = frozenset(
     }
 )
 CLOCK_SKEW = timedelta(seconds=120)
+DISPATCH_DEADLINE = timedelta(minutes=15)
 _OK = frozenset({"success", "skipped", "neutral"})
 
 
@@ -121,6 +122,13 @@ def _atomic_write(path: Path, text: str) -> None:
         fh.flush()
         os.fsync(fh.fileno())
     os.replace(tmp, path)
+
+
+def _parse(iso: str) -> datetime:
+    try:
+        return datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise AdapterError(f"bad timestamp {iso!r}") from exc
 
 
 def _shift(iso: str, delta: timedelta) -> str:
@@ -218,7 +226,9 @@ class FabricAdapter:
         executor_identity: str = EXECUTOR_IDENTITY,
         verifier_identity: str = VERIFIER_IDENTITY,
         required_checks: frozenset[str] = DEFAULT_REQUIRED_CHECKS,
+        dispatch_deadline: timedelta = DISPATCH_DEADLINE,
     ) -> None:
+        self.dispatch_deadline = dispatch_deadline
         if not required_checks:
             raise AdapterError("a non-empty required check set is mandatory")
         self.required_checks = required_checks
@@ -314,16 +324,13 @@ class FabricAdapter:
             )
             if r.head_branch == DEFAULT_BRANCH
         ]
-        already = {
-            int(h["run_id"])
-            for row in self.works
-            for h in [self.xw.hop(row, "RUN")]
-            if h is not None
-        }
-        runs = [r for r in runs if r.run_id not in already]
+        bound = self.xw.bound_run_ids()  # every run ever bound, from the durable ledger
+        runs = [r for r in runs if r.run_id not in bound]
         if len(runs) > 1:
             raise AmbiguousRun("ambiguous run correlation; refusing to guess")
         if not runs:
+            if _parse(self.clock()) - _parse(str(disp["dispatched_at"])) > self.dispatch_deadline:
+                raise RemoteExecutionFailed("no workflow run appeared within the dispatch deadline")
             return None
         r = runs[0]
         self.xw.bind_run(
@@ -385,11 +392,19 @@ class FabricAdapter:
                 self.xw.bind_result(rec)
             if self.transport.publish(rec):
                 out.append(f"RESULT_REPUBLISHED:{rec.task_id}")
+            f.unlink()  # delivered (published now, or already queued/consumed in the spool)
         for f in sorted(self.pending.glob("verdict-*.json")):
             v = decode(f.read_text(encoding="utf-8"))
             assert isinstance(v, VerdictRecord)
+            row = self.xw.resolve("execution_id", v.execution_id)
+            hop = self.xw.hop(str(row["work_seal"]), "VERDICT")
+            if hop is None or hop["verdict_seal"] != v.seal:
+                f.unlink()  # never validated against the ledger: must not be published
+                out.append(f"VERDICT_DISCARDED:{v.task_id}")
+                continue
             if self.transport.publish(v):
                 out.append(f"VERDICT_REPUBLISHED:{v.task_id}")
+            f.unlink()
         return out
 
     # -- verifier side ------------------------------------------------------------------------
@@ -434,7 +449,8 @@ class FabricAdapter:
         ):
             raise AdapterError("verification request does not match the crosswalked result")
         if self.xw.hop(work.seal, "VERDICT") is not None:
-            return True  # already decided (recover() republishes if needed)
+            self._verify_file(req).unlink(missing_ok=True)
+            return False  # already decided; nothing more to do for this request
         source_run = int(run_hop["run_id"])
         head = self.port.branch_head(str(run_hop["branch"]))
         if head != req.result_revision:
@@ -541,6 +557,11 @@ class FabricAdapter:
             events.append("VERIFICATION_ACCEPTED")
         for req in self.pending_verifications():
             work = next((x for x in self.works.values() if x.task_id == req.task_id), None)
-            if work is not None and self.collect_verdict(work, req):
-                events.append(f"VERDICT:{req.task_id}")
+            if work is None:
+                continue
+            try:
+                if self.collect_verdict(work, req):
+                    events.append(f"VERDICT:{req.task_id}")
+            except (AdapterError, CrosswalkError) as exc:  # integrity problem: report, keep going
+                events.append(f"VERDICT_ERROR:{req.task_id}:{exc}")
         return events

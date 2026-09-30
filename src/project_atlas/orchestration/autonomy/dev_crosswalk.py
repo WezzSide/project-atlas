@@ -97,6 +97,10 @@ class Crosswalk:
         if cur is None:
             raise CrosswalkError(f"{kind} for an unbound work seal")
         hop = {k: v for k, v in ev.items() if k not in ("work_seal",)}
+        if kind == "RUN":  # one workflow run belongs to exactly one work item
+            owner = self._index.get(("run_id", str(ev["run_id"])))
+            if owner is not None and owner != ws:
+                raise CrosswalkError(f"run {ev['run_id']} is already bound to another work item")
         same = [h for h in cur["hops"] if h["event"] == kind]
         if kind in ("RESULT", "VERIFICATION", "DISPATCH", "RUN"):
             if same:
@@ -117,6 +121,8 @@ class Crosswalk:
         else:
             raise CrosswalkError(f"unknown event {kind}")
         cur["hops"].append(hop)
+        if kind == "RUN":
+            self._index[("run_id", str(ev["run_id"]))] = ws
 
     # -- binding --------------------------------------------------------------------------
     def bind_work(self, work: WorkItem) -> tuple[str, str]:
@@ -199,6 +205,9 @@ class Crosswalk:
                 "branch": branch,
             }
         )
+
+    def bound_run_ids(self) -> frozenset[int]:
+        return frozenset(int(k[1]) for k in self._index if k[0] == "run_id")
 
     def hop(self, work_seal: str, kind: str) -> dict[str, Any] | None:
         row = self._rows.get(work_seal)

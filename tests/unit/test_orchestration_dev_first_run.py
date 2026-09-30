@@ -45,7 +45,7 @@ def test_package_carries_required_fields_and_no_secret_values():
         assert k in pkg
     assert pkg["workflow"] == "atlas-agent-execute.yml" and pkg["workflow_ref"] == "main"
     assert pkg["workflow_inputs"]["base_branch"] == "main"
-    assert pkg["secrets"]["ANTHROPIC_API_KEY"].startswith("UNKNOWN")
+    assert pkg["secrets"]["ANTHROPIC_API_KEY"].startswith("CONFIRMED_PRESENT")
     text = render_package(pkg)
     assert "sk-ant" not in text and "ghp_" not in text
     cmds = " ".join(pkg["acceptance"]["commands"])

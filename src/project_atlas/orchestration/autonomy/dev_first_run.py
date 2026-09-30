@@ -1,8 +1,8 @@
 """First-run package for ATLAS-DEVQ-0001 (AS-DEVLOOP-001).
 
 Everything needed for ONE bounded workflow dispatch, generated deterministically from the sealed
-WorkItem. No secret values. ``ANTHROPIC_API_KEY`` presence is recorded as UNKNOWN until the owner
-confirms it; the package never inspects secrets.
+WorkItem. No secret values. ``ANTHROPIC_API_KEY`` presence is recorded as CONFIRMED_PRESENT on the
+owner's statement; the package never inspects secrets.
 """
 
 from __future__ import annotations
@@ -143,7 +143,9 @@ def build_package(work: WorkItem | None = None) -> dict[str, Any]:
         ],
         "rollback": "delete the atlas/agent-* branch and close the draft evidence PR; nothing is "
         "merged and nothing touches main",
-        "secrets": {"ANTHROPIC_API_KEY": "UNKNOWN (owner confirmation pending; never inspected)"},
+        "secrets": {
+            "ANTHROPIC_API_KEY": "CONFIRMED_PRESENT (owner statement 2026-09-30; value never seen)"
+        },
         "grant_required": "ONE_WORKFLOW_DISPATCH_GRANT",
     }
 

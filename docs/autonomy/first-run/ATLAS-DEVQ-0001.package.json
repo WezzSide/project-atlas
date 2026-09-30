@@ -50,7 +50,7 @@
   },
   "rollback": "delete the atlas/agent-* branch and close the draft evidence PR; nothing is merged and nothing touches main",
   "secrets": {
-    "ANTHROPIC_API_KEY": "UNKNOWN (owner confirmation pending; never inspected)"
+    "ANTHROPIC_API_KEY": "CONFIRMED_PRESENT (owner statement 2026-09-30; value never seen)"
   },
   "task_id": "ATLAS-DEVQ-0001",
   "verification_profile": {

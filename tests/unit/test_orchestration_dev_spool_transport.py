@@ -77,7 +77,8 @@ def test_tampered_file_is_refused_and_not_consumed(tmp_path):
     f.write_text(f.read_text().replace("AUTH-1", "AUTH-9"))
     with pytest.raises(ContractError):
         t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity=IMPL)
-    assert f.exists()  # left in place as evidence, never handed out
+    assert not f.exists() and (tmp_path / "WORK" / "rejected" / f.name).exists()
+    assert t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity=IMPL) is None  # not wedged
 
 
 def test_renamed_file_is_refused(tmp_path):

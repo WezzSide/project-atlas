@@ -93,7 +93,7 @@ class GitHubRestPort:
 
     def list_runs(self, workflow: str, *, event: str, created_after: str) -> list[RunInfo]:
         q = urllib.parse.urlencode(
-            {"event": event, "created": f">={created_after}", "per_page": 30}
+            {"event": event, "created": f">={created_after}", "per_page": 100}
         )
         _, d = self._request("GET", f"/actions/workflows/{workflow}/runs?{q}")
         return [_run(r) for r in (d or {}).get("workflow_runs", [])]
@@ -139,9 +139,11 @@ class GitHubRestPort:
 
     def _artifact(self, run_id: int, name: str) -> dict[str, Any]:
         _, d = self._request("GET", f"/actions/runs/{run_id}/artifacts")
-        for a in (d or {}).get("artifacts", []):
-            if a["name"] == name and not a.get("expired"):
-                return dict(a)
+        live = [
+            a for a in (d or {}).get("artifacts", []) if a["name"] == name and not a.get("expired")
+        ]
+        if live:
+            return dict(max(live, key=lambda a: int(a["id"])))  # latest upload wins
         raise AdapterError(f"artifact {name} not found for run {run_id}")
 
     def artifact_digests(self, run_id: int, name: str) -> tuple[str, ...]:

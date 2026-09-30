@@ -230,7 +230,7 @@ def test_dispatch_is_at_most_once_even_across_adapter_restart(tmp_path):
         spool,
         Crosswalk(tmp_path / "xw.jsonl"),
         pending_dir=tmp_path / "pending",
-        clock=lambda: "x",
+        clock=lambda: "2026-09-30T15:59:00Z",
         task_statement=statement,
         required_checks=frozenset({"quality"}),
     )
@@ -313,8 +313,7 @@ def test_rejected_verifier_evidence_fails_even_with_green_ci_and_moved_branch_is
     ad.tick()
     gh.checks[R1] = {"quality": ("completed", "success")}
     gh.branches[f"atlas/agent-{rid}-1"] = R2  # artifact identity changed after ingestion
-    with pytest.raises(AdapterError, match="moved"):
-        ad.tick()
+    assert any("VERDICT_ERROR:DEVQ-1" in e and "moved" in e for e in ad.tick())
     gh.branches[f"atlas/agent-{rid}-1"] = R1
     gh.verifier_runs(rid, "REJECTED")
     assert "VERDICT:DEVQ-1" in ad.tick()
@@ -446,3 +445,59 @@ def test_string_source_run_id_matches_and_conflicting_reports_are_refused(tmp_pa
     gh.verify_reports[rid + 1000]["source_run_id"] = str(rid)
     gh.checks[R1] = {"quality": ("completed", "success")}
     assert "VERDICT:DEVQ-1" in ad.tick()
+
+
+def test_run_already_bound_to_a_failed_lineage_is_never_adopted_by_the_next_dispatch(tmp_path):
+    gh = FakeGitHub()
+    _spool, xw, ad, pl = build(tmp_path, gh)
+    pl.dispatch(QueueItem(task_id="DEVQ-2", title="t", category=Category.RELIABILITY), **FIELDS)
+    ad.tick()  # dispatches exactly one work item (serialised)
+    first = next(iter(ad.works))
+    gh.executor_finishes(None, "", conclusion="failure")  # its run fails fast
+    ev = ad.tick()  # first lineage fails; the other dispatches in the same tick
+    assert any(e.startswith("EXECUTION_FAILED") for e in ev)
+    ad.tick()
+    bound = [xw.hop(w.seal, "RUN") for w in ad.works.values() if xw.hop(w.seal, "RUN") is not None]
+    assert first not in ad.works and bound == []  # the survivor did NOT adopt the failed run
+    ids = [h["run_id"] for h in map(lambda r: r, [xw.hop(first, "RUN")]) if h]
+    assert len(ids) == 1
+    with pytest.raises(Exception, match="already bound"):
+        xw.bind_run(next(iter(ad.works)), run_id=ids[0], run_attempt=1, branch="atlas/agent-1-1")
+
+
+def test_lost_dispatch_times_out_instead_of_blocking_the_fabric_forever(tmp_path):
+    gh = FakeGitHub()
+    now = {"t": "2026-09-30T15:59:00Z"}
+    spool = SpoolTransport(tmp_path / "spool")
+    xw = Crosswalk(tmp_path / "xw.jsonl")
+    ad = FabricAdapter(
+        gh,
+        spool,
+        xw,
+        pending_dir=tmp_path / "pending",
+        clock=lambda: now["t"],
+        task_statement=statement,
+        required_checks=frozenset({"quality"}),
+    )
+    pl = Planner(spool, identity="planner", verifier_identities=(ad.verifier_identity,))
+    pl.dispatch(QueueItem(task_id="DEVQ-1", title="t", category=Category.RELIABILITY), **FIELDS)
+    ad.tick()
+    assert ad.tick() == []  # still within the deadline
+    now["t"] = "2026-09-30T16:30:00Z"  # 31 minutes later, no run ever appeared
+    assert any("no workflow run appeared" in e for e in ad.tick())
+    assert ad.works == {}
+
+
+def test_stale_or_unvalidated_verdict_file_is_never_republished(tmp_path):
+    gh = FakeGitHub()
+    _spool, _xw, ad, pl, _rid = _to_verifying(tmp_path, gh)
+    req = ad.pending_verifications()[0]
+    from project_atlas.orchestration.autonomy.dev_contracts import Verdict, make_verdict
+    from project_atlas.orchestration.autonomy.dev_transport import encode
+
+    v = make_verdict(req, verdict=Verdict.PASS)
+    (tmp_path / "pending" / f"verdict-{v.seal}.json").write_text(encode(v))
+    assert any(e.startswith("VERDICT_DISCARDED") for e in ad.tick())
+    assert pl.lineages["DEVQ-1"].phase is Phase.VERIFYING
+    pl.pump()
+    assert pl.lineages["DEVQ-1"].phase is Phase.VERIFYING
