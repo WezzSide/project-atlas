@@ -709,3 +709,19 @@ def test_planner_copies_verifiers_and_rejects_non_string_identities():
     for bad in ([1], ("v1", 1)):
         with pytest.raises(PlannerError):
             Planner(t, identity="plan", verifier_identities=bad)
+
+
+def test_planner_pump_survives_an_oserror_from_the_transport_without_spinning():
+    class Broken:
+        calls = 0
+
+        def publish(self, record):
+            return True
+
+        def claim(self, channel, *, role, identity):
+            Broken.calls += 1
+            raise IsADirectoryError("claimed slot blocked")
+
+    p = Planner(Broken(), identity="vps3-plan", verifier_identities=(VER,))
+    p.pump()
+    assert Broken.calls <= 2 * 64 and p.quarantined

@@ -136,7 +136,8 @@ class InMemoryTransport:
                 del self.rejected[: max(0, len(self.rejected) - MAX_REJECTED)]
                 raise
             if channel is Channel.VERIFICATION:
-                assert isinstance(rec, VerificationRequest)
+                if not isinstance(rec, VerificationRequest):
+                    raise TransportError("record kind does not belong to this channel")
                 if not same_identity(identity, rec.verifier_identity):
                     continue  # addressed to a different verifier; leave it queued
                 if same_identity(identity, rec.executor_identity):
