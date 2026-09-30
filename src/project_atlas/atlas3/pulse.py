@@ -88,10 +88,17 @@ def compile_pulse(vault: Any, project_id: str) -> dict[str, Any]:
         if failures
         else _unknown("no failure events in atlas3 ledger")
     )
+    def _known_attention(answer: dict[str, Any] | None) -> bool:
+        if answer is None:
+            return False
+        status = str(answer.get("status") or "").upper()
+        items = answer.get("items") or []
+        return status != "UNKNOWN" or bool(items)
+
     attention_items: list[Any] = []
-    if attention is not None:
+    if _known_attention(attention):
         attention_items.append(attention)
-    if unknown is not None:
+    if _known_attention(unknown):
         attention_items.append(unknown)
     attention_items.extend(failures)
     attention_block = (
