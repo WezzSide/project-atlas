@@ -23,12 +23,28 @@ from project_atlas.orchestration.sdk.host import (
     write_host_identity,
 )
 from project_atlas.orchestration.sdk.models import STATE_DIR_RELATIVE
+from project_atlas.orchestration.sdk.resident_driver import read_primary_lock_pid
 from project_atlas.orchestration.sdk.resident_status import load_status, status_claims_live
 
 TASK_NAME: Final[str] = "AtlasGovernorResident"
 WRAPPER_NAME: Final[str] = "atlas-resident-driver.cmd"
 WATCHDOG_PID_NAME: Final[str] = "resident-watchdog.pid"
 WATCHDOG_INTERVAL_SEC: Final[float] = 20.0
+
+#: D146 (native-Windows evidence): a venv's ``Scripts\python.exe`` on Windows
+#: can be CPython's "venv launcher" stub rather than a copy of the real
+#: interpreter -- confirmed by binary size/checksum against the base install
+#: this venv's ``pyvenv.cfg`` names, and by ``Win32_Process`` ancestry showing
+#: the launcher re-exec the real interpreter as its *child*. ``Popen.pid`` is
+#: then the launcher's PID, not the PID that actually runs the resident loop
+#: and calls ``acquire_primary_lock`` -- exactly the "real PID" this module's
+#: own tests and callers (``ensure_resident_alive``'s noop branches; the
+#: watchdog cleanup path) assume they got back. Bounded poll for the
+#: authoritative lock-holder PID, budget matched to the existing
+#: 80 * 0.25s = 20s startup-cost headroom this file's own callers already
+#: use elsewhere (slow subprocess spawn + full package import on slow I/O).
+_RESIDENT_STARTUP_POLL_ATTEMPTS: Final[int] = 80
+_RESIDENT_STARTUP_POLL_INTERVAL_SEC: Final[float] = 0.25
 
 
 def _creationflags() -> int:
@@ -68,7 +84,21 @@ def detach_resident_driver(
     package_src: Path,
     python: str | None = None,
 ) -> int:
-    """Start resident loop in a new Windows process group. Returns PID."""
+    """Start resident loop in a new Windows process group.
+
+    Returns the PID that actually holds the primary lock -- the resident
+    loop's own ``os.getpid()``, confirmed via ``read_primary_lock_pid`` --
+    not merely ``Popen.pid`` (D146: on a Windows venv whose interpreter is
+    CPython's launcher stub, ``Popen.pid`` names the launcher, a *parent* of
+    the process that actually runs the loop and acquires the lock; the two
+    are not interchangeable). Bounded, best-effort: if the resident has not
+    acquired the lock within the poll budget (slow host, or a genuine
+    startup failure), falls back to the spawned PID exactly as before --
+    callers already tolerate that PID being stale/unconfirmed today, so this
+    is strictly no worse than the pre-fix behavior on that path, and a
+    caller with its own poll loop (as this module's ``ensure_resident_alive``
+    and the D146 regression test both do) still converges independently.
+    """
     interpreter = python or sys.executable
     args = [
         interpreter,
@@ -98,16 +128,23 @@ def detach_resident_driver(
         env=env,
         close_fds=True,
     )
+    resolved_pid = int(proc.pid)
+    for _ in range(_RESIDENT_STARTUP_POLL_ATTEMPTS):
+        holder = read_primary_lock_pid(root)
+        if holder > 0:
+            resolved_pid = holder
+            break
+        time.sleep(_RESIDENT_STARTUP_POLL_INTERVAL_SEC)
     write_host_identity(
         root,
-        pid=int(proc.pid),
+        pid=resolved_pid,
         backend="RESIDENT_SELF_WAKE",
         package_head="AS-ORCH-SELF-WAKE-RESIDENT-DRIVER-001",
         worktree=str(
             package_src.parent.parent if package_src.name == "src" else package_src
         ),
     )
-    return int(proc.pid)
+    return resolved_pid
 
 
 def run_watchdog_loop(
