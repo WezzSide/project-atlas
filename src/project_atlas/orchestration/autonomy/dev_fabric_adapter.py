@@ -652,7 +652,7 @@ class FabricAdapter:
                 rep = self.port.read_json_artifact(
                     c.run_id, REPORT_ARTIFACT, "verification-report.json"
                 )
-            except (AdapterError, KeyError, ValueError, TypeError, OSError, RecursionError):
+            except Exception:
                 continue  # that run has no (usable) report; it may belong to another lineage
             try:
                 same = int(str(rep.get("source_run_id"))) == source_run

@@ -219,3 +219,17 @@ def test_hostile_nested_json_is_an_adapter_error_not_a_recursion_crash():
 
     with pytest.raises(AdapterError):
         Nested({}).get_run(1)
+
+
+def test_corrupt_zip_and_truncated_download_errors_are_adapter_errors():
+    import http.client
+    import zlib
+
+    for exc in (zlib.error("bad deflate"), http.client.IncompleteRead(b"x"), NotImplementedError()):
+
+        class Bad(Stub):
+            def _request(self, method, path, body=None, _exc=exc):
+                raise _exc
+
+        with pytest.raises(AdapterError):
+            Bad({}).get_run(1)

@@ -9,6 +9,7 @@ of one workflow, and opening a draft evidence PR.
 from __future__ import annotations
 
 import functools
+import http.client
 import io
 import json
 import re
@@ -16,6 +17,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
+import zlib
 from collections.abc import Callable
 from typing import Any
 
@@ -233,6 +235,10 @@ def _guarded(fn: Callable[..., Any]) -> Callable[..., Any]:
             AttributeError,
             OSError,  # includes URLError/HTTPError/TimeoutError
             zipfile.BadZipFile,
+            zipfile.LargeZipFile,
+            zlib.error,
+            NotImplementedError,  # unsupported zip compression
+            http.client.HTTPException,  # IncompleteRead & co
             RecursionError,  # hostile deeply-nested JSON in an artifact
         ) as exc:
             raise AdapterError(f"github port {fn.__name__} failed: {type(exc).__name__}") from exc
