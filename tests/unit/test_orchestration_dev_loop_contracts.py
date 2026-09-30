@@ -209,8 +209,8 @@ def test_executor_cannot_claim_its_own_verification():
     r = result(w)
     t.publish(make_verification_request(w, r, verifier_identity=VER))
     assert t.claim(Channel.VERIFICATION, role=Role.VERIFIER, identity="someone-else") is None
-    with pytest.raises(TransportError, match="own verification"):
-        t.claim(Channel.VERIFICATION, role=Role.VERIFIER, identity=IMPL)
+    # the executor is never handed its own verification (and is not wedged either)
+    assert t.claim(Channel.VERIFICATION, role=Role.VERIFIER, identity=IMPL) is None
     assert t.claim(Channel.VERIFICATION, role=Role.VERIFIER, identity=VER) is not None
 
 
@@ -413,8 +413,8 @@ def test_transport_treats_identity_variants_as_the_same_identity():
     w = work()
     r = result(w, who="vps1-impl")
     t.publish(make_verification_request(w, r, verifier_identity="vps2-ver"))
-    with pytest.raises(TransportError, match="own verification"):
-        t.claim(Channel.VERIFICATION, role=Role.VERIFIER, identity="VPS1-IMPL ")
+    assert t.claim(Channel.VERIFICATION, role=Role.VERIFIER, identity="VPS1-IMPL ") is None
+    assert t.claim(Channel.VERIFICATION, role=Role.VERIFIER, identity=" VPS2-VER") is not None
 
 
 @pytest.mark.parametrize(
@@ -511,7 +511,7 @@ def test_repair_task_id_collision_blocks_the_lineage_instead_of_corrupting_state
     t = InMemoryTransport()
     p = planner(t)
     p.dispatch(qi("A"), **FIELDS)
-    p.dispatch(qi("A-R1"), **FIELDS)  # squats on the id the repair of A will need
+    p._by_task["A-R1"] = "A-R1"  # defence in depth: dispatch refuses -R<n>, state may still clash
     run_role_implementer(t, [(REV1, TREE1)])
     p.pump()
     req = t.claim(Channel.VERIFICATION, role=Role.VERIFIER, identity=VER)
@@ -521,7 +521,6 @@ def test_repair_task_id_collision_blocks_the_lineage_instead_of_corrupting_state
     p.pump()
     assert p.lineages["A"].phase is Phase.BLOCKED
     assert "COLLISION" in p.lineages["A"].reason
-    assert p.lineages["A-R1"].work.task_id == "A-R1"
     with pytest.raises(PlannerError):
         p.dispatch(qi("A"), **FIELDS)
 
@@ -564,3 +563,61 @@ def test_planner_rejects_non_canonical_identities_up_front():
         Planner(t, identity="planner", verifier_identities=("ver a",))
     with pytest.raises(PlannerError):
         Planner(t, identity=" planner", verifier_identities=("ver-a",))
+
+
+# ---- round-3 IV regressions ---------------------------------------------------------------
+
+
+def test_dual_role_identity_is_not_wedged_by_a_request_addressed_to_someone_else():
+    t = InMemoryTransport()
+    wa = work(task_id="A", execution_id="A-E1", lineage_root="A")
+    wb = work(task_id="B", execution_id="B-E1", lineage_root="B")
+    t.publish(make_verification_request(wa, result(wa, who="V"), verifier_identity="W"))
+    t.publish(make_verification_request(wb, result(wb, who=IMPL), verifier_identity="V"))
+    got = t.claim(Channel.VERIFICATION, role=Role.VERIFIER, identity="V")
+    assert got is not None and got.task_id == "B"
+
+
+def test_sharp_s_is_not_ss_in_scope_matching():
+    w = work(allowed_paths=("strasse",))
+    f = Finding(finding_id="F", category=FindingCategory.DEFECT, paths=("straße/x",))
+    assert classify_finding(f, w) is FindingClass.OWNER_AUTHORITY_REQUIRED
+
+
+def test_quarantine_and_rejected_are_bounded_and_pump_does_not_spin():
+    from project_atlas.orchestration.autonomy import dev_planner, dev_transport
+
+    class Stuck:
+        calls = 0
+
+        def publish(self, record):
+            return True
+
+        def claim(self, channel, *, role, identity):
+            Stuck.calls += 1
+            raise TransportError("never consumes")
+
+    p = Planner(Stuck(), identity="vps3-plan", verifier_identities=(VER,))
+    p.pump()
+    assert Stuck.calls <= 2 * dev_planner.MAX_RAISES_PER_PASS
+    for i in range(dev_planner.MAX_QUARANTINE + 5):
+        p._quarantine("RESULT", f"s{i}", "x")
+    assert len(p.quarantined) == dev_planner.MAX_QUARANTINE
+    assert p.quarantined[-1][1] == f"s{dev_planner.MAX_QUARANTINE + 4}"
+    assert dev_transport.MAX_REJECTED > 0
+
+
+def test_repair_suffix_and_reserved_fields_are_refused_at_dispatch():
+    p = planner(InMemoryTransport())
+    with pytest.raises(PlannerError, match="reserved"):
+        p.dispatch(qi("X-R1"), **FIELDS)
+    with pytest.raises(PlannerError, match="reserved"):
+        p.dispatch(qi("Y"), task_id="other", **FIELDS)
+
+
+def test_planner_verifier_list_rejects_duplicates_and_self():
+    t = InMemoryTransport()
+    with pytest.raises(PlannerError, match="duplicate"):
+        Planner(t, identity="vps3-plan", verifier_identities=("v1", "V1"))
+    with pytest.raises(PlannerError, match="own verifiers"):
+        Planner(t, identity="vps3-plan", verifier_identities=("VPS3-plan",))

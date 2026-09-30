@@ -12,6 +12,7 @@ Not a merge actor: INTEGRATION_READY means "verified candidate exists"; governan
 from __future__ import annotations
 
 import hashlib
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -61,6 +62,11 @@ class PlannerError(ContractError):
     code = "DEV_PLANNER_REFUSED"
 
 
+MAX_QUARANTINE = 1000  # bounded evidence: a flooding publisher cannot grow memory without limit
+MAX_RAISES_PER_PASS = 64  # a transport that keeps raising without consuming must not loop forever
+_REPAIR_SUFFIX = re.compile(r"-R[0-9]+$")  # reserved for planner-materialised repair tasks
+
+
 class Planner:
     def __init__(
         self,
@@ -77,6 +83,11 @@ class Planner:
                 validate_identity(v)
         except ValueError as exc:
             raise PlannerError(f"non-canonical identity: {exc}") from exc
+        canon = [v.strip().casefold() for v in verifier_identities]
+        if len(set(canon)) != len(canon):
+            raise PlannerError("duplicate (or case-variant) verifier identities")
+        if any(same_identity(identity, v) for v in verifier_identities):
+            raise PlannerError("the planner may not be one of its own verifiers")
         self.transport = transport
         self.identity = identity
         self.verifiers = verifier_identities
@@ -99,6 +110,17 @@ class Planner:
             raise PlannerError(f"task not admissible: {sel.skipped}")
         if item.task_id in self.lineages or item.task_id in self._by_task:
             raise PlannerError("lineage/task id already in use")
+        if _REPAIR_SUFFIX.search(item.task_id):
+            raise PlannerError("task id suffix -R<n> is reserved for repair tasks")
+        reserved = {
+            "task_id",
+            "execution_id",
+            "lineage_root",
+            "required_role",
+            "max_attempts",
+        } & set(work_fields)
+        if reserved:
+            raise PlannerError(f"work_fields may not override reserved keys: {sorted(reserved)}")
         work = make_work(
             task_id=item.task_id,
             execution_id=f"{item.task_id}-E1",
@@ -119,6 +141,7 @@ class Planner:
     def pump(self) -> int:
         """Consume every available result and verdict once; returns records processed."""
         n = 0
+        raises = 0
         for channel, handler in (
             (Channel.RESULT, self._on_result),
             (Channel.VERDICT, self._on_verdict),
@@ -127,8 +150,11 @@ class Planner:
                 try:
                     rec = self.transport.claim(channel, role=Role.PLANNER, identity=self.identity)
                 except ContractError as exc:  # poisoned wire: rejected by the transport, once
-                    self.quarantined.append((channel.value, "UNDECODABLE", str(exc)))
+                    self._quarantine(channel.value, "UNDECODABLE", str(exc))
                     n += 1
+                    raises += 1
+                    if raises >= MAX_RAISES_PER_PASS:
+                        break  # resume on the next pump; never spin on a non-consuming transport
                     continue
                 if rec is None:
                     break
@@ -141,7 +167,12 @@ class Planner:
         try:
             fn(rec)
         except ContractError as exc:
-            self.quarantined.append((channel, seal, str(exc)))
+            self._quarantine(channel, seal, str(exc))
+
+    def _quarantine(self, channel: str, seal: str, reason: str) -> None:
+        self.quarantined.append((channel, seal, reason))
+        if len(self.quarantined) > MAX_QUARANTINE:
+            del self.quarantined[: len(self.quarantined) - MAX_QUARANTINE]
 
     def _lineage_for(self, task_id: str) -> LineageState:
         root = self._by_task.get(task_id)

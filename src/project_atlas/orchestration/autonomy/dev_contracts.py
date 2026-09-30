@@ -388,11 +388,11 @@ def _matches(path: str, prefixes: tuple[str, ...]) -> bool:
     n = norm_path(path)
     if n is None:
         return False
-    n = n.casefold()  # the repo is developed on case-insensitive filesystems too
+    n = n.lower()  # case-insensitive filesystems; lower() (not casefold) keeps ß != ss
     for p in prefixes:
         q = norm_path(p.rstrip("/"))
         if q is not None:
-            q = q.casefold()
+            q = q.lower()
             if n == q or n.startswith(q + "/"):
                 return True
     return False
