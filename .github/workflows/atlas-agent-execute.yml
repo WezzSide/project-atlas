@@ -135,22 +135,29 @@ jobs:
       # sequence to $RUNNER_TEMP/claude-execution-output.json, which runner cleanup
       # deletes, while its public log deliberately hides message details
       # (show_full_output stays off). On agent-step FAILURE ONLY, reduce that file
-      # to a whitelisted, redacted, size-bounded summary (result/usage metadata,
-      # SDK error enums, api_retry counters, an unauthenticated reachability probe
-      # of api.anthropic.com) and keep just that summary. Raw assistant/tool
-      # transcripts, prompts and credentials are never copied or emitted. The step
-      # runs inline (not from the agent-writable checkout), receives no secrets, and
-      # cannot turn the failed agent step into a success.
+      # to a content-minimizing summary: numbers, booleans, fixed allow-list members
+      # and fixed-pattern identifiers only (SDK error enums, usage counters, api_retry
+      # counters, an unauthenticated reachability probe of api.anthropic.com).
+      # Free-form text (results, errors, assistant/tool content, prompts) is excluded
+      # structurally, never merely redacted; unknown values become "other". The output
+      # is always valid JSON (bounded before serialization, minimal fail-safe object on
+      # overflow). The step runs inline (not from the agent-writable checkout), reads
+      # its temp dir from step-level env (not GITHUB_ENV-overridable), has no
+      # production bypass hook, receives no secrets, and cannot turn the failed agent
+      # step into a success.
       - name: Claude SDK failure diagnostics (sanitized, failure-only)
         id: sdk_diag
         if: ${{ failure() && steps.agent.outcome == 'failure' }}
         continue-on-error: true
         env:
           AGENT_OUTCOME: ${{ steps.agent.outcome }}
+          # Step-level env wins over anything an earlier step wrote to GITHUB_ENV.
+          DIAG_TEMP: ${{ runner.temp }}
         run: |
           set -uo pipefail
           python3 -I - <<'ATLAS_SDK_DIAG'
           import json
+          import math
           import os
           import re
           import socket
@@ -158,133 +165,190 @@ jobs:
           import urllib.error
           import urllib.request
 
-          TMP = os.environ.get("RUNNER_TEMP") or "/tmp"
+          # Content-minimizing by construction: every persisted value is a number, a boolean, a
+          # member of a fixed allow-list, or a string matching a fixed narrow pattern. Anything
+          # else becomes "other" (or null). No source text is ever copied, repr()'d or sliced.
+          TMP = os.environ.get("DIAG_TEMP") or "/tmp"
           SRC = os.path.join(TMP, "claude-execution-output.json")
           OUT = os.path.join(TMP, "claude-sdk-diagnostic.json")
-          MAX_IN, MAX_OUT, MAX_STR, MAX_RETRY = 64 * 1024 * 1024, 16 * 1024, 400, 25
-          SECRETISH = [re.compile(p) for p in (
-              r"sk-ant-[A-Za-z0-9_\-]{8,}",
-              r"gh[pousr]_[A-Za-z0-9]{16,}",
-              r"github_pat_[A-Za-z0-9_]{16,}",
-              r"(?i)bearer\s+[A-Za-z0-9._~+/=\-]{8,}",
-              r"x-access-token:[^@\s]+@",
-              r"eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]*",
-              r"[A-Za-z0-9+/=_\-]{32,}",
-          )]
+          PROBE_URL = "https://api.anthropic.com/"
+          MAX_IN, MAX_OUT, MAX_RETRY, MAX_KEYS = 64 * 1024 * 1024, 16 * 1024, 25, 20
           ERRORS = {
               "authentication_failed", "oauth_org_not_allowed", "account_on_hold", "verification_required",
               "billing_error", "rate_limit", "overloaded", "invalid_request", "model_not_found",
               "server_error", "unknown", "max_output_tokens", "cloud_credential_error",
           }
-          USAGE_KEYS = ("inputTokens", "outputTokens", "cacheReadInputTokens", "cacheCreationInputTokens",
-                        "costUSD", "contextWindow", "maxOutputTokens")
+          MSG_TYPES = {
+              "system", "assistant", "user", "result", "stream_event", "tool_progress", "auth_status",
+              "tool_use_summary", "rate_limit_event", "prompt_suggestion",
+          }
+          SUBTYPES = {
+              "init", "api_retry", "status", "compact_boundary", "hook_started", "hook_progress",
+              "hook_response", "task_notification", "files_persisted", "success", "error_max_turns",
+              "error_during_execution", "error_max_budget_usd", "error_max_structured_output_retries",
+          }
+          KEY_SOURCES = {"user", "project", "org", "temporary", "oauth", "none", "ANTHROPIC_API_KEY"}
+          PERM_MODES = {"default", "acceptEdits", "bypassPermissions", "plan", "dontAsk", "auto"}
+          MCP_STATUS = {"connected", "failed", "needs-auth", "pending", "disabled"}
+          STOP_REASONS = {
+              "end_turn", "max_tokens", "stop_sequence", "tool_use", "pause_turn", "refusal",
+          }
+          TERMINAL = {
+              "completed", "max_turns", "aborted_streaming", "aborted_tools", "prompt_too_long",
+              "blocking_limit", "model_error", "image_error", "stop_hook_prevented", "hook_stopped",
+          }
+          OUTCOMES = {"failure", "success", "skipped", "cancelled"}
+          PARSE_ERRORS = {
+              "JSONDecodeError", "UnicodeDecodeError", "OSError", "MemoryError", "RecursionError",
+              "ValueError", "TypeError", "KeyError",
+          }
+          PROBE_ERRORS = {
+              "TimeoutError", "timeout", "gaierror", "ConnectionRefusedError", "ConnectionResetError",
+              "ConnectionAbortedError", "SSLError", "SSLCertVerificationError", "SSLEOFError",
+              "OSError", "herror",
+          }
+          MODEL_RX = re.compile(r"claude-[a-z0-9][a-z0-9.\-]{0,60}")
+          VERSION_RX = re.compile(r"[0-9]{1,3}(\.[0-9]{1,4}){1,3}")
+          USAGE_KEYS = (
+              "inputTokens", "outputTokens", "cacheReadInputTokens", "cacheCreationInputTokens",
+              "costUSD", "contextWindow", "maxOutputTokens",
+          )
 
 
-          def clean(v, n=MAX_STR):
-              s = v if isinstance(v, str) else repr(v)
-              for rx in SECRETISH:
-                  s = rx.sub("[REDACTED]", s)
-              return s[:n]
+          def pick(v, allowed):
+              """Member of a fixed allow-list, else "other"; None stays None."""
+              if v is None:
+                  return None
+              return v if isinstance(v, str) and v in allowed else "other"
+
+
+          def match(v, rx):
+              """String that fully matches a fixed narrow pattern, else "other"; None stays None."""
+              if v is None:
+                  return None
+              return v if isinstance(v, str) and rx.fullmatch(v) else "other"
 
 
           def num(v):
-              return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+              if isinstance(v, bool):
+                  return None
+              if isinstance(v, int):
+                  return v if abs(v) <= 10**15 else None
+              if isinstance(v, float):
+                  return v if math.isfinite(v) and abs(v) <= 1e15 else None
+              return None
 
 
-          def enum(v):
-              return v if v in ERRORS else ("other" if v is not None else None)
+          def count(bucket, key):
+              key = key if (key in bucket or len(bucket) < MAX_KEYS) else "other"
+              bucket[key] = bucket.get(key, 0) + 1
 
 
           def summarize(msgs):
-              out = {"message_count": len(msgs), "types": {}, "api_retries": [], "assistant_errors": {}}
-              retries = 0
+              out = {
+                  "message_count": len(msgs), "malformed_messages": 0, "types": {},
+                  "api_retries": [], "assistant_errors": {}, "api_retry_total": 0,
+              }
+              last_result = None
               for m in msgs:
-                  if not isinstance(m, dict):
-                      continue
-                  t, st = m.get("type"), m.get("subtype")
-                  key = clean(t, 40) + (":" + clean(st, 40) if st else "")
-                  out["types"][key] = out["types"].get(key, 0) + 1
-                  if t == "system" and st == "init":
-                      tools, mcp = m.get("tools"), m.get("mcp_servers")
-                      out["init"] = {
-                          "model": clean(m.get("model"), 80),
-                          "claude_code_version": clean(m.get("claude_code_version"), 40),
-                          "apiKeySource": clean(m.get("apiKeySource"), 40),
-                          "permissionMode": clean(m.get("permissionMode"), 40),
-                          "tools_count": len(tools) if isinstance(tools, list) else None,
-                          "mcp_servers": [
-                              {"name": clean(s.get("name"), 40), "status": clean(s.get("status"), 20)}
-                              for s in (mcp if isinstance(mcp, list) else [])[:10] if isinstance(s, dict)
-                          ],
-                      }
-                  elif t == "system" and st == "api_retry":
-                      retries += 1
-                      if len(out["api_retries"]) < MAX_RETRY:
-                          out["api_retries"].append({
-                              "attempt": num(m.get("attempt")), "max_retries": num(m.get("max_retries")),
-                              "retry_delay_ms": num(m.get("retry_delay_ms")),
-                              "error_status": num(m.get("error_status")), "error": enum(m.get("error")),
-                              "waited_ms": num(m.get("waited_ms")), "retry_wait_ms": num(m.get("retry_wait_ms")),
-                          })
-                  elif t == "assistant":
-                      e = enum(m.get("error"))
-                      if e:
-                          out["assistant_errors"][e] = out["assistant_errors"].get(e, 0) + 1
-              out["api_retry_total"] = retries
-              res = [m for m in msgs if isinstance(m, dict) and m.get("type") == "result"]
-              if res:
-                  r = res[-1]
+                  try:
+                      if not isinstance(m, dict):
+                          out["malformed_messages"] += 1
+                          continue
+                      t, st = pick(m.get("type"), MSG_TYPES), pick(m.get("subtype"), SUBTYPES)
+                      count(out["types"], (t or "none") + (":" + st if st else ""))
+                      if t == "system" and st == "init":
+                          tools, mcp = m.get("tools"), m.get("mcp_servers")
+                          status = {}
+                          for s in (mcp if isinstance(mcp, list) else [])[:50]:
+                              if isinstance(s, dict):
+                                  count(status, pick(s.get("status"), MCP_STATUS) or "none")
+                          out["init"] = {
+                              "model": match(m.get("model"), MODEL_RX),
+                              "claude_code_version": match(m.get("claude_code_version"), VERSION_RX),
+                              "apiKeySource": pick(m.get("apiKeySource"), KEY_SOURCES),
+                              "permissionMode": pick(m.get("permissionMode"), PERM_MODES),
+                              "tools_count": len(tools) if isinstance(tools, list) else None,
+                              "mcp_status_counts": status,
+                          }
+                      elif t == "system" and st == "api_retry":
+                          out["api_retry_total"] += 1
+                          if len(out["api_retries"]) < MAX_RETRY:
+                              out["api_retries"].append({
+                                  "attempt": num(m.get("attempt")), "max_retries": num(m.get("max_retries")),
+                                  "retry_delay_ms": num(m.get("retry_delay_ms")),
+                                  "error_status": num(m.get("error_status")),
+                                  "error": pick(m.get("error"), ERRORS),
+                                  "waited_ms": num(m.get("waited_ms")),
+                                  "retry_wait_ms": num(m.get("retry_wait_ms")),
+                              })
+                      elif t == "assistant":
+                          e = pick(m.get("error"), ERRORS)
+                          if e:
+                              count(out["assistant_errors"], e)
+                      elif t == "result":
+                          last_result = m
+                  except Exception:  # noqa: BLE001 - one hostile message must not stop the summary
+                      out["malformed_messages"] += 1
+              if last_result is not None:
+                  r = last_result
                   usage = r.get("modelUsage") if isinstance(r.get("modelUsage"), dict) else {}
-                  d = {
-                      "type": "result", "subtype": clean(r.get("subtype"), 60), "is_error": r.get("is_error") is True,
-                      "duration_ms": num(r.get("duration_ms")), "duration_api_ms": num(r.get("duration_api_ms")),
-                      "num_turns": num(r.get("num_turns")), "total_cost_usd": num(r.get("total_cost_usd")),
+                  errs = r.get("errors")
+                  denials = r.get("permission_denials")
+                  model_usage = {}
+                  for k, v in list(usage.items())[:5]:
+                      if isinstance(v, dict):
+                          key = match(k, MODEL_RX)
+                          model_usage[key] = {u: num(v.get(u)) for u in USAGE_KEYS if num(v.get(u)) is not None}
+                  out["result"] = {
+                      "subtype": pick(r.get("subtype"), SUBTYPES),
+                      "is_error": r.get("is_error") is True,
+                      "duration_ms": num(r.get("duration_ms")),
+                      "duration_api_ms": num(r.get("duration_api_ms")),
+                      "num_turns": num(r.get("num_turns")),
+                      "total_cost_usd": num(r.get("total_cost_usd")),
                       "api_error_status": num(r.get("api_error_status")),
-                      "stop_reason": clean(r.get("stop_reason"), 60) if r.get("stop_reason") is not None else None,
-                      "terminal_reason": clean(r.get("terminal_reason"), 60) if r.get("terminal_reason") is not None else None,
-                      "permission_denials_count": len(r["permission_denials"]) if isinstance(r.get("permission_denials"), list) else 0,
-                      "model_usage": {
-                          clean(k, 80): {u: num(v.get(u)) for u in USAGE_KEYS if num(v.get(u)) is not None}
-                          for k, v in list(usage.items())[:5] if isinstance(v, dict)
-                      },
+                      "stop_reason": pick(r.get("stop_reason"), STOP_REASONS),
+                      "terminal_reason": pick(r.get("terminal_reason"), TERMINAL),
+                      "permission_denials_count": len(denials) if isinstance(denials, list) else 0,
+                      "errors_count": len(errs) if isinstance(errs, list) else 0,
+                      "errors_enums": [pick(x, ERRORS) or "other" for x in errs[:5]] if isinstance(errs, list) else [],
+                      "model_usage": model_usage,
                   }
-                  if isinstance(r.get("errors"), list):
-                      d["errors"] = [clean(x) for x in r["errors"][:5]]
-                  if r.get("is_error") is True and isinstance(r.get("result"), str):
-                      d["error_text"] = clean(r["result"])  # only when the run itself reports an error
-                  out["result"] = d
               return out
 
 
           def probe():
-              if os.environ.get("ATLAS_DIAG_SKIP_PROBE") == "1":
-                  return {"skipped": True}
               try:
-                  req = urllib.request.Request("https://api.anthropic.com/", method="GET")
+                  req = urllib.request.Request(PROBE_URL, method="GET")
                   with urllib.request.urlopen(req, timeout=10, context=ssl.create_default_context()) as r:
-                      return {"reachable": True, "http_status": r.status}
+                      return {"reachable": True, "http_status": num(r.status)}
               except urllib.error.HTTPError as e:
-                  return {"reachable": True, "http_status": e.code}
+                  return {"reachable": True, "http_status": num(e.code)}
               except urllib.error.URLError as e:
-                  return {"reachable": False, "error_class": type(e.reason).__name__}
+                  return {"reachable": False, "error_class": pick(type(e.reason).__name__, PROBE_ERRORS)}
               except (socket.timeout, OSError) as e:
-                  return {"reachable": False, "error_class": type(e).__name__}
+                  return {"reachable": False, "error_class": pick(type(e).__name__, PROBE_ERRORS)}
+              except Exception:  # noqa: BLE001
+                  return {"reachable": False, "error_class": "other"}
 
 
           def hints(d):
               h = []
-              p = d.get("api_probe", {})
-              if p.get("reachable") is False:
+              if d.get("api_probe", {}).get("reachable") is False:
                   h.append("NETWORK_OR_TLS_TO_API_FAILED")
-              errs = set(d.get("assistant_errors", {})) | {x.get("error") for x in d.get("api_retries", [])}
+              retries = d.get("api_retries", [])
+              errs = set(d.get("assistant_errors", {})) | {x.get("error") for x in retries}
+              errs |= set(d.get("result", {}).get("errors_enums", []))
               for k, v in (("authentication_failed", "API_AUTH"), ("oauth_org_not_allowed", "API_AUTH"),
-                           ("billing_error", "API_BILLING_OR_ENTITLEMENT"), ("account_on_hold", "API_BILLING_OR_ENTITLEMENT"),
+                           ("billing_error", "API_BILLING_OR_ENTITLEMENT"),
+                           ("account_on_hold", "API_BILLING_OR_ENTITLEMENT"),
                            ("model_not_found", "MODEL_ENTITLEMENT_OR_NAME"), ("rate_limit", "API_RATE_LIMIT"),
                            ("overloaded", "API_OVERLOADED"), ("server_error", "API_SERVER_ERROR"),
                            ("invalid_request", "API_INVALID_REQUEST")):
                   if k in errs:
                       h.append(v)
-              if any(x.get("error_status") is None for x in d.get("api_retries", [])):
+              if any(x.get("error_status") is None for x in retries):
                   h.append("API_CONNECTION_NO_HTTP_RESPONSE")
               r = d.get("result", {})
               if r.get("is_error") and not r.get("model_usage") and not h:
@@ -292,13 +356,38 @@ jobs:
               return h
 
 
+          def dump(d):
+              return json.dumps(d, indent=2, sort_keys=True, allow_nan=False)
+
+
+          def render(d):
+              """Always returns a valid JSON document no larger than MAX_OUT bytes."""
+              d["diagnostic_truncated"] = False
+              tiers = (
+                  (),
+                  ("api_retries", "types", "init"),
+                  ("api_retries", "types", "init", "result", "assistant_errors", "api_retry_total",
+                   "message_count", "malformed_messages"),
+              )
+              for i, drop in enumerate(tiers):
+                  view = {k: v for k, v in d.items() if k not in drop}
+                  view["diagnostic_truncated"] = i > 0
+                  try:
+                      text = dump(view)
+                  except Exception:  # noqa: BLE001
+                      continue
+                  if len(text.encode("utf-8")) <= MAX_OUT:
+                      return text
+              return dump({"schema": 1, "diagnostic_truncated": True, "parse_error": "other"})
+
+
           def main():
-              d = {"schema": 1, "agent_step_outcome": clean(os.environ.get("AGENT_OUTCOME"), 20),
+              d = {"schema": 1, "agent_step_outcome": pick(os.environ.get("AGENT_OUTCOME"), OUTCOMES),
                    "execution_file_present": os.path.isfile(SRC)}
               try:
                   if d["execution_file_present"]:
                       size = os.path.getsize(SRC)
-                      d["execution_file_bytes"] = size
+                      d["execution_file_bytes"] = num(size)
                       if size > MAX_IN:
                           d["parse_error"] = "file_too_large"
                       else:
@@ -309,23 +398,23 @@ jobs:
                           else:
                               d["parse_error"] = "not_a_message_list"
               except Exception as exc:  # noqa: BLE001 - diagnostics must never raise
-                  d["parse_error"] = type(exc).__name__
+                  d["parse_error"] = pick(type(exc).__name__, PARSE_ERRORS)
               d["api_probe"] = probe()
               d["classification_hints"] = hints(d)
-              text = json.dumps(d, indent=2, sort_keys=True)
-              while len(text) > MAX_OUT and d.get("api_retries"):
-                  d["api_retries"] = d["api_retries"][: len(d["api_retries"]) // 2]
-                  text = json.dumps(d, indent=2, sort_keys=True)
-              with open(OUT, "w", encoding="utf-8") as fh:
-                  fh.write(text[:MAX_OUT] + "\n")
-              print("[sdk-diagnostic] sanitized summary (no prompts, tool payloads or transcripts):")
-              print(text[:MAX_OUT])
+              return render(d)
 
 
           try:
-              main()
-          except Exception as exc:  # noqa: BLE001
-              print("[sdk-diagnostic] failed: " + type(exc).__name__)
+              text = main()
+          except Exception:  # noqa: BLE001
+              text = dump({"schema": 1, "diagnostic_truncated": True, "parse_error": "other"})
+          try:
+              with open(OUT, "w", encoding="utf-8") as fh:
+                  fh.write(text + "\n")
+          except OSError:
+              pass
+          print("[sdk-diagnostic] sanitized summary (no prompts, tool payloads, transcripts or free text):")
+          print(text)
           ATLAS_SDK_DIAG
 
       - name: Upload sanitized SDK diagnostic
