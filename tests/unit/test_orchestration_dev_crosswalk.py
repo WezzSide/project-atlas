@@ -168,3 +168,48 @@ def test_verifier_profiles_share_contracts_and_exclude_executor():
         VerifierProfile("vps9", ("x",))
     with pytest.raises(CrosswalkError):
         VerifierProfile("github_hosted", ())
+
+
+# -- crash recovery: a torn tail must not brick the ledger on the next open ---------------
+
+STAMP, PSHA = "2026-10-01T00:00:00Z", "f" * 64
+
+
+def test_torn_tail_is_healed_before_the_next_append(tmp_path):
+    p = tmp_path / "xw.jsonl"
+    xw = Crosswalk(p)
+    w = work()
+    xw.bind_work(w)
+    xw.bind_dispatch(w.seal, dispatched_at=STAMP, payload_sha256=PSHA)
+    p.write_bytes(p.read_bytes()[:-15])  # crash in the middle of appending the DISPATCH line
+    again = Crosswalk(p)  # torn tail is ignored in memory...
+    assert again.hop(w.seal, "DISPATCH") is None
+    again.bind_dispatch(w.seal, dispatched_at=STAMP, payload_sha256=PSHA)  # ...and re-bindable
+    healed = Crosswalk(p)  # must NOT raise "corrupt crosswalk ledger line 2"
+    assert healed.hop(w.seal, "DISPATCH") == {
+        "event": "DISPATCH",
+        "dispatched_at": STAMP,
+        "payload_sha256": PSHA,
+    }
+    assert p.read_bytes().endswith(b"\n") and len(p.read_bytes().splitlines()) == 2
+    assert (tmp_path / "xw.jsonl.torn").read_bytes().strip(), "torn bytes are kept as evidence"
+
+
+def test_torn_only_line_is_healed_too(tmp_path):
+    p = tmp_path / "xw.jsonl"
+    p.write_bytes(b'{"event": "WORK", "work_s')  # first append never completed
+    xw = Crosswalk(p)
+    w = work()
+    xw.bind_work(w)
+    assert Crosswalk(p).knows_work(w.seal)
+    assert (tmp_path / "xw.jsonl.torn").read_bytes().startswith(b'{"event": "WORK"')
+
+
+def test_complete_ledger_is_never_touched_by_healing(tmp_path):
+    p = tmp_path / "xw.jsonl"
+    xw = Crosswalk(p)
+    w = work()
+    xw.bind_work(w)
+    xw.bind_dispatch(w.seal, dispatched_at=STAMP, payload_sha256=PSHA)
+    assert not (tmp_path / "xw.jsonl.torn").exists()
+    assert len(Crosswalk(p).lineage("T1")) == 1

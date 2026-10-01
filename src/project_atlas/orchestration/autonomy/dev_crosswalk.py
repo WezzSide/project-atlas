@@ -73,8 +73,34 @@ class Crosswalk:
                     raise CrosswalkError(f"corrupt crosswalk ledger line {n}: {exc}") from exc
 
     # -- ledger ---------------------------------------------------------------------------
+    def _heal_torn_tail(self) -> None:
+        """Cut an unterminated last line before appending after it.
+
+        ``__init__`` ignores a torn tail in memory only. Appending a new line directly after those
+        bytes would glue the two together and the NEXT open would see a corrupt middle line and
+        refuse the whole ledger. The torn bytes (never acknowledged) are preserved as evidence in
+        ``<ledger>.torn`` and then removed from the ledger, durably, before the new event is
+        written.
+        """
+        if not self.path.exists():
+            return
+        data = self.path.read_bytes()
+        if not data or data.endswith(b"\n"):
+            return
+        cut = data.rfind(b"\n") + 1  # 0 when the only line is torn
+        side = self.path.with_name(self.path.name + ".torn")
+        with side.open("ab") as fh:
+            fh.write(data[cut:] + b"\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        with self.path.open("r+b") as fh:
+            fh.truncate(cut)
+            fh.flush()
+            os.fsync(fh.fileno())
+
     def _append(self, ev: dict[str, Any]) -> None:
         self._apply(ev)  # validate first: a refused event is never written
+        self._heal_torn_tail()
         with self.path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(ev, sort_keys=True) + "\n")
             fh.flush()

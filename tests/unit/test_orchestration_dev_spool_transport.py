@@ -140,3 +140,97 @@ def test_misnamed_record_is_rejected_once_and_does_not_wedge_the_channel(tmp_pat
         t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity=IMPL)
     assert (d / "rejected" / "0000.json").exists()
     assert t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity=IMPL) is None
+
+
+# -- Windows sharing violations are transient, never evidence of a hostile record ------------------
+
+
+def _no_sleep(monkeypatch):
+    import project_atlas.orchestration.autonomy.dev_spool_transport as mod
+
+    naps: list[float] = []
+    monkeypatch.setattr(mod.time, "sleep", naps.append)
+    return mod, naps
+
+
+def test_transient_rename_permission_error_is_retried_not_parked(tmp_path, monkeypatch):
+    mod, naps = _no_sleep(monkeypatch)
+    t = SpoolTransport(tmp_path)
+    w = work()
+    t.publish(w)
+    real, calls = mod.os.rename, {"n": 0}
+
+    def flaky(src, dst):
+        calls["n"] += 1
+        if calls["n"] <= 3:  # a concurrent reader still holds the file (WinError 32)
+            raise PermissionError(13, "sharing violation", str(src))
+        return real(src, dst)
+
+    monkeypatch.setattr(mod.os, "rename", flaky)
+    got = t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity=IMPL)
+    assert got is not None and got.seal == w.seal
+    assert calls["n"] == 4 and len(naps) == 3
+    assert not list((tmp_path / "WORK" / "rejected").glob("*")), (
+        "a valid record must never be parked"
+    )
+    assert (tmp_path / "WORK" / "claimed" / f"{w.seal}.json").exists()
+
+
+def test_transient_read_permission_error_is_retried_not_parked(tmp_path, monkeypatch):
+    mod, naps = _no_sleep(monkeypatch)
+    t = SpoolTransport(tmp_path)
+    w = work()
+    t.publish(w)
+    real, calls = mod.Path.read_text, {"n": 0}
+
+    def flaky(self, *a, **k):
+        if self.name == f"{w.seal}.json" and self.parent.name == "WORK":
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise PermissionError(13, "sharing violation", str(self))
+        return real(self, *a, **k)
+
+    monkeypatch.setattr(mod.Path, "read_text", flaky)
+    got = t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity=IMPL)
+    assert got is not None and got.seal == w.seal and len(naps) == 1
+    assert not list((tmp_path / "WORK" / "rejected").glob("*"))
+
+
+def test_persistent_rename_permission_error_is_bounded_then_parked_once(tmp_path, monkeypatch):
+    mod, naps = _no_sleep(monkeypatch)
+    t = SpoolTransport(tmp_path)
+    w = work()
+    t.publish(w)
+    calls = {"n": 0}
+
+    def always(src, dst):
+        calls["n"] += 1
+        raise PermissionError(13, "denied", str(src))
+
+    monkeypatch.setattr(mod.os, "rename", always)
+    with pytest.raises(TransportError, match="could not be claimed"):
+        t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity=IMPL)
+    assert calls["n"] == mod._TRANSIENT_TRIES, "retries are bounded"
+    assert len(naps) == mod._TRANSIENT_TRIES - 1
+    assert (tmp_path / "WORK" / "rejected" / f"{w.seal}.json").exists()
+    assert t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity=IMPL) is None  # parked once
+
+
+def test_blocked_claimed_slot_is_not_retried(tmp_path, monkeypatch):
+    mod, naps = _no_sleep(monkeypatch)
+    t = SpoolTransport(tmp_path)
+    w = work()
+    t.publish(w)
+    (tmp_path / "WORK" / "claimed" / f"{w.seal}.json").mkdir()  # slot occupied by a directory
+    calls = {"n": 0}
+    real = mod.os.rename
+
+    def counting(src, dst):
+        calls["n"] += 1
+        raise PermissionError(13, "dest is a directory", str(dst))
+
+    monkeypatch.setattr(mod.os, "rename", counting)
+    with pytest.raises(TransportError):
+        t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity=IMPL)
+    assert calls["n"] == 1 and naps == [], "a blocked destination is never retried"
+    assert real is not counting

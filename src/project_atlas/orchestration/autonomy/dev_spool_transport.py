@@ -24,6 +24,8 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import time
+from collections.abc import Callable
 from pathlib import Path
 
 from project_atlas.orchestration.autonomy.dev_contracts import (
@@ -43,6 +45,37 @@ from project_atlas.orchestration.autonomy.dev_transport import (
 )
 
 _CLAIMED = "claimed"
+
+# A concurrent claimer's open/rename can make a read or rename fail TRANSIENTLY with
+# ``PermissionError`` (Windows sharing violation: files are opened without FILE_SHARE_DELETE).
+# That must never be mistaken for a hostile record: retry a bounded number of times with a short
+# deterministic backoff, and only then treat the file as genuinely unusable.
+_TRANSIENT_TRIES = 12
+_TRANSIENT_BACKOFF_S = (0.002, 0.004, 0.008, 0.016, 0.032)  # the last step repeats
+
+
+def _retry_transient[T](op: Callable[[], T], *, still_valid: Callable[[], bool]) -> T:
+    """Run ``op``; retry only ``PermissionError`` while ``still_valid()`` (bounded, no spin)."""
+    for attempt in range(_TRANSIENT_TRIES):
+        try:
+            return op()
+        except PermissionError:
+            if attempt == _TRANSIENT_TRIES - 1 or not still_valid():
+                raise
+            time.sleep(_TRANSIENT_BACKOFF_S[min(attempt, len(_TRANSIENT_BACKOFF_S) - 1)])
+    raise AssertionError("unreachable")  # pragma: no cover - loop always returns or raises
+
+
+def _read_wire(path: Path) -> str:
+    return _retry_transient(lambda: path.read_text(encoding="utf-8"), still_valid=path.exists)
+
+
+def _claim_rename(src: Path, dest: Path) -> None:
+    """Consume-once rename; a transient sharing violation is retried only while the source still
+    exists and the destination slot is still free (a blocked slot is never retried)."""
+    _retry_transient(
+        lambda: os.rename(src, dest), still_valid=lambda: src.exists() and not dest.exists()
+    )
 
 
 class SpoolTransport:
@@ -83,7 +116,7 @@ class SpoolTransport:
             if not path.is_file() or path.is_symlink():
                 continue  # directories/symlinks/devices are never records; skip, never spin
             try:
-                wire = path.read_text(encoding="utf-8")
+                wire = _read_wire(path)
                 rec = decode(wire)
                 if rec.seal != path.stem:
                     bad = "spool file name does not match record seal"
@@ -107,8 +140,9 @@ class SpoolTransport:
                     continue  # addressed to someone else: leave it, never wedge this claimer
                 if same_identity(identity, rec.executor_identity):
                     raise TransportError("executor identity may not claim its own verification")
+            dest = d / _CLAIMED / path.name
             try:
-                os.rename(path, d / _CLAIMED / path.name)  # exactly one claimer wins
+                _claim_rename(path, dest)  # exactly one claimer wins
             except FileNotFoundError:
                 continue  # lost the race to another claimer
             except OSError:
