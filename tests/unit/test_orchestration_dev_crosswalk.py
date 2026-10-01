@@ -213,3 +213,30 @@ def test_complete_ledger_is_never_touched_by_healing(tmp_path):
     xw.bind_dispatch(w.seal, dispatched_at=STAMP, payload_sha256=PSHA)
     assert not (tmp_path / "xw.jsonl.torn").exists()
     assert len(Crosswalk(p).lineage("T1")) == 1
+
+
+def test_line_torn_between_cr_and_lf_is_torn_everywhere(tmp_path):
+    """Windows CRLF: a crash after CR but before LF must be healed, never bricking the ledger."""
+    p = tmp_path / "xw.jsonl"
+    xw = Crosswalk(p)
+    w = work()
+    xw.bind_work(w)
+    xw.bind_dispatch(w.seal, dispatched_at=STAMP, payload_sha256=PSHA)
+    lines = p.read_bytes().splitlines()
+    p.write_bytes(lines[0] + b"\r\n" + lines[1] + b"\r")  # DISPATCH torn right before its LF
+    again = Crosswalk(p)
+    assert again.hop(w.seal, "DISPATCH") is None, "the unterminated line is torn, not complete"
+    again.bind_dispatch(w.seal, dispatched_at=STAMP, payload_sha256=PSHA)
+    assert Crosswalk(p).hop(w.seal, "DISPATCH")["dispatched_at"] == STAMP  # must not raise
+
+
+def test_opening_a_ledger_read_only_never_modifies_it(tmp_path):
+    p = tmp_path / "xw.jsonl"
+    xw = Crosswalk(p)
+    w = work()
+    xw.bind_work(w)
+    p.write_bytes(p.read_bytes() + b'{"event": "DISP')  # torn tail on disk
+    before = p.read_bytes()
+    Crosswalk(p)
+    Crosswalk(p)
+    assert p.read_bytes() == before and not (tmp_path / "xw.jsonl.torn").exists()

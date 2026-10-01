@@ -61,7 +61,9 @@ class Crosswalk:
         self._rows: dict[str, dict[str, Any]] = {}
         self._index: dict[tuple[str, str], str] = {}
         if self.path.exists():
-            text = self.path.read_text(encoding="utf-8")
+            # bytes, not universal-newline text: a line torn between CR and LF must count as torn
+            # here exactly as it does in _heal_torn_tail (text mode would turn a bare CR into LF)
+            text = self.path.read_bytes().decode("utf-8")
             lines = text.splitlines()
             if lines and not text.endswith("\n"):
                 lines.pop()  # torn tail: that append was never completed/acknowledged
