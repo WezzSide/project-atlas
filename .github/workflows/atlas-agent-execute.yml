@@ -108,6 +108,7 @@ jobs:
       # Action input (not shell): the bounded prompt is scoped to the
       # dedicated branch and restricted via --allowedTools in claude_args.
       - name: Run agent (bounded prompt, restricted tools)
+        id: agent
         uses: anthropics/claude-code-action@756cc22e19660d20e8cc9496b4f242475a7f7790 # v1 (v1.0 release tag)
         with:
           prompt: |
@@ -129,6 +130,213 @@ jobs:
           claude_args: |
             --max-turns 20
             --allowedTools Edit Read Write Glob Grep Bash(pytest:*) Bash(ruff:*) Bash(bash:*)
+
+      # EXECUTOR_SDK_OBSERVABILITY: the pinned action writes the full SDK message
+      # sequence to $RUNNER_TEMP/claude-execution-output.json, which runner cleanup
+      # deletes, while its public log deliberately hides message details
+      # (show_full_output stays off). On agent-step FAILURE ONLY, reduce that file
+      # to a whitelisted, redacted, size-bounded summary (result/usage metadata,
+      # SDK error enums, api_retry counters, an unauthenticated reachability probe
+      # of api.anthropic.com) and keep just that summary. Raw assistant/tool
+      # transcripts, prompts and credentials are never copied or emitted. The step
+      # runs inline (not from the agent-writable checkout), receives no secrets, and
+      # cannot turn the failed agent step into a success.
+      - name: Claude SDK failure diagnostics (sanitized, failure-only)
+        id: sdk_diag
+        if: ${{ failure() && steps.agent.outcome == 'failure' }}
+        continue-on-error: true
+        env:
+          AGENT_OUTCOME: ${{ steps.agent.outcome }}
+        run: |
+          set -uo pipefail
+          python3 -I - <<'ATLAS_SDK_DIAG'
+          import json
+          import os
+          import re
+          import socket
+          import ssl
+          import urllib.error
+          import urllib.request
+
+          TMP = os.environ.get("RUNNER_TEMP") or "/tmp"
+          SRC = os.path.join(TMP, "claude-execution-output.json")
+          OUT = os.path.join(TMP, "claude-sdk-diagnostic.json")
+          MAX_IN, MAX_OUT, MAX_STR, MAX_RETRY = 64 * 1024 * 1024, 16 * 1024, 400, 25
+          SECRETISH = [re.compile(p) for p in (
+              r"sk-ant-[A-Za-z0-9_\-]{8,}",
+              r"gh[pousr]_[A-Za-z0-9]{16,}",
+              r"github_pat_[A-Za-z0-9_]{16,}",
+              r"(?i)bearer\s+[A-Za-z0-9._~+/=\-]{8,}",
+              r"x-access-token:[^@\s]+@",
+              r"eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]*",
+              r"[A-Za-z0-9+/=_\-]{32,}",
+          )]
+          ERRORS = {
+              "authentication_failed", "oauth_org_not_allowed", "account_on_hold", "verification_required",
+              "billing_error", "rate_limit", "overloaded", "invalid_request", "model_not_found",
+              "server_error", "unknown", "max_output_tokens", "cloud_credential_error",
+          }
+          USAGE_KEYS = ("inputTokens", "outputTokens", "cacheReadInputTokens", "cacheCreationInputTokens",
+                        "costUSD", "contextWindow", "maxOutputTokens")
+
+
+          def clean(v, n=MAX_STR):
+              s = v if isinstance(v, str) else repr(v)
+              for rx in SECRETISH:
+                  s = rx.sub("[REDACTED]", s)
+              return s[:n]
+
+
+          def num(v):
+              return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+
+          def enum(v):
+              return v if v in ERRORS else ("other" if v is not None else None)
+
+
+          def summarize(msgs):
+              out = {"message_count": len(msgs), "types": {}, "api_retries": [], "assistant_errors": {}}
+              retries = 0
+              for m in msgs:
+                  if not isinstance(m, dict):
+                      continue
+                  t, st = m.get("type"), m.get("subtype")
+                  key = clean(t, 40) + (":" + clean(st, 40) if st else "")
+                  out["types"][key] = out["types"].get(key, 0) + 1
+                  if t == "system" and st == "init":
+                      tools, mcp = m.get("tools"), m.get("mcp_servers")
+                      out["init"] = {
+                          "model": clean(m.get("model"), 80),
+                          "claude_code_version": clean(m.get("claude_code_version"), 40),
+                          "apiKeySource": clean(m.get("apiKeySource"), 40),
+                          "permissionMode": clean(m.get("permissionMode"), 40),
+                          "tools_count": len(tools) if isinstance(tools, list) else None,
+                          "mcp_servers": [
+                              {"name": clean(s.get("name"), 40), "status": clean(s.get("status"), 20)}
+                              for s in (mcp if isinstance(mcp, list) else [])[:10] if isinstance(s, dict)
+                          ],
+                      }
+                  elif t == "system" and st == "api_retry":
+                      retries += 1
+                      if len(out["api_retries"]) < MAX_RETRY:
+                          out["api_retries"].append({
+                              "attempt": num(m.get("attempt")), "max_retries": num(m.get("max_retries")),
+                              "retry_delay_ms": num(m.get("retry_delay_ms")),
+                              "error_status": num(m.get("error_status")), "error": enum(m.get("error")),
+                              "waited_ms": num(m.get("waited_ms")), "retry_wait_ms": num(m.get("retry_wait_ms")),
+                          })
+                  elif t == "assistant":
+                      e = enum(m.get("error"))
+                      if e:
+                          out["assistant_errors"][e] = out["assistant_errors"].get(e, 0) + 1
+              out["api_retry_total"] = retries
+              res = [m for m in msgs if isinstance(m, dict) and m.get("type") == "result"]
+              if res:
+                  r = res[-1]
+                  usage = r.get("modelUsage") if isinstance(r.get("modelUsage"), dict) else {}
+                  d = {
+                      "type": "result", "subtype": clean(r.get("subtype"), 60), "is_error": r.get("is_error") is True,
+                      "duration_ms": num(r.get("duration_ms")), "duration_api_ms": num(r.get("duration_api_ms")),
+                      "num_turns": num(r.get("num_turns")), "total_cost_usd": num(r.get("total_cost_usd")),
+                      "api_error_status": num(r.get("api_error_status")),
+                      "stop_reason": clean(r.get("stop_reason"), 60) if r.get("stop_reason") is not None else None,
+                      "terminal_reason": clean(r.get("terminal_reason"), 60) if r.get("terminal_reason") is not None else None,
+                      "permission_denials_count": len(r["permission_denials"]) if isinstance(r.get("permission_denials"), list) else 0,
+                      "model_usage": {
+                          clean(k, 80): {u: num(v.get(u)) for u in USAGE_KEYS if num(v.get(u)) is not None}
+                          for k, v in list(usage.items())[:5] if isinstance(v, dict)
+                      },
+                  }
+                  if isinstance(r.get("errors"), list):
+                      d["errors"] = [clean(x) for x in r["errors"][:5]]
+                  if r.get("is_error") is True and isinstance(r.get("result"), str):
+                      d["error_text"] = clean(r["result"])  # only when the run itself reports an error
+                  out["result"] = d
+              return out
+
+
+          def probe():
+              if os.environ.get("ATLAS_DIAG_SKIP_PROBE") == "1":
+                  return {"skipped": True}
+              try:
+                  req = urllib.request.Request("https://api.anthropic.com/", method="GET")
+                  with urllib.request.urlopen(req, timeout=10, context=ssl.create_default_context()) as r:
+                      return {"reachable": True, "http_status": r.status}
+              except urllib.error.HTTPError as e:
+                  return {"reachable": True, "http_status": e.code}
+              except urllib.error.URLError as e:
+                  return {"reachable": False, "error_class": type(e.reason).__name__}
+              except (socket.timeout, OSError) as e:
+                  return {"reachable": False, "error_class": type(e).__name__}
+
+
+          def hints(d):
+              h = []
+              p = d.get("api_probe", {})
+              if p.get("reachable") is False:
+                  h.append("NETWORK_OR_TLS_TO_API_FAILED")
+              errs = set(d.get("assistant_errors", {})) | {x.get("error") for x in d.get("api_retries", [])}
+              for k, v in (("authentication_failed", "API_AUTH"), ("oauth_org_not_allowed", "API_AUTH"),
+                           ("billing_error", "API_BILLING_OR_ENTITLEMENT"), ("account_on_hold", "API_BILLING_OR_ENTITLEMENT"),
+                           ("model_not_found", "MODEL_ENTITLEMENT_OR_NAME"), ("rate_limit", "API_RATE_LIMIT"),
+                           ("overloaded", "API_OVERLOADED"), ("server_error", "API_SERVER_ERROR"),
+                           ("invalid_request", "API_INVALID_REQUEST")):
+                  if k in errs:
+                      h.append(v)
+              if any(x.get("error_status") is None for x in d.get("api_retries", [])):
+                  h.append("API_CONNECTION_NO_HTTP_RESPONSE")
+              r = d.get("result", {})
+              if r.get("is_error") and not r.get("model_usage") and not h:
+                  h.append("NO_MODEL_USAGE_CAUSE_UNCLASSIFIED")
+              return h
+
+
+          def main():
+              d = {"schema": 1, "agent_step_outcome": clean(os.environ.get("AGENT_OUTCOME"), 20),
+                   "execution_file_present": os.path.isfile(SRC)}
+              try:
+                  if d["execution_file_present"]:
+                      size = os.path.getsize(SRC)
+                      d["execution_file_bytes"] = size
+                      if size > MAX_IN:
+                          d["parse_error"] = "file_too_large"
+                      else:
+                          with open(SRC, encoding="utf-8") as fh:
+                              msgs = json.load(fh)
+                          if isinstance(msgs, list):
+                              d.update(summarize(msgs))
+                          else:
+                              d["parse_error"] = "not_a_message_list"
+              except Exception as exc:  # noqa: BLE001 - diagnostics must never raise
+                  d["parse_error"] = type(exc).__name__
+              d["api_probe"] = probe()
+              d["classification_hints"] = hints(d)
+              text = json.dumps(d, indent=2, sort_keys=True)
+              while len(text) > MAX_OUT and d.get("api_retries"):
+                  d["api_retries"] = d["api_retries"][: len(d["api_retries"]) // 2]
+                  text = json.dumps(d, indent=2, sort_keys=True)
+              with open(OUT, "w", encoding="utf-8") as fh:
+                  fh.write(text[:MAX_OUT] + "\n")
+              print("[sdk-diagnostic] sanitized summary (no prompts, tool payloads or transcripts):")
+              print(text[:MAX_OUT])
+
+
+          try:
+              main()
+          except Exception as exc:  # noqa: BLE001
+              print("[sdk-diagnostic] failed: " + type(exc).__name__)
+          ATLAS_SDK_DIAG
+
+      - name: Upload sanitized SDK diagnostic
+        if: ${{ failure() && steps.agent.outcome == 'failure' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: atlas-agent-sdk-diagnostic
+          path: ${{ runner.temp }}/claude-sdk-diagnostic.json
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Deterministic tests (infra runner subset)
         env:
