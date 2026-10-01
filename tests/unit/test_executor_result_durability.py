@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -68,6 +70,12 @@ def test_only_agent_and_push_steps_use_the_job_token():
     assert sorted(users) == sorted([AGENT, PUSH])
 
 
+_POSIX_ONLY = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="executes the Linux worker bash run blocks (the executor is Linux-only)",
+)
+
+
 def _run_infra(tmp_path: Path, pytest_rc: int) -> tuple[subprocess.CompletedProcess, Path]:
     bindir = tmp_path / "bin"
     bindir.mkdir()
@@ -87,6 +95,7 @@ def _run_infra(tmp_path: Path, pytest_rc: int) -> tuple[subprocess.CompletedProc
     return proc, tmp_path / "evidence"
 
 
+@_POSIX_ONLY
 def test_failing_infra_suite_records_its_exit_code_and_does_not_hide_it(tmp_path):
     proc, ev = _run_infra(tmp_path, 126)
     assert proc.returncode == 126  # visible as a (non-gating) failed step, never swallowed
@@ -100,6 +109,7 @@ def test_failing_infra_suite_records_its_exit_code_and_does_not_hide_it(tmp_path
     assert "fake pytest output" in (ev / "infra-corroboration.log").read_text(encoding="utf-8")
 
 
+@_POSIX_ONLY
 def test_passing_infra_suite_records_zero(tmp_path):
     proc, ev = _run_infra(tmp_path, 0)
     assert proc.returncode == 0
@@ -163,6 +173,7 @@ def _run_push(
     return proc, work, bare
 
 
+@_POSIX_ONLY
 def test_untracked_only_agent_output_is_pushed(tmp_path):
     proc, _work, bare = _run_push(tmp_path, {"tests/unit/test_new.py": "def test_x():\n    pass\n"})
     assert proc.returncode == 0, proc.stderr
@@ -171,6 +182,7 @@ def test_untracked_only_agent_output_is_pushed(tmp_path):
     assert "def test_x" in shown
 
 
+@_POSIX_ONLY
 def test_modified_tracked_output_is_pushed_and_token_does_not_linger(tmp_path):
     proc, work, bare = _run_push(tmp_path, {"tracked.txt": "changed\n"})
     assert proc.returncode == 0, proc.stderr
@@ -179,6 +191,7 @@ def test_modified_tracked_output_is_pushed_and_token_does_not_linger(tmp_path):
     assert "SENTINEL_TOKEN" not in (work / ".git" / "config").read_text()
 
 
+@_POSIX_ONLY
 def test_no_changes_pushes_nothing(tmp_path):
     proc, _work, bare = _run_push(tmp_path, {})
     assert proc.returncode == 0 and "nothing to push" in proc.stdout
