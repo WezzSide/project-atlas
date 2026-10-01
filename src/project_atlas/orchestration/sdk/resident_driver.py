@@ -92,17 +92,43 @@ def _append_tick_log(root: Path, row: dict[str, Any]) -> None:
         handle.write(json.dumps(row, sort_keys=True) + "\n")
 
 
+def _json_object(path: Path) -> dict[str, Any] | None:
+    """Decode a persisted JSON object, or None when it is not an object.
+
+    D146-LOCK-RECEIPT-SHAPE-HARDENING (#767): valid JSON that is not an
+    object (array, number, string, null) must not escape as AttributeError
+    from ``.get``. Wrong shape is not authoritative — same fail-closed
+    semantic as malformed JSON.
+    """
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    return data
+
+
+def _lock_record(path: Path) -> dict[str, Any] | None:
+    return _json_object(path)
+
+
+def _lock_pid(data: dict[str, Any] | None) -> int:
+    if data is None:
+        return 0
+    try:
+        return int(data.get("pid", 0))
+    except (TypeError, ValueError):
+        return 0
+
+
 def acquire_primary_lock(root: Path) -> bool:
     """Ensure ACTIVE_PRIMARY_GOVERNOR_COUNT <= 1. Returns False if another live primary."""
     path = _runtime(root) / LOCK_NAME
     path.parent.mkdir(parents=True, exist_ok=True)
     me = os.getpid()
     if path.is_file():
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            other = int(data.get("pid", 0))
-        except (OSError, json.JSONDecodeError, TypeError, ValueError):
-            other = 0
+        other = _lock_pid(_lock_record(path))
         if other > 0 and other != me and pid_is_alive(other):
             return False
     path.write_text(
@@ -116,11 +142,7 @@ def read_primary_lock_pid(root: Path) -> int:
     path = _runtime(root) / LOCK_NAME
     if not path.is_file():
         return 0
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        other = int(data.get("pid", 0))
-    except (OSError, json.JSONDecodeError, TypeError, ValueError):
-        return 0
+    other = _lock_pid(_lock_record(path))
     if other > 0 and pid_is_alive(other):
         return other
     return 0
@@ -131,10 +153,9 @@ def release_primary_lock(root: Path) -> None:
     if not path.is_file():
         return
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        if int(data.get("pid", 0)) == os.getpid():
+        if _lock_pid(_lock_record(path)) == os.getpid():
             path.unlink()
-    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+    except OSError:
         pass
 
 
@@ -162,6 +183,8 @@ def poll_github_ci(run_id: str) -> tuple[str, str | None, str | None]:
     try:
         data = json.loads(proc.stdout or "{}")
     except json.JSONDecodeError:
+        return "in_progress", None, None
+    if not isinstance(data, dict):
         return "in_progress", None, None
     status = str(data.get("status") or "in_progress")
     conclusion = data.get("conclusion")
@@ -328,9 +351,9 @@ def _try_closed_loop(root: Path, *, now: float) -> dict[str, object] | None:
     hook.reconcile(root, now=now)
     marker = _runtime(root) / "d134-last-closed-loop.json"
     if marker.is_file():
+        prev = _json_object(marker)
         try:
-            prev = json.loads(marker.read_text(encoding="utf-8"))
-            if now - float(prev.get("at", 0)) < 20.0:
+            if prev is not None and now - float(prev.get("at", 0)) < 20.0:
                 progress = hook.progress_state(root)
                 return {
                     "paced": True,
@@ -341,7 +364,7 @@ def _try_closed_loop(root: Path, *, now: float) -> dict[str, object] | None:
                     "MISSION_GENERATION": progress.get("MISSION_GENERATION", 0),
                     "at": now,
                 }
-        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        except (TypeError, ValueError):
             pass
 
     items = hook.ready_work(root, capacity=1)
