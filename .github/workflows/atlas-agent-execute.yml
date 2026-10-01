@@ -118,6 +118,13 @@ jobs:
             rewrite history; make the smallest change that satisfies the task;
             run the infra runner test suite before finishing.
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # CLAUDE_ACTION_GITHUB_AUTH: without this input the pinned action's
+          # setupGitHubToken() falls back to a GitHub OIDC -> App-token exchange
+          # (requires id-token: write, which this workflow deliberately does
+          # not grant) and fails before the model starts. With it, the action
+          # uses the job's own GITHUB_TOKEN directly; the permission envelope
+          # (contents: write only) is unchanged and no OIDC token is requested.
+          github_token: ${{ secrets.GITHUB_TOKEN }}
           base_branch: ${{ env.AGENT_BRANCH }}
           claude_args: |
             --max-turns 20
