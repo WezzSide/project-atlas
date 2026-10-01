@@ -1,10 +1,10 @@
 {
   "package_version": 1,
   "task_id": "ATLAS-DEVQ-0001",
-  "execution_id": "ATLAS-DEVQ-0001-E3",
-  "work_seal": "e05871bbcd1372e42cef52544400c7e14ea104a8516ca20fe293e7a708e82b33",
+  "execution_id": "ATLAS-DEVQ-0001-E4",
+  "work_seal": "2d94d8eba6dc5d886301f1f8851cbde75c052d3f26e0e3601cc30873c8b047ef",
   "repository": "WezzSide/project-atlas",
-  "base_revision": "64759ad4086cc9744b4ec77507fd35abd1bbb8a0",
+  "base_revision": "01f04329283dfe2088a80d602f99c4b29856081f",
   "allowed_paths": [
     "src/project_atlas/graph_projections.py",
     "tests/unit/"
@@ -19,11 +19,11 @@
   "workflow": "atlas-agent-execute.yml",
   "workflow_ref": "main",
   "workflow_inputs": {
-    "task_prompt": "Atlas dev-loop task ATLAS-DEVQ-0001 | execution ATLAS-DEVQ-0001-E3 | seal e05871bbcd1372e42cef52544400c7e14ea104a8516ca20fe293e7a708e82b33\nRepository WezzSide/project-atlas; base revision 64759ad4086cc9744b4ec77507fd35abd1bbb8a0; attempt 1/3; authority OWNER-DIRECTIVE-2026-09-30-AUTONOMOUS-LOOP-FIRST-TASK.\nFix GitHub issue #757 (F14) in src/project_atlas/graph_projections.py. In the canonical promotion loop, a read-only output directory (staged.write_bytes), an unreadable existing target (path.read_bytes() == plan[path]) and ENAMETOOLONG (path.exists() and not path.is_file()) currently escape as raw OSError; each must raise GraphProjectionError naming the path, mirroring the existing F11 unwritable-note-directory:<Type>:<path> pattern. Assert on the measured raised exception class, never on hard-coded platform-coupled strings. Add a new test file tests/unit/test_as_obsidian_capture_001_f14_write_boundary.py.\nONLY modify paths under: src/project_atlas/graph_projections.py, tests/unit/.\nNEVER modify: infra/atlas-runner/controller, src/project_atlas/ingestion.py, src/project_atlas/orchestration/autonomy/trust.py, .github/.\nAcceptance (task-specific, all required; run them and keep them passing):\n  - issue #757 F14: read-only dir, unreadable target and ENAMETOOLONG raise GraphProjectionError naming the path\n  - task-specific tests (graph_projections, F11 boundary, new F14 test) pass; new F14 tests fail on base and pass on head\n  - ruff and mypy clean on changed files\n  - infra/atlas-runner tests are corroborating only, never sufficient\n  - run: PYTHONPATH=src python -m pytest tests/unit/test_as_graph_005_projections.py tests/unit/test_as_graph_005_adversarial.py tests/unit/test_as_obsidian_capture_001_f11_mkdir_boundary.py -q --no-cov\n  - run: PYTHONPATH=src python -m pytest tests/unit -k 'f14 or graph_projection' -q --no-cov\n  - run: python -m ruff check src/project_atlas/graph_projections.py tests/unit\n  - run: python -m mypy src/project_atlas/graph_projections.py\nNew tests must fail on the base revision and pass after your change. The infra runner tests alone are NOT sufficient acceptance for this task.",
+    "task_prompt": "Atlas dev-loop task ATLAS-DEVQ-0001 | execution ATLAS-DEVQ-0001-E4 | seal 2d94d8eba6dc5d886301f1f8851cbde75c052d3f26e0e3601cc30873c8b047ef\nRepository WezzSide/project-atlas; base revision 01f04329283dfe2088a80d602f99c4b29856081f; attempt 1/3; authority OWNER-DIRECTIVE-2026-09-30-AUTONOMOUS-LOOP-FIRST-TASK.\nFix GitHub issue #757 (F14) in src/project_atlas/graph_projections.py. In the canonical promotion loop, a read-only output directory (staged.write_bytes), an unreadable existing target (path.read_bytes() == plan[path]) and ENAMETOOLONG (path.exists() and not path.is_file()) currently escape as raw OSError; each must raise GraphProjectionError naming the path, mirroring the existing F11 unwritable-note-directory:<Type>:<path> pattern. Assert on the measured raised exception class, never on hard-coded platform-coupled strings. Add a new test file tests/unit/test_as_obsidian_capture_001_f14_write_boundary.py.\nONLY modify paths under: src/project_atlas/graph_projections.py, tests/unit/.\nNEVER modify: infra/atlas-runner/controller, src/project_atlas/ingestion.py, src/project_atlas/orchestration/autonomy/trust.py, .github/.\nAcceptance (task-specific, all required; run them and keep them passing):\n  - issue #757 F14: read-only dir, unreadable target and ENAMETOOLONG raise GraphProjectionError naming the path\n  - task-specific tests (graph_projections, F11 boundary, new F14 test) pass; new F14 tests fail on base and pass on head\n  - ruff and mypy clean on changed files\n  - infra/atlas-runner tests are corroborating only, never sufficient\n  - run: PYTHONPATH=src python -m pytest tests/unit/test_as_graph_005_projections.py tests/unit/test_as_graph_005_adversarial.py tests/unit/test_as_obsidian_capture_001_f11_mkdir_boundary.py -q --no-cov\n  - run: PYTHONPATH=src python -m pytest tests/unit -k 'f14 or graph_projection' -q --no-cov\n  - run: python -m ruff check src/project_atlas/graph_projections.py tests/unit\n  - run: python -m mypy src/project_atlas/graph_projections.py\nNew tests must fail on the base revision and pass after your change. The infra runner tests alone are NOT sufficient acceptance for this task.",
     "base_branch": "main",
     "agent_type": "claude"
   },
-  "workflow_inputs_sha256": "c4435a33b950b7f3c6c71ba849258279ab70d146a24641027829d4e23d8a77ad",
+  "workflow_inputs_sha256": "9d936ba034ec272e64b93bf56e8d4b19947a5aaa704ee2ec5a226e3d6533d056",
   "expected_agent_branch_pattern": "^atlas/agent-([0-9]+)-([0-9]+)$",
   "acceptance": {
     "contract": [
