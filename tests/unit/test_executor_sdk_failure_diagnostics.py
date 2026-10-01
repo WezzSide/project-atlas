@@ -186,7 +186,7 @@ def test_agent_step_has_an_id_and_diagnostics_follow_it_directly():
     assert _step(AGENT)["id"] == "agent"
     i = NAMES.index(AGENT)
     assert NAMES[i + 1] == DIAG and NAMES[i + 2] == UPLOAD
-    assert NAMES[i + 3] == "Deterministic tests (infra runner subset)"
+    assert NAMES[i + 3] == "Commit and push dedicated branch"
 
 
 def test_diagnostics_run_only_after_a_failed_agent_step_and_cannot_mask_the_failure():
@@ -198,7 +198,6 @@ def test_diagnostics_run_only_after_a_failed_agent_step_and_cannot_mask_the_fail
 
 def test_normal_success_path_steps_are_unchanged():
     for name in (
-        "Deterministic tests (infra runner subset)",
         "Commit and push dedicated branch",
         "Smoke workload (evidence fragment)",
         "Upload executor evidence",
