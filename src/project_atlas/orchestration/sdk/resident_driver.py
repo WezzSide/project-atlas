@@ -5,6 +5,7 @@ D-131: singleton primary, useful READY every tick, stale-status defense.
 
 from __future__ import annotations
 
+import enum
 import json
 import os
 import subprocess
@@ -14,6 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final
 
+from project_atlas.orchestration.sdk import os_lock
 from project_atlas.orchestration.sdk.auth import discover_auth
 from project_atlas.orchestration.sdk.closed_loop_port import (
     ensure_closed_loop_binding,
@@ -51,7 +53,49 @@ OWNER_QUEUE_NAME: Final[str] = "d129-owner-merge-queue.json"
 DRIVER_STOP_NAME: Final[str] = "resident-driver.stop"
 TICK_LOG_NAME: Final[str] = "resident-ticks.jsonl"
 LOCK_NAME: Final[str] = "resident-primary.lock"
+RECEIPT_NAME: Final[str] = "resident-primary-receipt.json"
 RECONCILE_INTERVAL_SEC: Final[float] = 45.0
+
+class PrimaryLockIdentity(enum.Enum):
+    """Whether the PID reported alongside a held primary lease is actually
+    trustworthy, as distinct from whether the lease is held at all -- see
+    `PrimaryLockState`. Deliberately just two values: this module makes no
+    claim about *why* identity is unconfirmed (absent receipt, malformed
+    content, a publish failure, a dead PID) -- only that it is."""
+
+    CONFIRMED = "CONFIRMED"
+    UNKNOWN = "UNKNOWN"
+
+
+@dataclass(frozen=True)
+class PrimaryLockState:
+    """The two questions "is a primary lease held?" and "who holds it?"
+    are answered separately and can disagree: `held=True` with
+    `identity=UNKNOWN` (and `pid=None`) is a normal, valid, and expected
+    state -- never collapse it to either "no holder" or a fabricated PID.
+
+    `held`: real, current answer from the OS lock itself (`os_lock`) --
+        this is the only thing that actually enforces
+        ACTIVE_PRIMARY_GOVERNOR_COUNT <= 1.
+    `pid`: the confirmed holder's PID, or `None` if not confirmed. Only
+        ever set when `identity is CONFIRMED`.
+    `identity`: `CONFIRMED` only when the receipt's PID field parses, is
+        positive, AND that PID is currently alive -- `UNKNOWN` in every
+        other case (receipt absent, malformed, publish failed and left no
+        fresh receipt, or a syntactically valid but dead/implausible PID).
+    """
+
+    held: bool
+    pid: int | None
+    identity: PrimaryLockIdentity
+
+
+# Real OS-level lock fds this process currently holds, keyed by resolved
+# lock-file path. Populated by `acquire_primary_lock()`, emptied by
+# `release_primary_lock()`. This is what makes a second `acquire_primary_lock`
+# call from the SAME process idempotent-True without re-locking: the process
+# already holds the lease, so there is nothing further to atomically decide.
+_HELD_LOCK_FDS: dict[str, int] = {}
 
 
 @dataclass
@@ -92,50 +136,226 @@ def _append_tick_log(root: Path, row: dict[str, Any]) -> None:
         handle.write(json.dumps(row, sort_keys=True) + "\n")
 
 
+def _lock_key(path: Path) -> str:
+    try:
+        return str(path.resolve())
+    except OSError:
+        return str(path)
+
+
 def acquire_primary_lock(root: Path) -> bool:
-    """Ensure ACTIVE_PRIMARY_GOVERNOR_COUNT <= 1. Returns False if another live primary."""
+    """Ensure ACTIVE_PRIMARY_GOVERNOR_COUNT <= 1 -- as a real cross-process
+    invariant, not a best-effort filesystem convention.
+
+    Exclusivity is enforced by a kernel-arbitrated OS lock (`os_lock`), not
+    by this process reading then writing a file: two processes racing this
+    call can never both receive True, because the OS makes that decision
+    atomically in a single call, with no time-of-check-to-time-of-use
+    window. Returns True if this process now holds the lease (and either
+    just acquired it, or already held it -- a second call from the SAME
+    process while it still holds the lease is idempotent-True and does not
+    re-lock). Returns False if another live process holds it. Never blocks:
+    a single non-blocking attempt, not a wait.
+
+    Crash recovery is automatic and immediate: if the previous holder
+    exited (including a crash) without calling `release_primary_lock()`,
+    the OS already released its lock when the process's file descriptors
+    closed, so the very next attempt here simply succeeds -- no stale-lock
+    detection, timeout, or reclamation protocol is needed, and so no new
+    race is introduced by one.
+
+    The JSON receipt is a SEPARATE, plain (never locked) file -- see
+    `RECEIPT_NAME` -- written only for `read_primary_lock_state()`'s
+    observability. It deliberately never shares a file with the lock
+    itself: on Windows, `msvcrt.locking()` is a *mandatory* byte-range
+    lock -- any I/O touching the locked bytes, even a plain read from this
+    same process, would be denied while the lock is held, not merely
+    advisory the way POSIX `flock()` is. Keeping the receipt in its own
+    file is what lets it stay freely readable while the lock is held, and
+    is never consulted here to decide ownership -- that would reintroduce
+    exactly the race this function exists to close.
+
+    Publishing the receipt can itself fail (disk full, permission denied,
+    ...). This function does NOT fail acquisition when that happens: the
+    lease is real and held either way (the OS lock, not the receipt, is
+    what makes it real), it just means this holder's identity will read
+    back as `PrimaryLockIdentity.UNKNOWN` to other readers until a
+    successful publish happens -- a valid, expected state (see
+    `PrimaryLockState`), never fabricated as "no holder".
+    """
     path = _runtime(root) / LOCK_NAME
     path.parent.mkdir(parents=True, exist_ok=True)
-    me = os.getpid()
-    if path.is_file():
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            other = int(data.get("pid", 0))
-        except (OSError, json.JSONDecodeError, TypeError, ValueError):
-            other = 0
-        if other > 0 and other != me and pid_is_alive(other):
-            return False
-    path.write_text(
-        json.dumps({"pid": me, "at": time.time()}, indent=2) + "\n", encoding="utf-8"
-    )
+    key = _lock_key(path)
+    if key in _HELD_LOCK_FDS:
+        return True  # same-process reacquisition: idempotent, no re-lock
+
+    fd = os_lock.try_acquire_exclusive(path)
+    if fd is None:
+        return False
+
+    _HELD_LOCK_FDS[key] = fd
+    _publish_receipt(root, pid=os.getpid())
     return True
 
 
-def read_primary_lock_pid(root: Path) -> int:
-    """Return live primary lock holder PID, or 0."""
-    path = _runtime(root) / LOCK_NAME
-    if not path.is_file():
-        return 0
+def _publish_receipt(root: Path, *, pid: int) -> bool:
+    """Safe publication of the informational receipt: write to a sibling
+    temp file, flush, then atomically replace -- never a partial/torn read
+    for anything that happens to read it mid-write. This is
+    RECEIPT_ATOMICITY, deliberately independent from LOCK_ATOMICITY (the OS
+    lock itself, which is what actually enforces exclusivity).
+
+    The previous receipt is unlinked FIRST, before any attempt to write the
+    new one. This is deliberate, not incidental: if the write-temp step
+    below then fails partway (disk full, permission denied, etc.), the
+    receipt is left ABSENT rather than retaining a PREVIOUS holder's
+    stale-but-perfectly-well-formed content. An absent receipt reads back
+    as `PrimaryLockIdentity.UNKNOWN` (honest); a leftover stale one could
+    otherwise be misread as confirmation of the wrong (no longer current)
+    holder -- this is exactly the failure this function exists to close
+    (see the mission's R2 finding: a stale receipt from a PREVIOUS holder
+    surviving a THIS holder's failed publish, then being reported as the
+    current owner). Returns whether publication succeeded; callers are not
+    required to fail acquisition on `False` -- the lease is real and held
+    either way, see `PrimaryLockState`.
+    """
+    receipt_path = _runtime(root) / RECEIPT_NAME
+    receipt_path.parent.mkdir(parents=True, exist_ok=True)
+    receipt_path.unlink(missing_ok=True)
+    content = json.dumps({"pid": pid, "at": time.time()}, indent=2) + "\n"
+    tmp_path = receipt_path.with_name(f".{receipt_path.name}.{pid}.{uuid.uuid4().hex}.tmp")
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        other = int(data.get("pid", 0))
-    except (OSError, json.JSONDecodeError, TypeError, ValueError):
-        return 0
-    if other > 0 and pid_is_alive(other):
-        return other
+        tmp_path.write_text(content, encoding="utf-8")
+        os.replace(tmp_path, receipt_path)
+        return True
+    except OSError:
+        # Exclusivity is already ours (the OS lock is held); a failure to
+        # publish the informational receipt does not change that -- it
+        # only means this holder's identity is UNKNOWN to other readers
+        # until a successful publish happens (there is currently no retry;
+        # the lease stays held regardless).
+        tmp_path.unlink(missing_ok=True)
+        return False
+
+
+def read_primary_lock_state(root: Path) -> PrimaryLockState:
+    """The authoritative answer to both "is a primary lease held?" and,
+    separately, "whose is it, if that can actually be confirmed?".
+
+    `held` comes from a real, non-blocking OS-lock probe
+    (`os_lock.probe_is_locked`) -- never from the receipt file's mere
+    existence, which is racy across processes and, on its own, cannot
+    prove exclusivity (this is the exact class of bug issue #773 closed).
+    A crashed holder's lock is released by the OS itself, so a stale
+    receipt left behind by a crash correctly reads back as NOT held here.
+
+    `identity` is `CONFIRMED` (with `pid` set) only when the receipt
+    parses, its `pid` field is a positive int, AND that PID is currently
+    alive -- otherwise `UNKNOWN` (`pid=None`), which is a normal, expected
+    outcome (an absent/malformed/stale receipt, or a publish that failed
+    -- see `_publish_receipt`), never fabricated as either "no holder" or
+    a plausible-looking fake PID.
+
+    The receipt read is BRACKETED by two lock probes -- one immediately
+    before, one immediately after -- rather than a single probe checked
+    only at the end. A single trailing probe (this function's predecessor
+    shape) closes the "holder released, but a stale receipt is still on
+    disk" case, but leaves a DIFFERENT, real turnover race open: a NEW
+    holder can win the OS lock, and there is a real (if very small) window
+    between that win and its own `_publish_receipt()` call actually
+    replacing the previous receipt (see that function's own unlink-first
+    doc) during which the OLD holder's receipt is still readable. A reader
+    landing in exactly that window, using only a trailing probe, would
+    read the OLD holder's still-valid-looking receipt and then observe
+    `held=True` (correctly -- the NEW holder holds it) and wrongly
+    CONFIRM the OLD holder's identity for the NEW holder's lease.
+
+    Bracketing narrows this: if the lock was NOT held immediately before
+    the receipt was read (`held_before=False`), whatever the receipt says
+    cannot be trusted as describing whoever holds it now -- there was a
+    moment, provably, where nobody held it, so whoever holds it now (if
+    anyone, per `held_after`) has not necessarily published yet. This is
+    reported as `held=True/False (per held_after), identity=UNKNOWN`
+    rather than risking attribution to a receipt written by a holder who,
+    provably, is not the continuous, uninterrupted holder across this
+    entire observation.
+
+    This does NOT achieve full atomicity -- an adversarial-enough
+    interleaving (the previous holder releases and a new one re-acquires
+    within the sub-microsecond gap between the two probes, landing the
+    receipt read exactly in the new holder's own tiny unlink-to-publish
+    window) can still in principle slip through undetected. That residual
+    is accepted: it requires two independent, vanishingly narrow timing
+    coincidences to land simultaneously, it only ever misreports the
+    OBSERVABILITY `pid` field (never `held`, which is what actually
+    enforces ACTIVE_PRIMARY_GOVERNOR_COUNT <= 1 -- see `acquire_primary_lock`),
+    and closing it fully would require binding identity to a lock-generation
+    token published atomically with the lock acquisition itself, which
+    `os_lock`'s handle-lifetime-based design (see its own module docstring)
+    deliberately does not carry, to keep the receipt genuinely optional and
+    the lock primitive itself content-agnostic.
+    """
+    lock_path = _runtime(root) / LOCK_NAME
+    receipt_path = _runtime(root) / RECEIPT_NAME
+
+    held_before = os_lock.probe_is_locked(lock_path)
+
+    candidate_pid: int | None = None
+    try:
+        data = json.loads(receipt_path.read_text(encoding="utf-8"))
+        parsed = int(data.get("pid", 0))
+        if parsed > 0 and pid_is_alive(parsed):
+            candidate_pid = parsed
+    except (OSError, json.JSONDecodeError, TypeError, ValueError, AttributeError):
+        candidate_pid = None
+
+    held_after = os_lock.probe_is_locked(lock_path)
+    if not held_after:
+        return PrimaryLockState(held=False, pid=None, identity=PrimaryLockIdentity.UNKNOWN)
+    if held_before and candidate_pid is not None:
+        return PrimaryLockState(
+            held=True, pid=candidate_pid, identity=PrimaryLockIdentity.CONFIRMED
+        )
+    return PrimaryLockState(held=True, pid=None, identity=PrimaryLockIdentity.UNKNOWN)
+
+
+def read_primary_lock_pid(root: Path) -> int:
+    """Back-compat int-only view of `read_primary_lock_state()`: returns
+    the real, confirmed holder's PID, or 0 -- with a STRICT meaning for
+    that 0. It means "not confirmed", which covers two genuinely different
+    situations this narrow return type cannot itself distinguish: no live
+    holder at all, OR a live holder whose identity is UNKNOWN. There is no
+    sentinel value here for the second case -- representing "identity
+    unknown" as a large-but-technically-positive integer would let a
+    caller comparing `> 0` believe it has a confirmed real PID when it does
+    not (the mission's R1 finding).
+
+    Callers that must distinguish "no holder" from "holder exists, identity
+    unknown" -- notably anything deciding whether it is safe to start a
+    second governor -- CANNOT do so correctly through this function alone
+    and must call `read_primary_lock_state()` instead and check `.held`,
+    not this function's return value: `PID UNKNOWN != SAFE TO SPAWN`.
+    """
+    state = read_primary_lock_state(root)
+    if state.identity is PrimaryLockIdentity.CONFIRMED and state.pid is not None:
+        return state.pid
     return 0
 
 
 def release_primary_lock(root: Path) -> None:
+    """Release the lease this process holds for `root`, if any. Safe to
+    call even if this process never held it, or already released it
+    (idempotent no-op either way).
+
+    Does not touch the JSON receipt file -- it is left in place as
+    historical evidence of the last holder. A future acquirer overwrites
+    it only after it has already won the OS lock, never before, so a
+    stale receipt can never be mistaken for proof of ownership."""
     path = _runtime(root) / LOCK_NAME
-    if not path.is_file():
-        return
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        if int(data.get("pid", 0)) == os.getpid():
-            path.unlink()
-    except (OSError, json.JSONDecodeError, TypeError, ValueError):
-        pass
+    key = _lock_key(path)
+    fd = _HELD_LOCK_FDS.pop(key, None)
+    if fd is not None:
+        os_lock.release(fd)
 
 
 def poll_github_ci(run_id: str) -> tuple[str, str | None, str | None]:
