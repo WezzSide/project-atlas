@@ -446,7 +446,9 @@ jobs:
           RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           set -euo pipefail
-          if git diff --quiet && git diff --cached --quiet; then
+          # git status --porcelain also sees untracked files: an agent that only
+          # created new files (e.g. a new test module) must still be persisted.
+          if [ -z "$(git status --porcelain)" ]; then
             echo "no changes produced; nothing to push"
             exit 0
           fi
@@ -456,6 +458,8 @@ jobs:
           git commit -m "atlas-agent: execute bounded task (run ${RUN_ID} attempt ${RUN_ATTEMPT})"
           git remote set-url origin "https://x-access-token:${GH_TOKEN_PUSH}@github.com/${GH_REPOSITORY}.git"
           git push -u origin "HEAD:${AGENT_BRANCH}"
+          # do not leave the token in .git/config for the (agent-influenced) steps that follow
+          git remote set-url origin "https://github.com/${GH_REPOSITORY}.git"
 
       # EXECUTOR_RESULT_DURABILITY: AGENT_SUCCESS => RESULT_BYTES_DURABLY_RECOVERABLE.
       # The commit/push of the dedicated branch runs IMMEDIATELY after the agent step

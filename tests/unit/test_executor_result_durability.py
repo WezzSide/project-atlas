@@ -104,3 +104,85 @@ def test_passing_infra_suite_records_zero(tmp_path):
     proc, ev = _run_infra(tmp_path, 0)
     assert proc.returncode == 0
     assert json.loads((ev / "infra-corroboration.json").read_text())["exit_code"] == 0
+
+
+# -- the push step itself: untracked-only output must be persisted, token must not linger ----------
+def _git(cwd: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", *args], cwd=cwd, check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
+def _run_push(
+    tmp_path: Path, files: dict[str, str]
+) -> tuple[subprocess.CompletedProcess, Path, Path]:
+    bare = tmp_path / "remote.git"
+    work = tmp_path / "work"
+    subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)
+    subprocess.run(["git", "init", "-q", str(work)], check=True)
+    _git(
+        work,
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "commit",
+        "-q",
+        "--allow-empty",
+        "-m",
+        "base",
+    )
+    (work / "tracked.txt").write_text("base\n")
+    _git(work, "add", "tracked.txt")
+    _git(work, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "base2")
+    for rel, content in files.items():
+        (work / rel).parent.mkdir(parents=True, exist_ok=True)
+        (work / rel).write_text(content)
+    url = "https://x-access-token:SENTINEL_TOKEN@github.com/o/r.git"
+    env = {
+        "PATH": "/usr/bin:/bin:/usr/local/bin",
+        "HOME": str(tmp_path),
+        "GH_TOKEN_PUSH": "SENTINEL_TOKEN",
+        "GH_REPOSITORY": "o/r",
+        "RUN_ID": "1",
+        "RUN_ATTEMPT": "1",
+        "AGENT_BRANCH": "atlas/agent-1-1",
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": f"url.{bare}.insteadOf",
+        "GIT_CONFIG_VALUE_0": url,
+    }
+    _git(work, "remote", "add", "origin", "https://example.invalid/placeholder.git")
+    proc = subprocess.run(
+        ["bash", "-e", "-o", "pipefail", "-c", _step(PUSH)["run"]],
+        cwd=work,
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=60,
+    )
+    return proc, work, bare
+
+
+def test_untracked_only_agent_output_is_pushed(tmp_path):
+    proc, _work, bare = _run_push(tmp_path, {"tests/unit/test_new.py": "def test_x():\n    pass\n"})
+    assert proc.returncode == 0, proc.stderr
+    assert "nothing to push" not in proc.stdout
+    shown = _git(bare, "show", "atlas/agent-1-1:tests/unit/test_new.py")
+    assert "def test_x" in shown
+
+
+def test_modified_tracked_output_is_pushed_and_token_does_not_linger(tmp_path):
+    proc, work, bare = _run_push(tmp_path, {"tracked.txt": "changed\n"})
+    assert proc.returncode == 0, proc.stderr
+    assert _git(bare, "show", "atlas/agent-1-1:tracked.txt") == "changed"
+    assert "SENTINEL_TOKEN" not in _git(work, "remote", "get-url", "origin")
+    assert "SENTINEL_TOKEN" not in (work / ".git" / "config").read_text()
+
+
+def test_no_changes_pushes_nothing(tmp_path):
+    proc, _work, bare = _run_push(tmp_path, {})
+    assert proc.returncode == 0 and "nothing to push" in proc.stdout
+    refs = subprocess.run(
+        ["git", "for-each-ref"], cwd=bare, capture_output=True, text=True, check=True
+    ).stdout
+    assert "atlas/agent-1-1" not in refs
