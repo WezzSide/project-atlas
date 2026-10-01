@@ -1,0 +1,77 @@
+{
+  "package_version": 1,
+  "task_id": "ATLAS-DEVQ-0001",
+  "execution_id": "ATLAS-DEVQ-0001-E6",
+  "work_seal": "3eea9b4d1b95e22e1593861266230debbf7e287843f9d40a01770fb68e9a0d48",
+  "repository": "WezzSide/project-atlas",
+  "base_revision": "01f04329283dfe2088a80d602f99c4b29856081f",
+  "allowed_paths": [
+    "src/project_atlas/graph_projections.py",
+    "tests/unit/"
+  ],
+  "forbidden_paths": [
+    "infra/atlas-runner/controller",
+    "src/project_atlas/ingestion.py",
+    "src/project_atlas/orchestration/autonomy/trust.py",
+    ".github/"
+  ],
+  "authority_reference": "OWNER-DIRECTIVE-2026-09-30-AUTONOMOUS-LOOP-FIRST-TASK",
+  "workflow": "atlas-agent-execute.yml",
+  "workflow_ref": "main",
+  "workflow_inputs": {
+    "task_prompt": "Atlas dev-loop task ATLAS-DEVQ-0001 | execution ATLAS-DEVQ-0001-E6 | seal 3eea9b4d1b95e22e1593861266230debbf7e287843f9d40a01770fb68e9a0d48\nRepository WezzSide/project-atlas; base revision 01f04329283dfe2088a80d602f99c4b29856081f; attempt 1/3; authority OWNER-DIRECTIVE-2026-09-30-AUTONOMOUS-LOOP-FIRST-TASK.\nFix GitHub issue #757 (F14) in src/project_atlas/graph_projections.py. In the canonical promotion loop, a read-only output directory (staged.write_bytes), an unreadable existing target (path.read_bytes() == plan[path]) and ENAMETOOLONG (path.exists() and not path.is_file()) currently escape as raw OSError; each must raise GraphProjectionError naming the path, mirroring the existing F11 unwritable-note-directory:<Type>:<path> pattern. Assert on the measured raised exception class, never on hard-coded platform-coupled strings. Add a new test file tests/unit/test_as_obsidian_capture_001_f14_write_boundary.py.\nONLY modify paths under: src/project_atlas/graph_projections.py, tests/unit/.\nNEVER modify: infra/atlas-runner/controller, src/project_atlas/ingestion.py, src/project_atlas/orchestration/autonomy/trust.py, .github/.\nAcceptance (task-specific, all required; run them and keep them passing):\n  - issue #757 F14: read-only dir, unreadable target and ENAMETOOLONG raise GraphProjectionError naming the path\n  - task-specific tests (graph_projections, F11 boundary, new F14 test) pass; new F14 tests fail on base and pass on head\n  - ruff and mypy clean on changed files\n  - infra/atlas-runner tests are corroborating only, never sufficient\n  - run: PYTHONPATH=src python -m pytest tests/unit/test_as_graph_005_projections.py tests/unit/test_as_graph_005_adversarial.py tests/unit/test_as_obsidian_capture_001_f11_mkdir_boundary.py -q --no-cov\n  - run: PYTHONPATH=src python -m pytest tests/unit -k 'f14 or graph_projection' -q --no-cov\n  - run: python -m ruff check src/project_atlas/graph_projections.py tests/unit\n  - run: python -m mypy src/project_atlas/graph_projections.py\nNew tests must fail on the base revision and pass after your change. The infra runner tests alone are NOT sufficient acceptance for this task.",
+    "base_branch": "main",
+    "agent_type": "claude"
+  },
+  "workflow_inputs_sha256": "346287ebdb382b3ed014674b5c357f750540b563d78645ef4083c12510e2e503",
+  "expected_agent_branch_pattern": "^atlas/agent-([0-9]+)-([0-9]+)$",
+  "acceptance": {
+    "contract": [
+      "issue #757 F14: read-only dir, unreadable target and ENAMETOOLONG raise GraphProjectionError naming the path",
+      "task-specific tests (graph_projections, F11 boundary, new F14 test) pass; new F14 tests fail on base and pass on head",
+      "ruff and mypy clean on changed files",
+      "infra/atlas-runner tests are corroborating only, never sufficient"
+    ],
+    "commands": [
+      "PYTHONPATH=src python -m pytest tests/unit/test_as_graph_005_projections.py tests/unit/test_as_graph_005_adversarial.py tests/unit/test_as_obsidian_capture_001_f11_mkdir_boundary.py -q --no-cov",
+      "PYTHONPATH=src python -m pytest tests/unit -k 'f14 or graph_projection' -q --no-cov",
+      "python -m ruff check src/project_atlas/graph_projections.py tests/unit",
+      "python -m mypy src/project_atlas/graph_projections.py"
+    ],
+    "note": "infra/atlas-runner tests are corroborating evidence only"
+  },
+  "result_discovery_contract": {
+    "run": "single workflow_dispatch run of atlas-agent-execute.yml on main created after the write-ahead DISPATCH record; ambiguity => refuse",
+    "branch": "atlas/agent-<run_id>-<run_attempt>; head sha = result revision; tree via git commit; merge-base with the sealed base must equal the base; changed paths must lie within allowed_paths and outside forbidden_paths",
+    "evidence_artifact": "atlas-agent-execute-evidence",
+    "ingestion": "ingest_report -> Crosswalk-bound ResultRecord"
+  },
+  "verification_profile": {
+    "profile": "github_hosted",
+    "workflow": "atlas-runner-verify.yml",
+    "report_artifact": "atlas-verification-report",
+    "policy": "PASS iff verifier verdict VERIFIED for the source run AND every REQUIRED check (control-plane + the 3 quality jobs) is present, completed and success on the exact result head, and no other check failed (draft evidence PR opened by the adapter); UNESTABLISHED or missing/in-progress checks => no verdict",
+    "required_checks": [
+      "control-plane",
+      "quality (ubuntu-latest, 3.12, full)",
+      "quality (ubuntu-latest, 3.13, compat)",
+      "quality (windows-latest, 3.12, windows)"
+    ]
+  },
+  "failure_ceiling": {
+    "max_attempts": 3,
+    "repair_base": "previous result branch"
+  },
+  "abort_conditions": [
+    "main is not at the sealed base revision before dispatch",
+    "run correlation ambiguous (correlation is serialised: one unbound dispatch at a time; no foreign/manual dispatch of atlas-agent-execute during the run)",
+    "result branch moves after ingestion",
+    "result touches forbidden or out-of-scope paths",
+    "verifier verdict REJECTED/UNESTABLISHED repeatedly or attempt ceiling reached"
+  ],
+  "rollback": "delete the atlas/agent-* branch and close the draft evidence PR; nothing is merged and nothing touches main",
+  "secrets": {
+    "ANTHROPIC_API_KEY": "CONFIRMED_PRESENT (owner statement 2026-09-30; value never seen)"
+  },
+  "grant_required": "ONE_WORKFLOW_DISPATCH_GRANT"
+}

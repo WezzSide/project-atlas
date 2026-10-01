@@ -107,11 +107,15 @@ class Planner:
     def select(self, items: list[QueueItem]) -> Selection:
         return select_next(items, completed=self.completed, blocked=self.blocked)
 
-    def dispatch(self, item: QueueItem, **work_fields: object) -> WorkItem:
+    def dispatch(
+        self, item: QueueItem, *, execution_ordinal: int = 1, **work_fields: object
+    ) -> WorkItem:
         """Materialize + publish the sealed work for an admissible queue item."""
         sel = self.select([item])
         if sel.selected is None:
             raise PlannerError(f"task not admissible: {sel.skipped}")
+        if execution_ordinal < 1:
+            raise PlannerError("execution_ordinal must be >= 1")
         if item.task_id in self.lineages or item.task_id in self._by_task:
             raise PlannerError("lineage/task id already in use")
         if _REPAIR_SUFFIX.search(item.task_id):
@@ -127,7 +131,7 @@ class Planner:
             raise PlannerError(f"work_fields may not override reserved keys: {sorted(reserved)}")
         work = make_work(
             task_id=item.task_id,
-            execution_id=f"{item.task_id}-E1",
+            execution_id=f"{item.task_id}-E{execution_ordinal}",
             lineage_root=item.task_id,
             required_role=Role.IMPLEMENTER,
             max_attempts=item.max_attempts,
@@ -254,6 +258,11 @@ class Planner:
             self._terminal(st, Phase.OWNER_REQUIRED, decision.reason)
         else:
             self._terminal(st, Phase.BLOCKED, decision.reason)
+
+    def fail_execution(self, task_id: str, reason: str) -> None:
+        """The remote execution itself failed (no result): block that lineage only."""
+        st = self._lineage_for(task_id)
+        self._terminal(st, Phase.BLOCKED, f"EXECUTION_FAILED:{reason}")
 
     def _terminal(self, st: LineageState, phase: Phase, reason: str) -> None:
         st.phase, st.reason = phase, reason
