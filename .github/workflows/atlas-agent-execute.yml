@@ -595,7 +595,9 @@ jobs:
           branch="atlas/agent-${RUN_ID}-${RUN_ATTEMPT}"
           case "${branch}" in atlas/agent-[0-9]*-[0-9]*) ;; *) echo "bad branch name" >&2; exit 2 ;; esac
           [ "${branch}" = "${AGENT_BRANCH}" ] || { echo "agent branch mismatch" >&2; exit 2; }
-          case "${NUM_TURNS}${DENIALS}${MAX_TURNS}" in (*[!0-9]*|"") echo "bad counters" >&2; exit 2 ;; esac
+          for v in "${NUM_TURNS}" "${DENIALS}" "${MAX_TURNS}"; do
+            case "${v}" in (*[!0-9]*|"") echo "bad counters" >&2; exit 2 ;; esac
+          done
           persisted=false
           if [ -n "$(git status --porcelain)" ]; then
             git config user.name "atlas-agent-executor"

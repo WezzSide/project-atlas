@@ -379,6 +379,7 @@ def test_branch_mismatch_and_bad_counters_fail_closed(tmp_path):
     run = _step(PERSIST)["run"]
     base = {
         "PATH": "/usr/bin:/bin",
+        "HOME": str(tmp_path),
         "GH_REPOSITORY": "o/r",
         "RUN_ID": "7",
         "RUN_ATTEMPT": "1",
@@ -390,15 +391,28 @@ def test_branch_mismatch_and_bad_counters_fail_closed(tmp_path):
         "GITHUB_STEP_SUMMARY": str(tmp_path / "s"),
         "GH_TOKEN_PUSH": "SENTINEL_TOKEN",
     }
-    subprocess.run(["git", "init", "-q", str(tmp_path / "w")], check=True)
-    for over in ({"AGENT_BRANCH": "main"}, {"NUM_TURNS": "25;rm"}, {"DENIALS": ""}):
+    w = tmp_path / "w"
+    subprocess.run(["git", "init", "-q", str(w)], check=True)
+    (w / "tracked.txt").write_text("base\n")
+    _git(w, "add", "tracked.txt")
+    _git(w, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "base")
+    (w / "dirty.txt").write_text("dirty\n")  # dirty tree: only validation can stop the step
+    cases = (
+        {"AGENT_BRANCH": "main"},
+        {"NUM_TURNS": "25;rm"},
+        {"NUM_TURNS": ""},
+        {"DENIALS": ""},
+        {"MAX_TURNS": ""},
+    )
+    for over in cases:
         proc = subprocess.run(
             ["bash", "-e", "-o", "pipefail", "-c", run],
-            cwd=tmp_path / "w",
+            cwd=w,
             capture_output=True,
             text=True,
             env=base | over,
             timeout=30,
         )
-        assert proc.returncode != 0, over
+        assert proc.returncode == 2, (over, proc.stderr)
         assert not (tmp_path / "atlas-envelope-salvage.json").exists()
+        assert _git(w, "rev-list", "--count", "HEAD") == "1"  # nothing committed
