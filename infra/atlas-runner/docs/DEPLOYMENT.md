@@ -94,6 +94,27 @@ line, the health JSON names the selected image ID, `atlas-runner version` prints
 bound image, job evidence `runner_image_digest` is the content ID of the image used,
 and the deployment receipt carries the `worker_image` fields.
 
+Build network: the host's `DOCKER-USER` guard default-DROPs egress from every
+container bridge except the dedicated worker bridge (`atlas-runner-firewall`).
+The build therefore runs on that same network (`atlas-runner-net`, override
+`ATLAS_WORKER_NET`) using the classic builder (`DOCKER_BUILDKIT=0`; BuildKit only
+accepts `default|none|host` for `--network`). No new firewall permit and no host
+networking. A seconds-long preflight (a hardened container on that network opening
+`deb.debian.org:80`) fails the deploy closed with a diagnosable message before any
+build; apt waits in the Dockerfile are bounded. (Live run 36764955502 failed closed
+here: the default build bridge could not resolve `deb.debian.org`; nothing was
+activated.)
+
+Technical debt (owner-recorded, bounded transitional compatibility): the classic
+builder is deprecated by Docker. The deploy probes it (`docker build -` on a
+`FROM scratch` stdin Dockerfile) before the real build and fails fast with a
+diagnostic - no silent fallback to BuildKit, another network mode or host
+networking - if the host no longer supports it or silently uses BuildKit.
+Follow-up after the first autonomous dev cycle: `ATLAS_BUILDKIT_NETWORK_MODERNIZATION`
+(evaluate a modern BuildKit/buildx design with scoped networking, e.g. a
+docker-container builder on a scoped network and/or a dedicated BuildKit bridge with
+its own policy). Deliberately NOT part of this incident closure.
+
 Operational notes: the host needs registry egress for the base image pull at
 build time (a blocked pull fails the deploy closed). Old revision images are kept
 (they are the rollback targets); prune them manually when disk is tight, never the

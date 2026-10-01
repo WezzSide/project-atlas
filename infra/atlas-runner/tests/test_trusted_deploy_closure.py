@@ -162,7 +162,11 @@ class FakeDocker:
     Images are files under <state>/images holding ``<image-id> <revision-label>``.
     Every build yields a NEW image ID so a reused image is distinguishable from a
     rebuilt one. ``FAKE_DOCKER_PY`` selects the interpreter version the image
-    reports; ``FAKE_DOCKER_BUILD_FAILS=1`` makes ``docker build`` fail.
+    reports; ``FAKE_DOCKER_BUILD_FAILS=1`` makes ``docker build`` fail;
+    ``FAKE_DOCKER_NET_FAILS=1`` fails the build-network preflight;
+    ``FAKE_DOCKER_CLASSIC_UNSUPPORTED=1`` simulates a host without the classic builder;
+    like the real legacy builder, the fake rejects a probe Dockerfile that is only
+    ``FROM scratch``.
     """
 
     def __init__(self, tmp_path: Path):
@@ -180,18 +184,37 @@ class FakeDocker:
             '    tag="${@: -1}"; f="$S/images/${tag}"\n'
             '    [ -f "$f" ] || exit 1; cat "$f" ;;\n'
             "  build)\n"
-            '    [ "${FAKE_DOCKER_BUILD_FAILS:-0}" = 1 ] && { echo "build failed" >&2; exit 1; }\n'
+            '    echo "${DOCKER_BUILDKIT:-unset}" >> "$S/build-buildkit.log"\n'
             '    tag=; label=\n'
             '    while [ $# -gt 0 ]; do case "$1" in\n'
             '      --tag) tag="$2"; shift 2 ;;\n'
             '      --label) label="${2#*=}"; shift 2 ;;\n'
             '      *) shift ;;\n'
             "    esac; done\n"
+            '    if [ -z "$tag" ]; then  # classic-builder capability probe (stdin Dockerfile)\n'
+            '      df="$(cat)"; [ "$(printf "%s\\n" "$df" | grep -c .)" -ge 2 ] || {\n'
+            '        echo "No image was generated. Is your Dockerfile empty?" >&2\n'
+            '        exit 1\n'
+            "      }\n"
+            '      if [ "${FAKE_DOCKER_CLASSIC_UNSUPPORTED:-0}" = 1 ]; then\n'
+            '        echo "the legacy builder is not supported; BuildKit is required" >&2; exit 1\n'
+            "      fi\n"
+            '      echo "sha256:$(printf probe | sha256sum | cut -c1-64)"; exit 0\n'
+            "    fi\n"
+            '    [ "${FAKE_DOCKER_BUILD_FAILS:-0}" = 1 ] && { echo "build failed" >&2; exit 1; }\n'
             '    n="$(cat "$S/counter" 2>/dev/null || echo 0)"; n=$((n+1))\n'
             '    echo "$n" > "$S/counter"\n'
             '    id="sha256:$(printf "%s-%s" "$tag" "$n" | sha256sum | cut -c1-64)"\n'
             '    echo "$id $label" > "$S/images/${tag}" ;;\n'
+            "  rmi) exit 0 ;;\n"
+            "  version) echo 0.0.0-fake ;;\n"
             "  run)\n"
+            '    case "$*" in *create_connection*)\n'
+            '      if [ "${FAKE_DOCKER_NET_FAILS:-0}" = 1 ]; then\n'
+            '        echo "Temporary failure resolving deb.debian.org" >&2; exit 1\n'
+            "      fi\n"
+            "      exit 0 ;;\n"
+            "    esac\n"
             '    ver="${FAKE_DOCKER_PY:-3.12.14}"; IFS=. read -r a b _ <<<"$ver"\n'
             '    if [ "$a" -gt 3 ] || { [ "$a" -eq 3 ] && [ "$b" -ge 12 ]; }; then\n'
             '      echo "$ver"; exit 0\n'
