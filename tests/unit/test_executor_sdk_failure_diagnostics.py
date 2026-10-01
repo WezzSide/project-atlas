@@ -59,7 +59,7 @@ def _step(name: str) -> dict:
 
 def _script() -> str:
     run = _step(DIAG)["run"]
-    head = "python3 -I - <<'ATLAS_SDK_DIAG'\n"
+    head = "\"$PY\" -I -S - <<'ATLAS_SDK_DIAG'\n"
     assert head in run
     body = run.split(head, 1)[1]
     return body.rsplit("\nATLAS_SDK_DIAG", 1)[0]
@@ -77,7 +77,7 @@ def _exec(tmp: Path, *, probe_url: str = LOCAL_PROBE, outcome: str = "failure"):
     )
     env = {"DIAG_TEMP": str(tmp), "AGENT_OUTCOME": outcome, "PATH": ""}
     proc = subprocess.run(
-        [sys.executable, "-I", "-"],
+        [sys.executable, "-I", "-S", "-"],
         input=script,
         text=True,
         capture_output=True,
@@ -290,7 +290,7 @@ def test_environment_cannot_suppress_the_probe(tmp_path):
         "SKIP_PROBE": "1",
     }
     subprocess.run(
-        [sys.executable, "-I", "-"],
+        [sys.executable, "-I", "-S", "-"],
         input=script,
         text=True,
         capture_output=True,
@@ -416,7 +416,7 @@ def test_overflow_falls_back_to_a_minimal_valid_object(tmp_path):
     )
     env = {"DIAG_TEMP": str(tmp_path), "AGENT_OUTCOME": "failure", "PATH": ""}
     subprocess.run(
-        [sys.executable, "-I", "-"],
+        [sys.executable, "-I", "-S", "-"],
         input=script,
         text=True,
         capture_output=True,
@@ -449,3 +449,42 @@ def test_unknown_agent_outcome_is_bounded(tmp_path):
     (tmp_path / "claude-execution-output.json").write_text("[]", encoding="utf-8")
     d = _run(tmp_path, None, outcome="QZX_MARKER_NESTED")
     assert d["agent_step_outcome"] == "other"
+
+
+def test_interpreter_is_resolved_by_fixed_path_not_the_agent_writable_path():
+    run = _step(DIAG)["run"]
+    assert "/usr/bin/python3" in run and '"$PY" -I -S -' in run
+    assert "\npython3 " not in run and " python3 -I" not in run
+
+
+def test_a_hijacked_path_python_cannot_forge_or_suppress_the_diagnostic(tmp_path):
+    if not Path("/usr/bin/python3").exists() and not Path("/usr/local/bin/python3").exists():
+        return  # fixed-path lookup is covered by the contract test on hosts without them
+    fake = tmp_path / "bin"
+    fake.mkdir()
+    (fake / "python3").write_text("#!/bin/sh\necho FORGED_BY_PATH_HIJACK\nexit 0\n")
+    (fake / "python3").chmod(0o755)
+    run = _step(DIAG)["run"].replace(
+        'PROBE_URL = "https://api.anthropic.com/"', f'PROBE_URL = "{LOCAL_PROBE}"'
+    )
+    (tmp_path / "claude-execution-output.json").write_text("[]", encoding="utf-8")
+    env = {
+        "DIAG_TEMP": str(tmp_path),
+        "AGENT_OUTCOME": "failure",
+        "PATH": f"{fake}:/usr/bin:/bin",
+    }
+    proc = subprocess.run(
+        ["bash", "-e", "-o", "pipefail", "-c", run],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=60,
+    )
+    assert proc.returncode == 0 and "FORGED_BY_PATH_HIJACK" not in proc.stdout
+    d = json.loads((tmp_path / "claude-sdk-diagnostic.json").read_text(encoding="utf-8"))
+    assert d["schema"] == 1 and d["diagnostic_truncated"] is False
+
+
+def test_model_pattern_admits_only_known_model_families():
+    script = _script()
+    assert "claude-(opus|sonnet|haiku|fable|mythos)-" in script
