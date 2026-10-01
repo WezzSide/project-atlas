@@ -14,13 +14,19 @@ Layout::
     <root>/<CHANNEL>/claimed/<seal>.claim.json    who claimed it
 
 Guarantees: atomic publish (temp + ``os.link``: never overwrites, never half-written);
-consume-once across concurrent claimers (``os.rename`` into ``claimed/`` succeeds for exactly
-one); seal re-check on every claim (tamper => ``ContractError``, record left in place, never
-consumed); same role/channel and executor-vs-verifier rules as the reference backend.
+consume-once across concurrent claimers: the ownership transition is the EXCLUSIVE CREATION of
+the ``claimed/<seal>.json`` name with ``os.link`` (it fails with ``FileExistsError`` for every
+claimer but one, on POSIX and on Windows). ``os.rename`` is deliberately NOT the ownership
+primitive: on Windows it opens the source by name and renames by handle, so several claimers that
+opened the same file before the first rename completed can each report success. Removing the
+pending name afterwards is mere cleanup of the winner's own record and never decides ownership.
+Seal re-check on every claim (tamper => ``ContractError``, record left in place, never consumed);
+same role/channel and executor-vs-verifier rules as the reference backend.
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import tempfile
@@ -70,12 +76,40 @@ def _read_wire(path: Path) -> str:
     return _retry_transient(lambda: path.read_text(encoding="utf-8"), still_valid=path.exists)
 
 
-def _claim_rename(src: Path, dest: Path) -> None:
-    """Consume-once rename; a transient sharing violation is retried only while the source still
-    exists and the destination slot is still free (a blocked slot is never retried)."""
+def _claim_link(src: Path, dest: Path) -> None:
+    """Exclusive-create ``dest`` as a hard link of ``src``: the one atomic ownership transition.
+
+    Exactly one caller can create the name; everyone else gets ``FileExistsError`` (or
+    ``FileNotFoundError`` once the pending name is gone). A transient ``PermissionError`` is
+    retried only while the source still exists and the destination slot is still free.
+    """
     _retry_transient(
-        lambda: os.rename(src, dest), still_valid=lambda: src.exists() and not dest.exists()
+        lambda: os.link(src, dest), still_valid=lambda: src.exists() and not dest.exists()
     )
+
+
+def _release_pending(path: Path) -> None:
+    """Best-effort removal of the winner's own pending name (never decides ownership).
+
+    A concurrent claimer may still hold the pending file open for reading; on Windows that makes
+    the delete fail transiently, so retry boundedly. If it still cannot be removed, the record
+    stays in ``claimed/`` (ownership is already decided) and the leftover pending name is inert:
+    every later claimer loses the exclusive create.
+    """
+    with contextlib.suppress(OSError):
+        _retry_transient(path.unlink, still_valid=path.exists)
+
+
+def _lost_race(path: Path, dest: Path) -> bool:
+    """After ``FileExistsError``: is ``dest`` this record's claim, not a blocked slot?"""
+    if not path.exists():
+        return True  # the winner already removed the pending name
+    try:
+        return dest.is_file() and os.path.samefile(path, dest)
+    except FileNotFoundError:
+        return True  # vanished between the checks: the winner finished
+    except OSError:
+        return False
 
 
 class SpoolTransport:
@@ -126,6 +160,8 @@ class SpoolTransport:
                     bad = ""
             except FileNotFoundError:
                 continue  # another claimer consumed it between listing and reading
+            except PermissionError:
+                continue  # persistent contention is never evidence of a hostile record: leave it
             except (OSError, ValueError, ContractError, RecursionError) as exc:
                 bad = f"unreadable or undecodable spool file: {type(exc).__name__}"
             if bad:
@@ -142,14 +178,24 @@ class SpoolTransport:
                     raise TransportError("executor identity may not claim its own verification")
             dest = d / _CLAIMED / path.name
             try:
-                _claim_rename(path, dest)  # exactly one claimer wins
+                _claim_link(path, dest)  # THE linearization point: exactly one claimer creates it
             except FileNotFoundError:
-                continue  # lost the race to another claimer
-            except OSError:
-                # the claimed/ slot is blocked (directory, permissions): never retry it forever
+                continue  # lost the race: the pending name is already gone
+            except (FileExistsError, PermissionError) as exc:
+                if not isinstance(exc, FileExistsError) and not dest.exists():
+                    continue  # persistent contention: the record stays pending, nothing rejected
+                if _lost_race(path, dest):
+                    continue  # another claimer owns it; a lost race never becomes a second claim
+                # the claimed/ slot holds something that is not this record's claim: blocked slot
                 if self._park(d, path):
                     raise TransportError("record could not be claimed and was parked") from None
                 continue
+            except OSError:
+                # the claimed/ slot is unusable (e.g. no hard links): never retry it forever
+                if self._park(d, path):
+                    raise TransportError("record could not be claimed and was parked") from None
+                continue
+            _release_pending(path)  # cleanup only; ownership was decided by the link above
             meta = d / _CLAIMED / f"{rec.seal}.claim.json"
             tmp = meta.with_suffix(".tmp")
             try:
