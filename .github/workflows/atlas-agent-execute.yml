@@ -129,7 +129,7 @@ jobs:
           base_branch: ${{ env.AGENT_BRANCH }}
           claude_args: |
             --max-turns 20
-            --allowedTools Edit Read Write Glob Grep Bash(pytest:*) Bash(ruff:*) Bash(bash:*)
+            --allowedTools Edit Read Write Glob Grep Bash(pytest:*) Bash(ruff:*) Bash(mypy:*) Bash(bash:*)
 
       # EXECUTOR_SDK_OBSERVABILITY: the pinned action writes the full SDK message
       # sequence to $RUNNER_TEMP/claude-execution-output.json, which runner cleanup
@@ -460,6 +460,172 @@ jobs:
           git push -u origin "HEAD:${AGENT_BRANCH}"
           # do not leave the token in .git/config for the (agent-influenced) steps that follow
           git remote set-url origin "https://github.com/${GH_REPOSITORY}.git"
+
+      # EXECUTOR_ENVELOPE_DURABILITY: COMPLETED_MODEL_SUCCESS => RESULT_BYTES_DURABLY_RECOVERABLE.
+      # The pinned action fails its own step when a successful SDK result used more turns than
+      # --max-turns (live run 36905529693, ATLAS-DEVQ-0002-E1: 25 turns > 20, result subtype
+      # success, is_error false). The ordinary push step is then skipped and the finished work
+      # dies with the ephemeral runner. A turn budget is an execution POLICY; a policy
+      # rejection must never destroy a completed model result. The two steps below salvage ONLY
+      # that structurally-identified case. The job stays RED (the agent step is not masked), so
+      # EXECUTOR_SUCCESS is never claimed; the salvaged branch is candidate persistence only and
+      # implies no acceptance, verification, integration or merge authority.
+      #
+      # Classification reads ONLY the bounded, sanitized diagnostic written by the previous
+      # steps (fixed-pattern numbers/booleans/enums); never free text, never the raw
+      # transcript, and no secrets. Any missing/malformed/ambiguous field means NO salvage.
+      # MAX_TURNS below must equal the --max-turns above (enforced by a regression test; it
+      # is a literal because step env wins over anything an agent writes to GITHUB_ENV).
+      - name: Classify envelope-rejected model success (structured fields only)
+        id: salvage_classify
+        if: ${{ failure() && steps.agent.outcome == 'failure' && steps.sdk_diag.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          DIAG_TEMP: ${{ runner.temp }}
+          MAX_TURNS: "20"
+        run: |
+          set -uo pipefail
+          PY=""
+          for c in /usr/bin/python3 /usr/local/bin/python3; do
+            if [ -x "$c" ]; then PY="$c"; break; fi
+          done
+          if [ -z "$PY" ]; then
+            echo "salvage=false" >> "${GITHUB_OUTPUT}"
+            echo "[envelope-salvage] NOT_SALVAGED:no_system_python"
+            exit 0
+          fi
+          "$PY" -I -S - <<'ATLAS_ENVELOPE_CLASSIFY'
+          import json
+          import os
+
+          TMP = os.environ.get("DIAG_TEMP") or ""
+          OUT = os.environ.get("GITHUB_OUTPUT") or ""
+          MAX_BYTES = 16 * 1024 + 1
+          REASONS = (
+              "no_diagnostic", "diagnostic_unreadable", "diagnostic_not_object", "bad_schema",
+              "diagnostic_truncated", "parse_error_present", "agent_outcome_not_failure",
+              "no_result", "subtype_not_success", "is_error_not_false",
+              "terminal_reason_not_completed", "stop_reason_not_end_turn", "errors_present",
+              "turns_not_numeric", "within_turn_budget", "bad_budget",
+          )
+
+
+          def is_int(v):
+              return isinstance(v, int) and not isinstance(v, bool)
+
+
+          def decide():
+              """(reason, num_turns, denials): reason is None only for the salvageable class."""
+              try:
+                  max_turns = int(os.environ.get("MAX_TURNS", ""))
+              except ValueError:
+                  return "bad_budget", 0, 0
+              if not (0 < max_turns <= 10000) or not TMP:
+                  return "bad_budget", 0, 0
+              path = os.path.join(TMP, "claude-sdk-diagnostic.json")
+              if not os.path.isfile(path):
+                  return "no_diagnostic", 0, 0
+              try:
+                  if os.path.getsize(path) > MAX_BYTES:
+                      return "diagnostic_unreadable", 0, 0
+                  with open(path, encoding="utf-8") as fh:
+                      d = json.load(fh)
+              except Exception:  # noqa: BLE001 - fail closed on anything odd
+                  return "diagnostic_unreadable", 0, 0
+              if not isinstance(d, dict):
+                  return "diagnostic_not_object", 0, 0
+              if d.get("schema") != 1 or not is_int(d.get("schema")):
+                  return "bad_schema", 0, 0
+              if d.get("diagnostic_truncated") is not False:
+                  return "diagnostic_truncated", 0, 0
+              if "parse_error" in d:
+                  return "parse_error_present", 0, 0
+              if d.get("agent_step_outcome") != "failure":
+                  return "agent_outcome_not_failure", 0, 0
+              r = d.get("result")
+              if not isinstance(r, dict):
+                  return "no_result", 0, 0
+              if r.get("subtype") != "success":
+                  return "subtype_not_success", 0, 0
+              if r.get("is_error") is not False:
+                  return "is_error_not_false", 0, 0
+              if r.get("terminal_reason") != "completed":
+                  return "terminal_reason_not_completed", 0, 0
+              if r.get("stop_reason") != "end_turn":
+                  return "stop_reason_not_end_turn", 0, 0
+              if not is_int(r.get("errors_count")) or r.get("errors_count") != 0:
+                  return "errors_present", 0, 0
+              turns = r.get("num_turns")
+              if not is_int(turns) or turns < 0 or turns > 100000:
+                  return "turns_not_numeric", 0, 0
+              if turns <= max_turns:
+                  return "within_turn_budget", turns, 0
+              den = r.get("permission_denials_count")
+              return None, turns, den if is_int(den) and 0 <= den <= 100000 else 0
+
+
+          reason, turns, den = decide()
+          assert reason is None or reason in REASONS
+          lines = ["salvage=" + ("true" if reason is None else "false")]
+          if reason is None:
+              lines += [f"num_turns={turns}", f"permission_denials={den}"]
+          if OUT:
+              with open(OUT, "a", encoding="utf-8") as fh:
+                  fh.write("\n".join(lines) + "\n")
+          print("[envelope-salvage] " + ("CLASSIFIED:ENVELOPE_REJECTED_MODEL_SUCCESS" if reason is None else "NOT_SALVAGED:" + reason))
+          ATLAS_ENVELOPE_CLASSIFY
+
+      - name: Persist envelope-rejected result on the dedicated branch (candidate only)
+        id: salvage_persist
+        if: ${{ failure() && steps.agent.outcome == 'failure' && steps.salvage_classify.outputs.salvage == 'true' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN_PUSH: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          NUM_TURNS: ${{ steps.salvage_classify.outputs.num_turns }}
+          DENIALS: ${{ steps.salvage_classify.outputs.permission_denials }}
+          MAX_TURNS: "20"
+          EVIDENCE_DIR: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          # the token is only ever in the remote URL for the push; restore on ANY exit
+          trap 'git remote set-url origin "https://github.com/${GH_REPOSITORY}.git" >/dev/null 2>&1 || true' EXIT
+          branch="atlas/agent-${RUN_ID}-${RUN_ATTEMPT}"
+          case "${branch}" in atlas/agent-[0-9]*-[0-9]*) ;; *) echo "bad branch name" >&2; exit 2 ;; esac
+          [ "${branch}" = "${AGENT_BRANCH}" ] || { echo "agent branch mismatch" >&2; exit 2; }
+          case "${NUM_TURNS}${DENIALS}${MAX_TURNS}" in (*[!0-9]*|"") echo "bad counters" >&2; exit 2 ;; esac
+          persisted=false
+          if [ -n "$(git status --porcelain)" ]; then
+            git config user.name "atlas-agent-executor"
+            git config user.email "atlas-agent-executor@users.noreply.github.com"
+            git add -A
+            git commit -m "atlas-agent: envelope-rejected model result persisted as candidate only (run ${RUN_ID} attempt ${RUN_ATTEMPT}; turn budget exceeded; not accepted, not verified)"
+            git remote set-url origin "https://x-access-token:${GH_TOKEN_PUSH}@github.com/${GH_REPOSITORY}.git"
+            git push -u origin "HEAD:${branch}"
+            persisted=true
+          else
+            echo "[envelope-salvage] no changes produced; no result commit created"
+          fi
+          head="$(git rev-parse HEAD)"
+          tree="$(git rev-parse 'HEAD^{tree}')"
+          case "${head}${tree}" in (*[!0-9a-f]*) echo "bad object id" >&2; exit 2 ;; esac
+          if [ "${persisted}" = "true" ]; then pb="\"${branch}\""; else pb="null"; fi
+          printf '{"schema":1,"classification":"ENVELOPE_REJECTED_MODEL_SUCCESS","execution_policy":"TURN_BUDGET_EXCEEDED","run_id":%s,"run_attempt":%s,"num_turns":%s,"max_turns":%s,"permission_denials_count":%s,"result_persisted":%s,"persisted_branch":%s,"candidate_head":"%s","candidate_tree":"%s","acceptance":"NOT_RUN","verification":"NOT_VERIFIED","integration":"NOT_AUTHORIZED"}\n' \
+            "${RUN_ID}" "${RUN_ATTEMPT}" "${NUM_TURNS}" "${MAX_TURNS}" "${DENIALS}" "${persisted}" "${pb}" "${head}" "${tree}" \
+            > "${EVIDENCE_DIR}/atlas-envelope-salvage.json"
+          echo "### Executor envelope salvage: persisted=${persisted} turns=${NUM_TURNS}>${MAX_TURNS} candidate only (not accepted, not verified, no merge authority)" >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload envelope salvage evidence
+        if: ${{ failure() && steps.agent.outcome == 'failure' && steps.salvage_persist.outcome == 'success' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: atlas-agent-envelope-salvage
+          path: ${{ runner.temp }}/atlas-envelope-salvage.json
+          if-no-files-found: warn
+          retention-days: 14
 
       # EXECUTOR_RESULT_DURABILITY: AGENT_SUCCESS => RESULT_BYTES_DURABLY_RECOVERABLE.
       # The commit/push of the dedicated branch runs IMMEDIATELY after the agent step
