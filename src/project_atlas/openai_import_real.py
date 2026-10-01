@@ -59,22 +59,31 @@ def import_openai_export(
     src = export_path.resolve()
     if not src.is_file():
         raise OpenAIRealImportError("oai-export-missing")
-    size = src.stat().st_size
+    # Bytes, not ``read_text``: text mode applies universal-newline
+    # translation, so a SHA-256 of the decoded string cannot verify
+    # ``source_path`` (#726). Hash and ``source_bytes`` must describe
+    # the same on-disk artifact. Decode only for parse/scan.
+    try:
+        raw = src.read_bytes()
+    except OSError as exc:
+        raise OpenAIRealImportError("oai-export-unreadable") from exc
+    size = len(raw)
     if size <= 0 or size > MAX_EXPORT_BYTES:
         raise OpenAIRealImportError("oai-export-size-out-of-range")
     lowered = src.name.lower()
     if any(x in lowered for x in (".env", "credential", "secret", "apikey", "api_key")):
         raise OpenAIRealImportError("oai-export-filename-forbidden")
-    text = src.read_text(encoding="utf-8")
-    if len(text.encode("utf-8")) > MAX_EXPORT_BYTES:
-        raise OpenAIRealImportError("oai-export-size-out-of-range")
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeError as exc:
+        raise OpenAIRealImportError("oai-export-unreadable") from exc
     findings = scan_text(text)
     if findings:
         raise OpenAIRealImportError("oai-export-secret-findings")
     turns = parse_chat_export(text)
     if not turns:
         raise OpenAIRealImportError("oai-export-no-turns")
-    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    digest = hashlib.sha256(raw).hexdigest()
     quarantine = quarantine_provider_output(
         vault,
         envelope_id=f"oai-real-{iid}",
