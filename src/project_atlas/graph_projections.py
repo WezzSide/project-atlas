@@ -611,13 +611,37 @@ def _promote(plan: dict[Path, bytes]) -> None:
                 raise GraphProjectionError(
                     f"unwritable-note-directory:{type(exc).__name__}:{path.parent}"
                 ) from exc
-            if path.exists() and not path.is_file():
-                raise GraphProjectionError(f"canonical-target-not-file:{path}")
-            if path.is_file() and path.read_bytes() == plan[path]:
-                continue
+            # F14: the remaining raw `OSError` sites in this loop -- a target
+            # that cannot be inspected (e.g. ENAMETOOLONG), an existing target
+            # that cannot be read, and a read-only output directory -- are
+            # contained the same way as the mkdir site above.
+            try:
+                is_file = path.is_file()
+                if not is_file and path.exists():
+                    raise GraphProjectionError(f"canonical-target-not-file:{path}")
+            except OSError as exc:
+                raise GraphProjectionError(
+                    f"uninspectable-canonical-target:{type(exc).__name__}:{path}"
+                ) from exc
+            if is_file:
+                try:
+                    unchanged = path.read_bytes() == plan[path]
+                except OSError as exc:
+                    raise GraphProjectionError(
+                        f"unreadable-canonical-target:{type(exc).__name__}:{path}"
+                    ) from exc
+                if unchanged:
+                    continue
             staged = path.with_name(f".{path.name}.{transaction}.atlas-stage")
             backup = path.with_name(f".{path.name}.{transaction}.atlas-backup")
-            staged.write_bytes(plan[path])
+            try:
+                staged.write_bytes(plan[path])
+            except OSError as exc:
+                with contextlib.suppress(OSError):
+                    staged.unlink(missing_ok=True)
+                raise GraphProjectionError(
+                    f"unwritable-canonical-target:{type(exc).__name__}:{path}"
+                ) from exc
             entries.append(
                 _PromotionEntry(
                     path=path,
