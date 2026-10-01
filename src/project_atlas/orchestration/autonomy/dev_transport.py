@@ -97,7 +97,7 @@ def decode(wire: str) -> Record:
         env = json.loads(wire)
         kind = RecordKind(env["kind"])
         rec: Record = _MODEL_FOR_KIND[kind].model_validate(env["body"])
-    except (ValueError, KeyError, TypeError) as exc:
+    except (ValueError, KeyError, TypeError, RecursionError) as exc:
         raise TransportError(f"undecodable record: {exc}") from exc
     rec.verify_seal()
     return rec
