@@ -20,7 +20,7 @@ from project_atlas.orchestration.autonomy.dev_fabric_adapter import (
 )
 
 TASK_ID = "ATLAS-DEVQ-0001"
-BASE = "40ad664e16bc7f88735ab3801fab7276da4ab08a"
+BASE = "b2f97ff268f0e995f1f49871944fbcaedc04a514"
 TASK_TESTS = (
     "PYTHONPATH=src python -m pytest tests/unit/test_as_graph_005_projections.py "
     "tests/unit/test_as_graph_005_adversarial.py "
@@ -43,7 +43,7 @@ STATEMENT = (
 def make_devq_0001_work() -> WorkItem:
     return make_work(
         task_id=TASK_ID,
-        execution_id=f"{TASK_ID}-E1",
+        execution_id=f"{TASK_ID}-E2",
         lineage_root=TASK_ID,
         repository="WezzSide/project-atlas",
         base_revision=BASE,

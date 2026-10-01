@@ -725,3 +725,16 @@ def test_planner_pump_survives_an_oserror_from_the_transport_without_spinning():
     p = Planner(Broken(), identity="vps3-plan", verifier_identities=(VER,))
     p.pump()
     assert Broken.calls <= 2 * 64 and p.quarantined
+
+
+def test_execution_ordinal_defaults_to_e1_and_yields_a_distinct_sealed_identity():
+    p1, p2 = planner(InMemoryTransport()), planner(InMemoryTransport())
+    w1 = p1.dispatch(qi("A"), **FIELDS)
+    w2 = p2.dispatch(qi("A"), execution_ordinal=2, **FIELDS)
+    assert w1.execution_id == "A-E1" and w2.execution_id == "A-E2"
+    assert w1.seal != w2.seal and w1.task_id == w2.task_id == "A"
+
+
+def test_execution_ordinal_below_one_is_refused():
+    with pytest.raises(PlannerError):
+        planner(InMemoryTransport()).dispatch(qi("A"), execution_ordinal=0, **FIELDS)
