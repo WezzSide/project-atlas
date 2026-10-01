@@ -216,6 +216,7 @@ def test_diagnostic_step_gets_no_secrets_and_runs_inline_not_from_the_checkout()
     assert step["env"] == {
         "AGENT_OUTCOME": "${{ steps.agent.outcome }}",
         "DIAG_TEMP": "${{ runner.temp }}",
+        "MAX_TURNS": "20",
     }
     assert "secrets." not in yaml.safe_dump(step)
     assert "infra/atlas-runner" not in step["run"] and "scripts/" not in step["run"]
@@ -228,7 +229,9 @@ def test_no_production_bypass_or_free_text_primitives_in_the_script():
     )
     for forbidden in ("repr(", "str(v", "error_text", "[:MAX_OUT]", "text[:"):
         assert forbidden not in script
-    assert "environ.get(" in script and script.count("os.environ") == 2  # DIAG_TEMP, AGENT_OUTCOME
+    assert (
+        "environ.get(" in script and script.count("os.environ") == 4
+    )  # DIAG_TEMP, AGENT_OUTCOME, MAX_TURNS, GITHUB_OUTPUT
 
 
 def test_only_the_sanitized_summary_is_uploaded_never_the_transcript():

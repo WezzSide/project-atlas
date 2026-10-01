@@ -153,6 +153,8 @@ jobs:
           AGENT_OUTCOME: ${{ steps.agent.outcome }}
           # Step-level env wins over anything an earlier step wrote to GITHUB_ENV.
           DIAG_TEMP: ${{ runner.temp }}
+          # Literal; must equal --max-turns above (enforced by a regression test).
+          MAX_TURNS: "20"
         run: |
           set -uo pipefail
           # PATH-independent interpreter: an earlier step prepends the agent-writable
@@ -173,6 +175,7 @@ jobs:
           import re
           import socket
           import ssl
+          import stat
           import urllib.error
           import urllib.request
 
@@ -255,6 +258,11 @@ jobs:
               bucket[key] = bucket.get(key, 0) + 1
 
 
+          # The sanitized diagnostic maps a missing/null/non-bool is_error to false for readability;
+          # the salvage predicate must see the RAW value, so it is captured here (a boolean only).
+          STRICT = {"is_error_is_false": False}
+
+
           def summarize(msgs):
               out = {
                   "message_count": len(msgs), "malformed_messages": 0, "types": {},
@@ -303,6 +311,7 @@ jobs:
                       out["malformed_messages"] += 1
               if last_result is not None:
                   r = last_result
+                  STRICT["is_error_is_false"] = r.get("is_error") is False
                   usage = r.get("modelUsage") if isinstance(r.get("modelUsage"), dict) else {}
                   errs = r.get("errors")
                   denials = r.get("permission_denials")
@@ -388,8 +397,9 @@ jobs:
                   except Exception:  # noqa: BLE001
                       continue
                   if len(text.encode("utf-8")) <= MAX_OUT:
-                      return text
-              return dump({"schema": 1, "diagnostic_truncated": True, "parse_error": "other"})
+                      return text, i > 0
+              fallback = {"schema": 1, "diagnostic_truncated": True, "parse_error": "other"}
+              return dump(fallback), True
 
 
           def main():
@@ -399,7 +409,9 @@ jobs:
                   if d["execution_file_present"]:
                       size = os.path.getsize(SRC)
                       d["execution_file_bytes"] = num(size)
-                      if size > MAX_IN:
+                      if not source_is_current_and_writable():
+                          d["parse_error"] = "source_not_fresh"
+                      elif size > MAX_IN:
                           d["parse_error"] = "file_too_large"
                       else:
                           with open(SRC, encoding="utf-8") as fh:
@@ -412,20 +424,95 @@ jobs:
                   d["parse_error"] = pick(type(exc).__name__, PARSE_ERRORS)
               d["api_probe"] = probe()
               d["classification_hints"] = hints(d)
-              return render(d)
+              text, truncated = render(d)
+              return text, envelope(d, truncated)
+
+
+          def source_is_current_and_writable():
+              """Execution file must be a plain regular file we own that the action could rewrite.
+
+              A read-only/foreign/symlinked file cannot be this run's freshly written output, so it
+              gets no authority (the action rewrites it after the agent finishes).
+              """
+              try:
+                  st = os.lstat(SRC)
+              except OSError:
+                  return False
+              if not stat.S_ISREG(st.st_mode) or not (st.st_mode & stat.S_IWUSR):
+                  return False
+              return not hasattr(os, "getuid") or st.st_uid == os.getuid()
+
+
+          def envelope(d, truncated):
+              """Single canonical derivation of COMPLETED_MODEL_SUCCESS_BUT_TURN_BUDGET_EXCEEDED.
+
+              Computed from the freshly parsed, already sanitized values only (never from a file
+              that existed before this step). Returns (salvage, num_turns, permission_denials).
+              """
+              no = (False, 0, 0)
+              try:
+                  max_turns = int(os.environ.get("MAX_TURNS", ""))
+              except ValueError:
+                  return no
+              if not (0 < max_turns <= 10000) or truncated or "parse_error" in d:
+                  return no
+              if d.get("agent_step_outcome") != "failure" or not d.get("execution_file_present"):
+                  return no
+              r = d.get("result")
+              if not isinstance(r, dict):
+                  return no
+              turns, errs = r.get("num_turns"), r.get("errors_count")
+              if (
+                  r.get("subtype") != "success" or r.get("is_error") is not False
+                  or not STRICT["is_error_is_false"]
+                  or r.get("terminal_reason") != "completed" or r.get("stop_reason") != "end_turn"
+                  or isinstance(errs, bool) or not isinstance(errs, int) or errs != 0
+                  or isinstance(turns, bool) or not isinstance(turns, int)
+                  or not (max_turns < turns <= 100000)
+              ):
+                  return no
+              den = r.get("permission_denials_count")
+              ok = isinstance(den, int) and not isinstance(den, bool) and 0 <= den <= 100000
+              return True, turns, den if ok else 0
+
+
+          def publish(text):
+              """Fresh 0600 temp file then atomic replace; False if provenance cannot be established."""
+              tmp = OUT + "." + os.urandom(8).hex() + ".tmp"
+              try:
+                  fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+                  with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                      fh.write(text + "\n")
+                  os.replace(tmp, OUT)
+                  return True
+              except OSError:
+                  try:
+                      os.unlink(tmp)
+                  except OSError:
+                      pass
+                  return False
 
 
           try:
-              text = main()
+              text, (salvage, turns, denials) = main()
           except Exception:  # noqa: BLE001
               text = dump({"schema": 1, "diagnostic_truncated": True, "parse_error": "other"})
-          try:
-              with open(OUT, "w", encoding="utf-8") as fh:
-                  fh.write(text + "\n")
-          except OSError:
-              pass
+              salvage, turns, denials = False, 0, 0
+          written = publish(text)
           print("[sdk-diagnostic] sanitized summary (no prompts, tool payloads, transcripts or free text):")
           print(text)
+          if not written:
+              print("[sdk-diagnostic] FAILED to publish a fresh diagnostic; envelope salvage ineligible")
+              raise SystemExit(1)
+          # Trusted step outputs: booleans and bounded decimal counters only. Advertised strictly
+          # after the fresh diagnostic replaced the old path (so a failed publish never reaches here).
+          out = os.environ.get("GITHUB_OUTPUT")
+          if out:
+              with open(out, "a", encoding="utf-8") as fh:
+                  fh.write("envelope_salvage=" + ("true" if salvage else "false") + "\n")
+                  if salvage:
+                      fh.write(f"envelope_num_turns={int(turns)}\n")
+                      fh.write(f"envelope_permission_denials={int(denials)}\n")
           ATLAS_SDK_DIAG
 
       - name: Upload sanitized SDK diagnostic
@@ -466,126 +553,27 @@ jobs:
       # --max-turns (live run 36905529693, ATLAS-DEVQ-0002-E1: 25 turns > 20, result subtype
       # success, is_error false). The ordinary push step is then skipped and the finished work
       # dies with the ephemeral runner. A turn budget is an execution POLICY; a policy
-      # rejection must never destroy a completed model result. The two steps below salvage ONLY
+      # rejection must never destroy a completed model result. The steps below salvage ONLY
       # that structurally-identified case. The job stays RED (the agent step is not masked), so
       # EXECUTOR_SUCCESS is never claimed; the salvaged branch is candidate persistence only and
       # implies no acceptance, verification, integration or merge authority.
       #
-      # Classification reads ONLY the bounded, sanitized diagnostic written by the previous
-      # steps (fixed-pattern numbers/booleans/enums); never free text, never the raw
-      # transcript, and no secrets. Any missing/malformed/ambiguous field means NO salvage.
-      # MAX_TURNS below must equal the --max-turns above (enforced by a regression test; it
-      # is a literal because step env wins over anything an agent writes to GITHUB_ENV).
-      - name: Classify envelope-rejected model success (structured fields only)
-        id: salvage_classify
-        if: ${{ failure() && steps.agent.outcome == 'failure' && steps.sdk_diag.outcome == 'success' }}
-        continue-on-error: true
-        env:
-          DIAG_TEMP: ${{ runner.temp }}
-          MAX_TURNS: "20"
-        run: |
-          set -uo pipefail
-          PY=""
-          for c in /usr/bin/python3 /usr/local/bin/python3; do
-            if [ -x "$c" ]; then PY="$c"; break; fi
-          done
-          if [ -z "$PY" ]; then
-            echo "salvage=false" >> "${GITHUB_OUTPUT}"
-            echo "[envelope-salvage] NOT_SALVAGED:no_system_python"
-            exit 0
-          fi
-          "$PY" -I -S - <<'ATLAS_ENVELOPE_CLASSIFY'
-          import json
-          import os
-
-          TMP = os.environ.get("DIAG_TEMP") or ""
-          OUT = os.environ.get("GITHUB_OUTPUT") or ""
-          MAX_BYTES = 16 * 1024 + 1
-          REASONS = (
-              "no_diagnostic", "diagnostic_unreadable", "diagnostic_not_object", "bad_schema",
-              "diagnostic_truncated", "parse_error_present", "agent_outcome_not_failure",
-              "no_result", "subtype_not_success", "is_error_not_false",
-              "terminal_reason_not_completed", "stop_reason_not_end_turn", "errors_present",
-              "turns_not_numeric", "within_turn_budget", "bad_budget",
-          )
-
-
-          def is_int(v):
-              return isinstance(v, int) and not isinstance(v, bool)
-
-
-          def decide():
-              """(reason, num_turns, denials): reason is None only for the salvageable class."""
-              try:
-                  max_turns = int(os.environ.get("MAX_TURNS", ""))
-              except ValueError:
-                  return "bad_budget", 0, 0
-              if not (0 < max_turns <= 10000) or not TMP:
-                  return "bad_budget", 0, 0
-              path = os.path.join(TMP, "claude-sdk-diagnostic.json")
-              if not os.path.isfile(path):
-                  return "no_diagnostic", 0, 0
-              try:
-                  if os.path.getsize(path) > MAX_BYTES:
-                      return "diagnostic_unreadable", 0, 0
-                  with open(path, encoding="utf-8") as fh:
-                      d = json.load(fh)
-              except Exception:  # noqa: BLE001 - fail closed on anything odd
-                  return "diagnostic_unreadable", 0, 0
-              if not isinstance(d, dict):
-                  return "diagnostic_not_object", 0, 0
-              if d.get("schema") != 1 or not is_int(d.get("schema")):
-                  return "bad_schema", 0, 0
-              if d.get("diagnostic_truncated") is not False:
-                  return "diagnostic_truncated", 0, 0
-              if "parse_error" in d:
-                  return "parse_error_present", 0, 0
-              if d.get("agent_step_outcome") != "failure":
-                  return "agent_outcome_not_failure", 0, 0
-              r = d.get("result")
-              if not isinstance(r, dict):
-                  return "no_result", 0, 0
-              if r.get("subtype") != "success":
-                  return "subtype_not_success", 0, 0
-              if r.get("is_error") is not False:
-                  return "is_error_not_false", 0, 0
-              if r.get("terminal_reason") != "completed":
-                  return "terminal_reason_not_completed", 0, 0
-              if r.get("stop_reason") != "end_turn":
-                  return "stop_reason_not_end_turn", 0, 0
-              if not is_int(r.get("errors_count")) or r.get("errors_count") != 0:
-                  return "errors_present", 0, 0
-              turns = r.get("num_turns")
-              if not is_int(turns) or turns < 0 or turns > 100000:
-                  return "turns_not_numeric", 0, 0
-              if turns <= max_turns:
-                  return "within_turn_budget", turns, 0
-              den = r.get("permission_denials_count")
-              return None, turns, den if is_int(den) and 0 <= den <= 100000 else 0
-
-
-          reason, turns, den = decide()
-          assert reason is None or reason in REASONS
-          lines = ["salvage=" + ("true" if reason is None else "false")]
-          if reason is None:
-              lines += [f"num_turns={turns}", f"permission_denials={den}"]
-          if OUT:
-              with open(OUT, "a", encoding="utf-8") as fh:
-                  fh.write("\n".join(lines) + "\n")
-          print("[envelope-salvage] " + ("CLASSIFIED:ENVELOPE_REJECTED_MODEL_SUCCESS" if reason is None else "NOT_SALVAGED:" + reason))
-          ATLAS_ENVELOPE_CLASSIFY
-
+      # The ONE canonical derivation of COMPLETED_MODEL_SUCCESS_BUT_TURN_BUDGET_EXCEEDED lives in
+      # the sdk_diag step above: it is computed from the freshly parsed, sanitized SDK result
+      # (never from a pre-existing diagnostic file, which is replaced atomically and carries no
+      # authority) and exported as bounded step outputs (boolean + decimal counters). This step
+      # consumes only those trusted outputs. MAX_TURNS must equal --max-turns (regression test).
       - name: Persist envelope-rejected result on the dedicated branch (candidate only)
         id: salvage_persist
-        if: ${{ failure() && steps.agent.outcome == 'failure' && steps.salvage_classify.outputs.salvage == 'true' }}
+        if: ${{ failure() && steps.agent.outcome == 'failure' && steps.sdk_diag.outcome == 'success' && steps.sdk_diag.outputs.envelope_salvage == 'true' }}
         continue-on-error: true
         env:
           GH_TOKEN_PUSH: ${{ secrets.GITHUB_TOKEN }}
           GH_REPOSITORY: ${{ github.repository }}
           RUN_ID: ${{ github.run_id }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
-          NUM_TURNS: ${{ steps.salvage_classify.outputs.num_turns }}
-          DENIALS: ${{ steps.salvage_classify.outputs.permission_denials }}
+          NUM_TURNS: ${{ steps.sdk_diag.outputs.envelope_num_turns }}
+          DENIALS: ${{ steps.sdk_diag.outputs.envelope_permission_denials }}
           MAX_TURNS: "20"
           EVIDENCE_DIR: ${{ runner.temp }}
         run: |
