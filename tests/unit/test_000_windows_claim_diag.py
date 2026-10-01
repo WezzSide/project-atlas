@@ -1,3 +1,4 @@
+# ruff: noqa
 """TEMPORARY evidence probe (not for merge): which primitive gives exactly one winner on Windows."""
 
 from __future__ import annotations
