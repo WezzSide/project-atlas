@@ -6,11 +6,14 @@ same package structure for ANY task from an explicit, strictly validated ``Packa
 Properties:
   * Deterministic: same spec content (key order irrelevant) -> byte-identical rendered package.
   * Identity is derived, never supplied: ``execution_id = f"{task_id}-E{execution_ordinal}"``.
+  * Sealed instructions: a digest of the statement and acceptance commands is bound into the
+    WorkItem's acceptance contract, so changing either changes ``work_seal``.
   * Fail-closed: every rule violation raises ``PackageSpecError`` with a stable ``reason`` code.
-  * Acceptance commands must be plain ``pytest``/``ruff``/``mypy`` invocations (the executor's
-    tool allowlist matches on the first token; ``python -m``/env prefixes/shell syntax would not
-    run there or would widen what runs).
-  * The forbidden-path HARD FLOOR is always required; allowed scope may not overlap it.
+  * Acceptance commands must be plain, read-only ``pytest``/``ruff``/``mypy`` checks (the
+    executor's tool allowlist matches on the first token; ``python -m``/env prefixes/shell
+    syntax/write-capable flags would not run there or would widen what runs).
+  * The forbidden-path HARD FLOOR is always required; allowed scope may not overlap it
+    (case-insensitively, segment-wise).
   * Secrets are never inspected and never asserted present.
 
 Nothing here dispatches, ingests, merges or reads any secret; it only produces a document.
@@ -22,6 +25,7 @@ import hashlib
 import json
 import re
 import shlex
+import unicodedata
 from dataclasses import asdict, dataclass, fields
 from typing import Any
 
@@ -47,6 +51,7 @@ __all__ = [
     "PackageSpecError",
     "build_package",
     "build_work",
+    "instructions_sha256",
     "load_spec",
     "package_sha256",
     "render_package",
@@ -55,25 +60,33 @@ __all__ = [
 
 BUILDER_ID = "dev_package/1"
 BASE_BRANCH = "main"
+INSTRUCTIONS_PREFIX = "instructions_sha256="
 
-# Paths no generated package may ever leave writable (compared after stripping a trailing "/").
+# Paths no generated package may ever leave writable. Compared case-insensitively after
+# stripping a trailing "/". The whole autonomy control-plane package is on the floor, so any
+# spec whose scope touches it is ineligible for this builder (intended).
 FORBIDDEN_FLOOR: tuple[str, ...] = (
     ".github/",
     "autonomy/",
     "infra/atlas-runner/controller",
     "src/project_atlas/orchestration/autonomy/trust.py",
+    "src/project_atlas/orchestration/autonomy/",
+    ".claude/",
+    "pyproject.toml",
+    "conftest.py",
 )
 ALLOWED_COMMANDS = frozenset({"pytest", "ruff", "mypy"})
 
 # Size caps. GitHub caps a workflow_dispatch payload at 65,535 characters; ``task_prompt`` is
 # assembled by ``build_dispatch_payload`` from the statement, scope, contract and commands, so
-# each part is capped and the assembled prompt is checked against a conservative overall cap.
-MAX_STATEMENT_CHARS = 8000
+# each part is capped and the assembled prompt is checked against a conservative overall cap
+# measured in UTF-8 BYTES (never fewer than characters).
+MAX_STATEMENT_BYTES = 8000
 MAX_COMMANDS = 16
 MAX_COMMAND_CHARS = 400
 MAX_LIST_ITEMS = 64
 MAX_ITEM_CHARS = 500
-MAX_PROMPT_CHARS = 32000
+MAX_PROMPT_BYTES = 32000
 MAX_ORDINAL = 9999
 MAX_ATTEMPTS_CEILING = 10
 
@@ -82,16 +95,61 @@ REPAIR_SUFFIX = (
     "in the acceptance contract on top of the previous result branch."
 )
 
+# Line prefixes that build_dispatch_payload uses for its own header/scope/acceptance lines (and
+# the workflow wrapper uses around the prompt). A statement line may not imitate them.
+RESERVED_STATEMENT_PREFIXES: tuple[str, ...] = (
+    "atlas dev-loop task",
+    "repository ",
+    "only modify",
+    "never modify",
+    "acceptance",
+    "-",
+    "new tests must",
+    "bounded task",
+    "constraints:",
+)
+
 _TASK_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _AUTHORITY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,199}$")
 _REPO = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$")
 _SHA = re.compile(r"^[0-9a-f]{40}$")
 _ENV_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
-# Shell metacharacters that would chain, substitute, redirect or escape. Quotes are allowed
-# (balanced, checked by shlex) so that e.g. ``pytest -k 'a or b'`` stays expressible; inside
-# the allowlisted single command they cannot introduce a second command.
-_METACHARS = frozenset(";&|`$<>\\\n\r\t\x00")
-_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+# Shell metacharacters that would chain, substitute, redirect, glob, expand, comment or escape.
+# Balanced quotes are allowed (checked by shlex) so ``pytest -k 'a or b'`` stays expressible;
+# with every chaining/substitution character rejected they cannot start a second command.
+_METACHARS = frozenset(";&|`$<>\\#*?~{}()!\n\r\t\x00")
+_LINE_SEPARATORS = frozenset("\u2028\u2029\u0085")
+
+# Write-capable / config-redirecting / interactive / network flags (pytest, ruff, mypy). Long
+# flags are also denied in any abbreviated form (argparse prefix matching) and as --flag=value.
+_DENIED_LONG: tuple[str, ...] = (
+    "--basetemp",
+    "--rootdir",
+    "--confcutdir",
+    "--override-ini",
+    "--config-file",
+    "--config",
+    "--fix",
+    "--unsafe-fixes",
+    "--add-noqa",
+    "--watch",
+    "--install-types",
+    "--python-executable",
+    "--output-file",
+    "--junitxml",
+    "--junit-xml",
+    "--junit-prefix",
+    "--log-file",
+    "--debug",
+    "--pastebin",
+    "--pdb",
+    "--pdbcls",
+    "--trace",
+    "--cache-dir",
+)
+# Single-dash flag letters that are denied anywhere in a short-flag cluster (-p plugin,
+# -c config/inifile, -o ini override). Conservative: e.g. ``-kfoo`` is refused too.
+_DENIED_SHORT = frozenset("pco")
 
 
 class PackageSpecError(ValueError):
@@ -105,6 +163,16 @@ class PackageSpecError(ValueError):
 
 def _fail(reason: str, detail: str) -> PackageSpecError:
     return PackageSpecError(reason, detail)
+
+
+def _bad_chars(s: str, *, allow_newline: bool) -> bool:
+    """True if ``s`` holds a control/format char (Cc/Cf) or a Unicode line separator."""
+    for c in s:
+        if c == "\n" and allow_newline:
+            continue
+        if c in _LINE_SEPARATORS or unicodedata.category(c) in ("Cc", "Cf"):
+            return True
+    return False
 
 
 def _str(name: str, v: object) -> str:
@@ -127,7 +195,7 @@ def _str_tuple(name: str, v: object) -> tuple[str, ...]:
     for x in v:
         if not x.strip():
             raise _fail("LIST_ITEM_EMPTY", f"{name} contains an empty entry")
-        if len(x) > MAX_ITEM_CHARS or _CONTROL.search(x) or "\n" in x:
+        if len(x) > MAX_ITEM_CHARS or _bad_chars(x, allow_newline=False):
             raise _fail("LIST_ITEM_INVALID", f"{name} entry too long or contains control chars")
     if len(set(v)) != len(v):
         raise _fail("LIST_DUPLICATE", f"{name} contains duplicate entries")
@@ -135,16 +203,49 @@ def _str_tuple(name: str, v: object) -> tuple[str, ...]:
 
 
 def _canon_path(name: str, p: str) -> str:
+    """Canonical comparison key (lower-cased) for one scope entry; fail closed otherwise."""
+    if not p.isascii():
+        raise _fail("PATH_INVALID", f"{name} entry {p!r} is not ASCII")
     if p.startswith("/") or ".." in p.split("/"):
         raise _fail("PATH_INVALID", f"{name} entry {p!r} is absolute or escapes the repo")
-    n = norm_path(p.rstrip("/"))
+    stripped = p.rstrip("/")
+    for seg in stripped.split("/"):
+        if seg != seg.strip() or seg.endswith("."):
+            raise _fail("PATH_INVALID", f"{name} entry {p!r} has a padded or dot-ended segment")
+    n = norm_path(stripped)
     if n is None:
         raise _fail("PATH_INVALID", f"{name} entry {p!r} is malformed (no globs/absolute/escapes)")
-    return n
+    return n.lower()
 
 
 def _overlaps(a: str, b: str) -> bool:
     return a == b or a.startswith(b + "/") or b.startswith(a + "/")
+
+
+def _check_arg(cmd: str, tok: str) -> None:
+    if tok.startswith("--"):
+        name, _, value = tok.partition("=")
+        if name == "--":
+            raise _fail("COMMAND_FLAG_DENIED", f"bare '--' not allowed: {cmd!r}")
+        if (
+            name.startswith("--fix")
+            or name.endswith("-report")
+            or any(d.startswith(name) for d in _DENIED_LONG)
+        ):
+            raise _fail("COMMAND_FLAG_DENIED", f"flag {name!r} not allowed: {cmd!r}")
+        if value:
+            _check_path_arg(cmd, value)
+        return
+    if tok.startswith("-") and len(tok) > 1:
+        if any(c in _DENIED_SHORT for c in tok[1:]):
+            raise _fail("COMMAND_FLAG_DENIED", f"short flag {tok!r} not allowed: {cmd!r}")
+        return
+    _check_path_arg(cmd, tok)
+
+
+def _check_path_arg(cmd: str, arg: str) -> None:
+    if arg.startswith("/") or ".." in arg.split("/"):
+        raise _fail("COMMAND_PATH_INVALID", f"absolute or escaping argument {arg!r}: {cmd!r}")
 
 
 def _check_command(cmd: str) -> None:
@@ -152,7 +253,9 @@ def _check_command(cmd: str) -> None:
         raise _fail("COMMAND_EMPTY", "acceptance command is empty")
     if len(cmd) > MAX_COMMAND_CHARS:
         raise _fail("COMMAND_TOO_LONG", f"acceptance command exceeds {MAX_COMMAND_CHARS} chars")
-    bad = sorted({c for c in cmd if c in _METACHARS} | set(_CONTROL.findall(cmd)))
+    if not cmd.isascii():
+        raise _fail("COMMAND_NOT_ASCII", f"acceptance command must be ASCII: {cmd!r}")
+    bad = sorted({c for c in cmd if c in _METACHARS or not c.isprintable()})
     if bad:
         raise _fail("COMMAND_METACHAR", f"shell metacharacter(s) {bad!r} in {cmd!r}")
     try:
@@ -173,6 +276,33 @@ def _check_command(cmd: str) -> None:
         )
     if cmd != cmd.strip() or (cmd != first and not cmd.startswith(first + " ")):
         raise _fail("COMMAND_NOT_ALLOWED", f"command must start with a bare {first!r}: {cmd!r}")
+    if first == "ruff":
+        sub = tokens[1] if len(tokens) > 1 else ""
+        if sub == "format" and "--check" not in tokens[2:]:
+            raise _fail("COMMAND_RUFF_MODE", f"'ruff format' requires --check: {cmd!r}")
+        if sub not in ("check", "format"):
+            raise _fail("COMMAND_RUFF_MODE", f"ruff must be 'check' or 'format --check': {cmd!r}")
+        args = tokens[2:]
+    else:
+        args = tokens[1:]
+    for tok in args:
+        _check_arg(cmd, tok)
+
+
+def _check_statement(statement: str) -> None:
+    if not statement.strip():
+        raise _fail("STATEMENT_EMPTY", "statement is empty")
+    if len(statement.encode()) > MAX_STATEMENT_BYTES:
+        raise _fail("STATEMENT_TOO_LONG", f"statement exceeds {MAX_STATEMENT_BYTES} UTF-8 bytes")
+    if _bad_chars(statement, allow_newline=True):
+        raise _fail("STATEMENT_INVALID", "statement contains control/format/line-separator chars")
+    for line in statement.split("\n"):
+        head = line.strip().casefold()
+        if any(head.startswith(p) for p in RESERVED_STATEMENT_PREFIXES):
+            raise _fail(
+                "STATEMENT_RESERVED_PREFIX",
+                f"statement line imitates a reserved prompt line: {line.strip()[:60]!r}",
+            )
 
 
 @dataclass(frozen=True)
@@ -209,24 +339,20 @@ class PackageSpec:
         if not _AUTHORITY.fullmatch(_str("authority_ref", self.authority_ref)):
             raise _fail("AUTHORITY_INVALID", f"authority_ref must match {_AUTHORITY.pattern}")
 
-        statement = _str("statement", self.statement)
-        if not statement.strip():
-            raise _fail("STATEMENT_EMPTY", "statement is empty")
-        if len(statement) > MAX_STATEMENT_CHARS:
-            raise _fail("STATEMENT_TOO_LONG", f"statement exceeds {MAX_STATEMENT_CHARS} chars")
-        if _CONTROL.search(statement):
-            raise _fail("STATEMENT_INVALID", "statement contains control characters")
+        _check_statement(_str("statement", self.statement))
 
         allowed = _str_tuple("allowed_paths", self.allowed_paths)
         forbidden = _str_tuple("forbidden_paths", self.forbidden_paths)
         for name in ("expected_outputs", "acceptance_contract"):
             if not _str_tuple(name, getattr(self, name)):
                 raise _fail("LIST_EMPTY", f"{name} must not be empty")
+        if any(c.startswith(INSTRUCTIONS_PREFIX) for c in self.acceptance_contract):
+            raise _fail("CONTRACT_RESERVED", f"{INSTRUCTIONS_PREFIX!r} entries are builder-only")
         if not allowed:
             raise _fail("ALLOWED_PATHS_EMPTY", "allowed_paths must not be empty")
         allowed_n = [_canon_path("allowed_paths", p) for p in allowed]
         forbidden_n = [_canon_path("forbidden_paths", p) for p in forbidden]
-        missing = [f for f in FORBIDDEN_FLOOR if f.rstrip("/") not in forbidden_n]
+        missing = [f for f in FORBIDDEN_FLOOR if f.rstrip("/").lower() not in forbidden_n]
         if missing:
             raise _fail("FORBIDDEN_FLOOR_MISSING", f"forbidden_paths lacks floor entries {missing}")
         for a in allowed_n:
@@ -308,13 +434,26 @@ def load_spec(text: str) -> PackageSpec:
     return PackageSpec(**kw)
 
 
-def spec_sha256(spec: PackageSpec) -> str:
-    """sha256 over the canonical JSON of the spec (sorted keys, compact separators)."""
-    blob = json.dumps(asdict(spec), sort_keys=True, separators=(",", ":"))
+def _canonical_sha256(obj: object) -> str:
+    blob = json.dumps(obj, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(blob.encode()).hexdigest()
 
 
+def spec_sha256(spec: PackageSpec) -> str:
+    """sha256 over the canonical JSON of the spec (sorted keys, compact separators)."""
+    return _canonical_sha256(asdict(spec))
+
+
+def instructions_sha256(spec: PackageSpec) -> str:
+    """sha256 over the canonical JSON of {statement, acceptance_commands} (sealed into work)."""
+    return _canonical_sha256(
+        {"statement": spec.statement, "acceptance_commands": list(spec.acceptance_commands)}
+    )
+
+
 def build_work(spec: PackageSpec) -> WorkItem:
+    """Sealed WorkItem; the instructions digest is the last acceptance-contract entry."""
+    contract = (*spec.acceptance_contract, INSTRUCTIONS_PREFIX + instructions_sha256(spec))
     try:
         return make_work(
             task_id=spec.task_id,
@@ -326,7 +465,7 @@ def build_work(spec: PackageSpec) -> WorkItem:
             allowed_paths=spec.allowed_paths,
             forbidden_paths=spec.forbidden_paths,
             expected_outputs=spec.expected_outputs,
-            acceptance_contract=spec.acceptance_contract,
+            acceptance_contract=contract,
             attempt=spec.attempt,
             max_attempts=spec.max_attempts,
         )
@@ -345,8 +484,8 @@ def build_package(spec: PackageSpec) -> dict[str, Any]:
     payload = build_dispatch_payload(
         w, base_branch=BASE_BRANCH, task_statement=_statement(spec), acceptance_commands=commands
     )
-    if len(payload.inputs["task_prompt"]) > MAX_PROMPT_CHARS:
-        raise _fail("PROMPT_TOO_LONG", f"assembled task_prompt exceeds {MAX_PROMPT_CHARS} chars")
+    if len(payload.inputs["task_prompt"].encode()) > MAX_PROMPT_BYTES:
+        raise _fail("PROMPT_TOO_LONG", f"assembled task_prompt exceeds {MAX_PROMPT_BYTES} bytes")
     return {
         "package_version": 1,
         "task_id": w.task_id,
