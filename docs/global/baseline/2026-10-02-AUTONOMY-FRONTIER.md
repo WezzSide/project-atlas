@@ -83,8 +83,10 @@ it can verify says the owner authorized *this exact* dispatch. The owner therefo
 the dispatch manually (PowerShell). The fix is to make the grant verifiable, not to weaken
 the classifier.
 
-- **Grant artifact.** `autonomy/grants/DG-<task>-<exec>.md`, written by the owner only
-  (`autonomy/grants/**` is already outside executor scope). Fields:
+- **Grant artifact.** `autonomy/grants/DG-<task>-<exec>.md`, written by the owner only.
+  `autonomy/grants/**` is already outside executor scope. DG grants must also be excluded
+  from supervisor-issued grants at every loop level: `autonomy/policy.md` role scopes let the
+  supervisor write `autonomy/grants/**` from level 2, so this needs an owner policy edit. Fields:
   - grant ID, `policy_sha`
   - `workflow`, `ref`
   - `work_seal`, `workflow_inputs_sha256`, `base_revision`
