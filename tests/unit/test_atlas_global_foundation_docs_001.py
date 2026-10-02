@@ -148,6 +148,10 @@ def test_contract_authority_is_owner_issued_and_bypass_is_never_grantable() -> N
     for item in ("permission classifier", "reading secret values", "`autonomy/policy.md`"):
         assert item in non_grantable, item
     assert "OC-A never applies to authority, trust or governance procedures" in text
+    assert "The non-grantable list overrides any delta, including an owner-issued one." in text
+    assert "reachable from `origin/main`" in text
+    assert "approval given in chat, is not owner issuance" in text
+    assert "raising the kill switch is always permitted" in text
     assert "establishes no\nstanding or continuous autonomy" in text
     template = _read("ATLAS-DIRECTIVE-TEMPLATE.md")
     assert "issued_by: owner @" in template

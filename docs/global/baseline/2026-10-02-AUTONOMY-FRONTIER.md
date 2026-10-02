@@ -104,6 +104,10 @@ the classifier.
 - **Classifier representation.** Choose one, owner decision:
   - (a) The owner allowlists exactly one command shape in the harness permission settings,
     e.g. `atlas dev-dispatch --grant DG-…`, whose only effect is a grant-verified dispatch.
+    The allowlisted command must run only code from an owner-merged, pinned revision
+    (e.g. under `autonomy/tools/**`, a floor for every role), with its tree hash checked
+    against `origin/main` before it runs. A working-tree copy is never trusted, because the
+    executor can write `src/**`.
   - (b) A GitHub-side dispatcher workflow triggered by the grant commit, behind an
     environment protection rule.
 
