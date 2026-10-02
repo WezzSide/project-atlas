@@ -42,6 +42,33 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+def _origin(url: str) -> tuple[str, str, int | None] | None:
+    parts = urllib.parse.urlsplit(url)
+    scheme = parts.scheme.lower()
+    try:
+        port = parts.port or {"http": 80, "https": 443}.get(scheme)
+    except ValueError:
+        return None
+    return scheme, (parts.hostname or "").lower(), port
+
+
+class _CrossOriginRedirect(Exception):
+    """Carries nothing: the refused Location must never reach a message or cause."""
+
+
+class _SameOriginRedirect(urllib.request.HTTPRedirectHandler):
+    """Follow redirects only within the API origin, so Authorization never leaves it."""
+
+    def redirect_request(
+        self, req: Any, fp: Any, code: int, msg: str, headers: Any, newurl: str
+    ) -> urllib.request.Request | None:
+        api = _origin(API)
+        if api is None or _origin(newurl) != api:
+            fp.close()
+            raise _CrossOriginRedirect
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 def _run(d: dict[str, Any]) -> RunInfo:
     return RunInfo(
         run_id=int(d["id"]),
@@ -80,10 +107,13 @@ class GitHubRestPort:
                 "Content-Type": "application/json",
             },
         )
+        opener = urllib.request.build_opener(_SameOriginRedirect)
         try:
-            with urllib.request.urlopen(req, timeout=30) as r:
+            with opener.open(req, timeout=30) as r:
                 raw = r.read()
                 return r.status, (json.loads(raw) if raw else None)
+        except _CrossOriginRedirect:
+            raise AdapterError(f"github {method} {path} refused cross-origin redirect") from None
         except urllib.error.HTTPError as exc:
             if exc.code == 404:
                 return 404, None
