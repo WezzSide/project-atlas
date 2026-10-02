@@ -39,7 +39,7 @@ export default function SignalRackPage() {
             </div>
             <div className="lamp">
               <div>
-                <span className="lamp-dot ok" aria-hidden />
+                <span className="lamp-dot neutral" aria-hidden />
                 Projects
               </div>
               <p className="mono" style={{ margin: "0.5rem 0 0" }}>

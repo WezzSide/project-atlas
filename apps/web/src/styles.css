@@ -104,11 +104,9 @@ code,
 }
 
 /* AS-2.1-WEB-MISSION-WORKSPACE-UX — LIVE / DEMO / FIXTURE visibility */
-.mode-switcher .mode-live.active {
-  border-color: var(--atlas-ok);
-  color: var(--atlas-ok);
-}
-
+/* STYLE-001 (SM-SEPARATION): LIVE selection uses the neutral .mode.active
+   style above — selection is not health, so it must never render --atlas-ok
+   green (LIVE may be selected while the live read failed). */
 .mode-switcher .mode-demo.active,
 .mode-switcher .mode-fixture.active {
   border-color: var(--atlas-warn);
@@ -306,6 +304,12 @@ code,
 
 .theme-signal .lamp-dot.warn {
   background: var(--atlas-warn);
+}
+
+/* STYLE-001: neutral lamp for non-health facts (e.g. "listed") — not ok/green. */
+.theme-signal .lamp-dot.neutral {
+  background: var(--atlas-muted);
+  box-shadow: none;
 }
 
 .theme-signal .hero h1 {

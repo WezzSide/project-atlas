@@ -8,6 +8,7 @@ No PILOT invent.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -23,6 +24,8 @@ MISSION_DEMO = WEB / "public" / "sample-mission-control.json"
 WORKSPACE_DEMO = WEB / "public" / "sample-workspace.json"
 API_SERVER = REPO_ROOT / "src" / "project_atlas" / "api_server.py"
 SCHEMAS = REPO_ROOT / "src" / "project_atlas" / "schemas"
+STYLES = WEB / "src" / "styles.css"
+SIGNAL_RACK = WEB / "src" / "pages" / "design-lab" / "SignalRackPage.tsx"
 
 
 def test_lens_mode_switcher_exposes_live_demo_fixture() -> None:
@@ -98,3 +101,24 @@ def test_exclusion_api_and_schema_roots_untouched_by_this_package() -> None:
     assert MISSION.is_relative_to(WEB)
     assert WORKSPACE.is_relative_to(WEB)
     assert HOOK.is_relative_to(WEB)
+
+
+def test_live_mode_selection_is_not_rendered_as_ok_green() -> None:
+    """STYLE-001 (SM-SEPARATION): selection is not health.
+
+    No CSS rule for selection state (``.mode`` / ``.mode-*``) may use the
+    health token ``--atlas-ok``; LIVE can be selected while the live read
+    failed. Selection stays conveyed by ``aria-pressed`` + neutral active style.
+    """
+    css = re.sub(r"/\*.*?\*/", "", STYLES.read_text(encoding="utf-8"), flags=re.S)
+    for selector, body in re.findall(r"([^{}]+)\{([^{}]*)\}", css):
+        if "var(--atlas-ok)" in body:
+            assert not re.search(r"\.mode\b|\.mode-", selector), selector.strip()
+    assert ".mode-switcher .mode.active" in css
+    assert "aria-pressed" in SWITCHER.read_text(encoding="utf-8")
+
+
+def test_signal_rack_listed_projects_lamp_is_not_ok() -> None:
+    text = SIGNAL_RACK.read_text(encoding="utf-8")
+    assert not re.search(r'lamp-dot ok"[^>]*/>\s*Projects', text)
+    assert re.search(r'lamp-dot neutral"[^>]*/>\s*Projects', text)
