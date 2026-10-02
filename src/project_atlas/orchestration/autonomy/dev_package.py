@@ -13,7 +13,9 @@ Properties:
     executor's tool allowlist matches on the first token; ``python -m``/env prefixes/shell
     syntax/write-capable flags would not run there or would widen what runs).
   * The forbidden-path HARD FLOOR is always required; allowed scope may not overlap it
-    (case-insensitively, segment-wise).
+    (case-insensitively, segment-wise). Inside the autonomy control-plane package the floor is
+    per module: only modules in ``OWNER_SCOPABLE_AUTONOMY_MODULES`` may be scoped, and new
+    modules are forbidden by default. Tool-config basenames and ``.git`` are never scopable.
   * Secrets are never inspected and never asserted present.
 
 Nothing here dispatches, ingests, merges or reads any secret; it only produces a document.
@@ -45,8 +47,10 @@ from project_atlas.orchestration.autonomy.dev_fabric_adapter import (
 from project_atlas.orchestration.autonomy.dev_first_run import render_package
 
 __all__ = [
+    "AUTONOMY_FLOOR_MODULES",
     "BUILDER_ID",
     "FORBIDDEN_FLOOR",
+    "OWNER_SCOPABLE_AUTONOMY_MODULES",
     "PackageSpec",
     "PackageSpecError",
     "build_package",
@@ -62,18 +66,82 @@ BUILDER_ID = "dev_package/1"
 BASE_BRANCH = "main"
 INSTRUCTIONS_PREFIX = "instructions_sha256="
 
+AUTONOMY_PACKAGE = "src/project_atlas/orchestration/autonomy/"
+# Autonomy control-plane modules the owner has explicitly classified as scopable by a generated
+# package. Everything else in AUTONOMY_PACKAGE is on the floor (per module, below), and an
+# allowed path inside AUTONOMY_PACKAGE must be exactly one of these opt-in modules -- so a NEW
+# module is forbidden by default until someone consciously classifies it (a test enumerates the
+# directory and fails on any unclassified module).
+OWNER_SCOPABLE_AUTONOMY_MODULES: tuple[str, ...] = ("dev_github_port.py",)
+AUTONOMY_FLOOR_MODULES: tuple[str, ...] = (
+    "__init__.py",
+    "adversarial.py",
+    "authentic_estate.py",
+    "cli.py",
+    "continuation.py",
+    "continuation_broker.py",
+    "dag.py",
+    "dev_contracts.py",
+    "dev_crosswalk.py",
+    "dev_fabric_adapter.py",
+    "dev_first_run.py",
+    "dev_package.py",
+    "dev_planner.py",
+    "dev_queue.py",
+    "dev_spool_transport.py",
+    "dev_transport.py",
+    "discovery.py",
+    "evidence.py",
+    "exact_main_closure.py",
+    "governor.py",
+    "iv_routing.py",
+    "lease_projection.py",
+    "lease_recovery.py",
+    "leases.py",
+    "local_dispatch_port.py",
+    "loop.py",
+    "models.py",
+    "overlap.py",
+    "owner_gates.py",
+    "rehydration.py",
+    "remediation.py",
+    "return_gate.py",
+    "trust.py",
+)
+
 # Paths no generated package may ever leave writable. Compared case-insensitively after
-# stripping a trailing "/". The whole autonomy control-plane package is on the floor, so any
-# spec whose scope touches it is ineligible for this builder (intended).
+# stripping a trailing "/".
 FORBIDDEN_FLOOR: tuple[str, ...] = (
+    ".git/",
     ".github/",
-    "autonomy/",
-    "infra/atlas-runner/controller",
-    "src/project_atlas/orchestration/autonomy/trust.py",
-    "src/project_atlas/orchestration/autonomy/",
     ".claude/",
+    "autonomy/",
+    "infra/atlas-runner/",
     "pyproject.toml",
     "conftest.py",
+    "pytest.ini",
+    "setup.cfg",
+    "tox.ini",
+    "ruff.toml",
+    ".ruff.toml",
+    "mypy.ini",
+    ".mypy.ini",
+    *(AUTONOMY_PACKAGE + m for m in AUTONOMY_FLOOR_MODULES),
+)
+# Tool-configuration / import-hook basenames no allowed path may name at ANY depth (they change
+# how the acceptance commands themselves behave); likewise nothing under a ``.git`` segment.
+RESERVED_BASENAMES = frozenset(
+    {
+        "conftest.py",
+        "pytest.ini",
+        "setup.cfg",
+        "tox.ini",
+        "ruff.toml",
+        ".ruff.toml",
+        "mypy.ini",
+        ".mypy.ini",
+        "pyproject.toml",
+    }
 )
 ALLOWED_COMMANDS = frozenset({"pytest", "ruff", "mypy"})
 
@@ -85,6 +153,7 @@ MAX_STATEMENT_BYTES = 8000
 MAX_COMMANDS = 16
 MAX_COMMAND_CHARS = 400
 MAX_LIST_ITEMS = 64
+MAX_FORBIDDEN_ITEMS = 128  # the hard floor alone is ~50 entries
 MAX_ITEM_CHARS = 500
 MAX_PROMPT_BYTES = 32000
 MAX_ORDINAL = 9999
@@ -96,23 +165,34 @@ REPAIR_SUFFIX = (
 )
 
 # Line prefixes that build_dispatch_payload uses for its own header/scope/acceptance lines (and
-# the workflow wrapper uses around the prompt). A statement line may not imitate them.
-RESERVED_STATEMENT_PREFIXES: tuple[str, ...] = (
+# the workflow wrapper uses around the prompt), plus list/quote markers. No statement line and
+# no acceptance_contract / expected_outputs entry may imitate them. Compared after NFKC,
+# whitespace collapsing and casefolding (``_norm_head``).
+RESERVED_PREFIXES: tuple[str, ...] = (
     "atlas dev-loop task",
     "repository ",
     "only modify",
     "never modify",
     "acceptance",
-    "-",
+    "run:",
     "new tests must",
     "bounded task",
     "constraints:",
+    "-",
+    "*",
+    ">",
+    "\u2022",  # bullet
+    "\u2023",  # triangular bullet
+    "\u25e6",  # white bullet
+    "\u2043",  # hyphen bullet
+    "\u2219",  # bullet operator
 )
 
 _TASK_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _AUTHORITY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,199}$")
 _REPO = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$")
 _SHA = re.compile(r"^[0-9a-f]{40}$")
+_PATH_CHARS = re.compile(r"^[A-Za-z0-9._/-]+$")
 _ENV_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 # Shell metacharacters that would chain, substitute, redirect, glob, expand, comment or escape.
 # Balanced quotes are allowed (checked by shlex) so ``pytest -k 'a or b'`` stays expressible;
@@ -146,6 +226,12 @@ _DENIED_LONG: tuple[str, ...] = (
     "--pdbcls",
     "--trace",
     "--cache-dir",
+    "--collect-only",
+    "--exit-zero",
+    "--report-log",
+    "--html",
+    "--cov-config",
+    "--sqlite-cache",
 )
 # Single-dash flag letters that are denied anywhere in a short-flag cluster (-p plugin,
 # -c config/inifile, -o ini override). Conservative: e.g. ``-kfoo`` is refused too.
@@ -187,11 +273,21 @@ def _int(name: str, v: object) -> int:
     return v
 
 
-def _str_tuple(name: str, v: object) -> tuple[str, ...]:
+def _norm_head(s: str) -> str:
+    """Normalisation for reserved-prefix checks: NFKC, collapsed whitespace, casefold."""
+    return " ".join(unicodedata.normalize("NFKC", s).split()).casefold()
+
+
+def _reserved_prefix(s: str) -> bool:
+    head = _norm_head(s)
+    return any(head.startswith(p) for p in RESERVED_PREFIXES)
+
+
+def _str_tuple(name: str, v: object, max_items: int = MAX_LIST_ITEMS) -> tuple[str, ...]:
     if not isinstance(v, tuple) or not all(isinstance(x, str) for x in v):
         raise _fail("SPEC_TYPE", f"{name} must be a list of strings")
-    if len(v) > MAX_LIST_ITEMS:
-        raise _fail("LIST_TOO_LONG", f"{name} has more than {MAX_LIST_ITEMS} entries")
+    if len(v) > max_items:
+        raise _fail("LIST_TOO_LONG", f"{name} has more than {max_items} entries")
     for x in v:
         if not x.strip():
             raise _fail("LIST_ITEM_EMPTY", f"{name} contains an empty entry")
@@ -204,8 +300,8 @@ def _str_tuple(name: str, v: object) -> tuple[str, ...]:
 
 def _canon_path(name: str, p: str) -> str:
     """Canonical comparison key (lower-cased) for one scope entry; fail closed otherwise."""
-    if not p.isascii():
-        raise _fail("PATH_INVALID", f"{name} entry {p!r} is not ASCII")
+    if not _PATH_CHARS.fullmatch(p):
+        raise _fail("PATH_INVALID", f"{name} entry {p!r} must match {_PATH_CHARS.pattern}")
     if p.startswith("/") or ".." in p.split("/"):
         raise _fail("PATH_INVALID", f"{name} entry {p!r} is absolute or escapes the repo")
     stripped = p.rstrip("/")
@@ -297,8 +393,7 @@ def _check_statement(statement: str) -> None:
     if _bad_chars(statement, allow_newline=True):
         raise _fail("STATEMENT_INVALID", "statement contains control/format/line-separator chars")
     for line in statement.split("\n"):
-        head = line.strip().casefold()
-        if any(head.startswith(p) for p in RESERVED_STATEMENT_PREFIXES):
+        if _reserved_prefix(line):
             raise _fail(
                 "STATEMENT_RESERVED_PREFIX",
                 f"statement line imitates a reserved prompt line: {line.strip()[:60]!r}",
@@ -342,11 +437,19 @@ class PackageSpec:
         _check_statement(_str("statement", self.statement))
 
         allowed = _str_tuple("allowed_paths", self.allowed_paths)
-        forbidden = _str_tuple("forbidden_paths", self.forbidden_paths)
+        forbidden = _str_tuple("forbidden_paths", self.forbidden_paths, MAX_FORBIDDEN_ITEMS)
         for name in ("expected_outputs", "acceptance_contract"):
-            if not _str_tuple(name, getattr(self, name)):
+            entries = _str_tuple(name, getattr(self, name))
+            if not entries:
                 raise _fail("LIST_EMPTY", f"{name} must not be empty")
-        if any(c.startswith(INSTRUCTIONS_PREFIX) for c in self.acceptance_contract):
+            for e in entries:
+                if _reserved_prefix(e):
+                    raise _fail(
+                        "LIST_ITEM_RESERVED_PREFIX",
+                        f"{name} entry imitates a reserved prompt line: {e[:60]!r}",
+                    )
+        reserved = _norm_head(INSTRUCTIONS_PREFIX.rstrip("="))
+        if any(_norm_head(c).startswith(reserved) for c in self.acceptance_contract):
             raise _fail("CONTRACT_RESERVED", f"{INSTRUCTIONS_PREFIX!r} entries are builder-only")
         if not allowed:
             raise _fail("ALLOWED_PATHS_EMPTY", "allowed_paths must not be empty")
@@ -359,6 +462,17 @@ class PackageSpec:
             for f in forbidden_n:
                 if _overlaps(a, f):
                     raise _fail("SCOPE_OVERLAP", f"allowed {a!r} overlaps forbidden {f!r}")
+        package = AUTONOMY_PACKAGE.rstrip("/").lower()
+        scopable = {f"{package}/{m.lower()}" for m in OWNER_SCOPABLE_AUTONOMY_MODULES}
+        for a in allowed_n:
+            segs = a.split("/")
+            if ".git" in segs or segs[-1] in RESERVED_BASENAMES:
+                raise _fail("PATH_RESERVED_BASENAME", f"allowed {a!r} names a reserved file")
+            if _overlaps(a, package) and a not in scopable:
+                raise _fail(
+                    "AUTONOMY_SCOPE_RESTRICTED",
+                    f"allowed {a!r} is in the autonomy package but not an opt-in module",
+                )
 
         commands = self.acceptance_commands
         if not isinstance(commands, tuple) or not all(isinstance(c, str) for c in commands):
