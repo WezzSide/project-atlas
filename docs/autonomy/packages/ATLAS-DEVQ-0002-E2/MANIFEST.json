@@ -12,13 +12,17 @@
   "grant_required": "ONE_WORKFLOW_DISPATCH_GRANT",
   "implementation_attempt": "2/3",
   "label": "E2_PACKAGE_PREPARED_AWAITING_VALID_EXECUTION_GRANT",
-  "package_sha256": "54a81ccbc9afaf75d3d602dbd224016a605cf7f5949326423188a2044b276565",
+  "package_sha256": "b8035f9b0cb24e6ff9423b466e117d0dc8c8577eac6835147df5ceddb1bf62fe",
   "sealed_base": "64195b71b14cdb072948c08bddc440b5343d28ce",
   "sealed_base_tree": "de1ef3bc700e28096b091c3cbc7aae59c3d87c62",
-  "spec_file_sha256": "325d1fa5b9bae01c4da9cc831d7dd1a5bd56432fea888d5a23120795516c68a6",
-  "spec_sha256": "7b7b1f8fae5590f6e788d169b0c039c712d8fde967be71c84c7f08c713754380",
+  "spec_file_sha256": "16616e50f3a98e580673c913707b0423617eb1bb2780e1c8cf007f47875659f8",
+  "spec_sha256": "65c0f9bffbb82387b5a85b496c780520efbaa024402477a03959b348471574ac",
+  "supersedes": {
+    "package_sha256": "54a81ccbc9afaf75d3d602dbd224016a605cf7f5949326423188a2044b276565",
+    "reason": "package review P2-2..P2-5 and turn economy; never dispatched"
+  },
   "task_id": "ATLAS-DEVQ-0002",
-  "task_prompt_sha256": "568f55af6fee545cb35560cb375d67fbcbc0d0ba4c3542692b6b7a10bfd548c6",
-  "work_seal": "b81e7195fae4b2e5734fa5f148eb5176d0cceeeae5d6469d0b50b917b081dccc",
-  "workflow_inputs_sha256": "50cf378876c5f012bd740600ec24fc86d320689b84caea34e41f301fc6155b25"
+  "task_prompt_sha256": "992a324b8dd188d4df695d9beb4ecc60d9e65be37255f3e68da1ef9af80808c7",
+  "work_seal": "ac1cc81f985614f84a742f8a7ace4bcbad855748656d61c03c779d1bc3febfff",
+  "workflow_inputs_sha256": "c1c913330e0143ac98ded649fcb25192165397104cd77ed77965f8e09e058e39"
 }

@@ -10,9 +10,10 @@ Preparation is not authorization. This branch is storage for exact, hashable evi
 | Attempt | implementation attempt **2/3**, `attempt_kind=implementation`, bounded repairs used 0. E1 was implementation-bearing attempt 1 (envelope failure, product verdict UNOBSERVABLE). After E2, **one** further implementation-bearing attempt remains under the ceiling of 3 |
 | Sealed base | `64195b71b14cdb072948c08bddc440b5343d28ce` (TREE `de1ef3bc700e28096b091c3cbc7aae59c3d87c62`), canonical `main` when prepared |
 | Builder | `dev_package.py` as merged on `main` (blob `c2ca7995898d558e8a3a60477bee266816a0dc64`, id `dev_package/1`) |
-| `work_seal` | `b81e7195fae4b2e5734fa5f148eb5176d0cceeeae5d6469d0b50b917b081dccc` |
-| `workflow_inputs_sha256` | `50cf378876c5f012bd740600ec24fc86d320689b84caea34e41f301fc6155b25` |
-| `package_sha256` | `54a81ccbc9afaf75d3d602dbd224016a605cf7f5949326423188a2044b276565` (sha256 of `ATLAS-DEVQ-0002-E2.package.json`) |
+| `work_seal` | `ac1cc81f985614f84a742f8a7ace4bcbad855748656d61c03c779d1bc3febfff` |
+| `workflow_inputs_sha256` | `c1c913330e0143ac98ded649fcb25192165397104cd77ed77965f8e09e058e39` |
+| `package_sha256` | `b8035f9b0cb24e6ff9423b466e117d0dc8c8577eac6835147df5ceddb1bf62fe` (sha256 of `ATLAS-DEVQ-0002-E2.package.json`) |
+| Supersedes | package `54a81ccb…276565` (v1, commit `99689171`; never dispatched). It was revised after the package review: GET-only cross-origin tests, portability, `from None` redaction, base-format URLError messages, turn economy |
 | Grant required | `ONE_WORKFLOW_DISPATCH_GRANT` (not issued) |
 
 ## Dispatch notes
