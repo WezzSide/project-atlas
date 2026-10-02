@@ -1,0 +1,24 @@
+{
+  "attempt_kind": "implementation",
+  "bounded_repairs_used": 0,
+  "builder": {
+    "git_blob": "c2ca7995898d558e8a3a60477bee266816a0dc64",
+    "id": "dev_package/1",
+    "module": "src/project_atlas/orchestration/autonomy/dev_package.py",
+    "on_main": "64195b71b14cdb072948c08bddc440b5343d28ce"
+  },
+  "dispatched": false,
+  "execution_id": "ATLAS-DEVQ-0002-E2",
+  "grant_required": "ONE_WORKFLOW_DISPATCH_GRANT",
+  "implementation_attempt": "2/3",
+  "label": "E2_PACKAGE_PREPARED_AWAITING_VALID_EXECUTION_GRANT",
+  "package_sha256": "54a81ccbc9afaf75d3d602dbd224016a605cf7f5949326423188a2044b276565",
+  "sealed_base": "64195b71b14cdb072948c08bddc440b5343d28ce",
+  "sealed_base_tree": "de1ef3bc700e28096b091c3cbc7aae59c3d87c62",
+  "spec_file_sha256": "325d1fa5b9bae01c4da9cc831d7dd1a5bd56432fea888d5a23120795516c68a6",
+  "spec_sha256": "7b7b1f8fae5590f6e788d169b0c039c712d8fde967be71c84c7f08c713754380",
+  "task_id": "ATLAS-DEVQ-0002",
+  "task_prompt_sha256": "568f55af6fee545cb35560cb375d67fbcbc0d0ba4c3542692b6b7a10bfd548c6",
+  "work_seal": "b81e7195fae4b2e5734fa5f148eb5176d0cceeeae5d6469d0b50b917b081dccc",
+  "workflow_inputs_sha256": "50cf378876c5f012bd740600ec24fc86d320689b84caea34e41f301fc6155b25"
+}
