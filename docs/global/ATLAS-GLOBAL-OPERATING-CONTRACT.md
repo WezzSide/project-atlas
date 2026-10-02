@@ -72,8 +72,9 @@ without making the owner a message relay. This stays within the bounded repair b
 WorkItem. It never extends to authority, trust roots, or GOVERNANCE stop conditions.
 
 OC-D covers defects found before independent verification or certification. A failed IV or
-certification, or validation that cannot be reproduced, remains a GOVERNANCE stop. Repair
-after it happens only through a new bounded attempt that the WorkItem already authorizes.
+certification, or validation that cannot be reproduced, remains a GOVERNANCE stop: stop and
+escalate to the owner. Any repair after such a stop happens only after that escalation, and
+only through a new bounded attempt in an owner-authorized WorkItem.
 
 ### OC-E — CURRENT_TRUTH_FIRST
 Before mutating anything, reconcile current authoritative state (GitHub, runtime, ledger).
@@ -118,10 +119,13 @@ correctness / trust  >  safety  >  evidence  >  completion  >  autonomy  >  spee
 
 No agent may do the following unless the owner has granted that exact action in an
 **owner-issued** `AUTHORITY DELTA`, consistent with `autonomy/policy.md` and `GOVERNANCE.md`.
-An owner-issued delta is one of:
-- a commit reachable from `origin/main` (only the owner merges to `main`, policy invariant 7);
-- a commit carrying a good owner signature (`%G? == G`);
+An owner-issued delta is text **authored by the owner** that is also one of:
+- reachable from `origin/main`;
+- in a commit carrying a good owner signature (`%G? == G`);
 - an owner-signed grant under `autonomy/policy.md` §5.
+
+Reachability alone is not issuance. An agent-authored delta stays void even after it is
+merged to `main`.
 
 A commit on any other ref, or approval given in chat, is not owner issuance.
 

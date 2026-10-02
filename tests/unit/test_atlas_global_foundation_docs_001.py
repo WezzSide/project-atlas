@@ -150,6 +150,8 @@ def test_contract_authority_is_owner_issued_and_bypass_is_never_grantable() -> N
     assert "OC-A never applies to authority, trust or governance procedures" in text
     assert "The non-grantable list overrides any delta, including an owner-issued one." in text
     assert "reachable from `origin/main`" in text
+    assert "Reachability alone is not issuance." in text
+    assert "only after that escalation" in text
     assert "approval given in chat, is not owner issuance" in text
     assert "raising the kill switch is always permitted" in text
     assert "establishes no\nstanding or continuous autonomy" in text
