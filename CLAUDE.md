@@ -6,7 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Coder Alpha north star:** persistent brain for AI-native projects — see
 `docs/product/CODER-ALPHA-NORTH-STAR.md` (D-037). Historical roadmap priority
-is not current owner priority.
+is not current owner priority. Global operating foundation (operating
+contract, style mission, Global Goals, directive template): `docs/global/`.
 
 Project Atlas is a local-first "project knowledge compiler": it scans approved
 documentation sources and generates a structured Obsidian vault following an

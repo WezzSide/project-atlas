@@ -7,6 +7,10 @@ Architecture: ADR-008 (stack) · ADR-009 (tokens) · ADR-010 (Command Center).
 
 ## Invariants
 
+Governed by the ATLAS Global Style Mission (`docs/global/ATLAS-GLOBAL-STYLE-MISSION.md`):
+truthful UI and semantic separation of connectivity, freshness, health, execution,
+verification and authorization.
+
 - **UI ≠ canonical** — this app never writes Layer B / claims / authority.
 - **Graph ≠ authority** — derived displays only.
 - **Unknown ≠ healthy** — missing OBS snapshot renders as `unknown`.
