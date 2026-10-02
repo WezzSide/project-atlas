@@ -16,6 +16,9 @@ Dated baselines are evidence snapshots. They are not doctrine and are never rewr
 | Baseline | Doc |
 |---|---|
 | G1–G15 current-state matrix (2026-10-02) | [baseline/2026-10-02-G1-G15-BASELINE.md](./baseline/2026-10-02-G1-G15-BASELINE.md) |
+| Correction 1 to that matrix: evidence scope and DEVQ-0001 history | [baseline/2026-10-02-G1-G15-BASELINE-CORRECTION-1.md](./baseline/2026-10-02-G1-G15-BASELINE-CORRECTION-1.md) |
+| Authority-compatibility note and open owner decisions D1–D5 | [baseline/2026-10-02-AUTHORITY-COMPATIBILITY.md](./baseline/2026-10-02-AUTHORITY-COMPATIBILITY.md) |
+| Operational slice, F2 decision brief, E2 runbook | [baseline/2026-10-02-OPERATIONAL-SLICE-AND-F2-BRIEF.md](./baseline/2026-10-02-OPERATIONAL-SLICE-AND-F2-BRIEF.md) |
 | Autonomy and fleet frontier, DEVQ-0002 record (2026-10-02) | [baseline/2026-10-02-AUTONOMY-FRONTIER.md](./baseline/2026-10-02-AUTONOMY-FRONTIER.md) |
 | Studio / Mission Control style audit (2026-10-02) | [baseline/2026-10-02-STYLE-AUDIT.md](./baseline/2026-10-02-STYLE-AUDIT.md) |
 
