@@ -15,9 +15,11 @@ from project_atlas.orchestration.autonomy.dev_package import (
     INSTRUCTIONS_PREFIX,
     MAX_PROMPT_BYTES,
     OWNER_SCOPABLE_AUTONOMY_MODULES,
+    REPAIR_SUFFIX,
     PackageSpecError,
     build_package,
     build_work,
+    effective_statement,
     instructions_sha256,
     load_spec,
     package_sha256,
@@ -47,6 +49,7 @@ BASE_SPEC: dict[str, Any] = {
     ],
     "attempt": 1,
     "max_attempts": 3,
+    "attempt_kind": "implementation",
 }
 
 
@@ -120,6 +123,7 @@ def test_instructions_digest_is_sealed_into_work() -> None:
     assert w.acceptance_contract[-1] == INSTRUCTIONS_PREFIX + instructions_sha256(spec)
     canon = json.dumps(
         {
+            "attempt_kind": "implementation",
             "statement": BASE_SPEC["statement"],
             "acceptance_commands": BASE_SPEC["acceptance_commands"],
         },
@@ -156,7 +160,9 @@ def test_execution_id_is_derived_and_cannot_be_supplied() -> None:
 def test_package_structure_matches_first_run_plus_provenance() -> None:
     pkg = build_package(load_spec(_spec_text()))
     ref = dev_first_run.build_package()
-    assert set(pkg) == set(ref) | {"provenance"}
+    # documented top-level additions; every shared key keeps dev_first_run's shape
+    assert set(pkg) == set(ref) | {"provenance", "attempt_kind"}
+    assert pkg["attempt_kind"] == "implementation"
     for k in ref:
         if k != "secrets":
             assert _keys(pkg[k]) == _keys(ref[k]), k
@@ -182,14 +188,90 @@ def test_package_has_provenance_and_never_asserts_secret_presence() -> None:
     assert pkg["grant_required"] == "ONE_WORKFLOW_DISPATCH_GRANT"
 
 
-def test_build_work_is_sealed_and_repair_attempt_marks_statement() -> None:
+REPAIR_CONTRACT = [*BASE_SPEC["acceptance_contract"], "RESOLVE:F-0001 handle the edge case"]
+
+
+def test_build_work_is_sealed_and_first_attempt_has_no_suffix() -> None:
     w = build_work(load_spec(_spec_text()))
     w.verify_seal()
     assert w.execution_id == "SYNTH-PKG-0001-E1" and w.attempt == 1
-    repair = build_package(load_spec(_spec_text(attempt=2)))
-    assert "REPAIR attempt" in repair["workflow_inputs"]["task_prompt"]
     first = build_package(load_spec(_spec_text()))
     assert "REPAIR attempt" not in first["workflow_inputs"]["task_prompt"]
+
+
+def test_implementation_attempt_2_is_not_a_repair() -> None:
+    """E2-like: attempt 2/3 consumes ceiling but is NOT a repair (no findings exist)."""
+    spec = load_spec(_spec_text(attempt=2, attempt_kind="implementation"))
+    assert effective_statement(spec) == BASE_SPEC["statement"]
+    pkg = build_package(spec)
+    assert "REPAIR" not in pkg["workflow_inputs"]["task_prompt"]
+    assert "attempt 2/3" in pkg["workflow_inputs"]["task_prompt"]
+    assert pkg["attempt_kind"] == "implementation"
+    assert build_work(spec).attempt == 2
+
+
+def test_repair_attempt_with_resolve_entry_gets_suffix() -> None:
+    spec = load_spec(
+        _spec_text(attempt=2, attempt_kind="repair", acceptance_contract=REPAIR_CONTRACT)
+    )
+    assert effective_statement(spec) == BASE_SPEC["statement"] + REPAIR_SUFFIX
+    pkg = build_package(spec)
+    assert "This is a REPAIR attempt" in pkg["workflow_inputs"]["task_prompt"]
+    assert pkg["attempt_kind"] == "repair"
+
+
+@pytest.mark.parametrize(
+    ("over", "reason"),
+    [
+        (
+            {"attempt": 1, "attempt_kind": "repair", "acceptance_contract": REPAIR_CONTRACT},
+            "REPAIR_ATTEMPT_INVALID",
+        ),
+        ({"attempt": 2, "attempt_kind": "repair"}, "REPAIR_RESOLVE_MISSING"),
+        (
+            {
+                "attempt": 2,
+                "attempt_kind": "repair",
+                "acceptance_contract": [*BASE_SPEC["acceptance_contract"], "resolve:F-1 x"],
+            },
+            "REPAIR_RESOLVE_MISSING",  # case-sensitive
+        ),
+        (
+            {
+                "attempt": 2,
+                "attempt_kind": "repair",
+                "acceptance_contract": [*BASE_SPEC["acceptance_contract"], "  RESOLVE:F-1 x"],
+            },
+            "REPAIR_RESOLVE_MISSING",  # must start the entry
+        ),
+        ({"attempt_kind": "Repair"}, "ATTEMPT_KIND_INVALID"),
+        ({"attempt_kind": "implementation "}, "ATTEMPT_KIND_INVALID"),
+        ({"attempt_kind": "retry"}, "ATTEMPT_KIND_INVALID"),
+        ({"attempt_kind": ""}, "ATTEMPT_KIND_INVALID"),
+        ({"attempt_kind": None}, "SPEC_TYPE"),
+        ({"attempt_kind": 1}, "SPEC_TYPE"),
+    ],
+)
+def test_attempt_kind_rejections(over: dict[str, Any], reason: str) -> None:
+    assert _reason(_spec_text(**over)) == reason
+
+
+def test_attempt_kind_is_required() -> None:
+    text = json.dumps({k: v for k, v in BASE_SPEC.items() if k != "attempt_kind"})
+    assert _reason(text) == "SPEC_MISSING_KEY"
+
+
+def test_attempt_kind_changes_seal_inputs_and_package_hash() -> None:
+    """Only attempt_kind differs; it must change every identity hash."""
+    common: dict[str, Any] = {"attempt": 2, "acceptance_contract": REPAIR_CONTRACT}
+    impl = load_spec(_spec_text(attempt_kind="implementation", **common))
+    rep = load_spec(_spec_text(attempt_kind="repair", **common))
+    a, b = build_package(impl), build_package(rep)
+    assert a["work_seal"] != b["work_seal"]
+    assert a["workflow_inputs_sha256"] != b["workflow_inputs_sha256"]
+    assert package_sha256(render_package(a)) != package_sha256(render_package(b))
+    assert a["provenance"]["spec_sha256"] != b["provenance"]["spec_sha256"]
+    assert instructions_sha256(impl) != instructions_sha256(rep)
 
 
 # -- acceptance commands -------------------------------------------------------------------

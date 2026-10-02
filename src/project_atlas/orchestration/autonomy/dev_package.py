@@ -55,6 +55,7 @@ __all__ = [
     "PackageSpecError",
     "build_package",
     "build_work",
+    "effective_statement",
     "instructions_sha256",
     "load_spec",
     "package_sha256",
@@ -158,6 +159,12 @@ MAX_ITEM_CHARS = 500
 MAX_PROMPT_BYTES = 32000
 MAX_ORDINAL = 9999
 MAX_ATTEMPTS_CEILING = 10
+
+# What an attempt IS, stated explicitly (never inferred from ``attempt``): an "implementation"
+# attempt (any attempt number, e.g. a re-run after lost result bytes) never claims to be a
+# repair; a "repair" attempt must follow a previous attempt and name the findings it resolves.
+ATTEMPT_KINDS = frozenset({"implementation", "repair"})
+RESOLVE_PREFIX = "RESOLVE:"
 
 REPAIR_SUFFIX = (
     " This is a REPAIR attempt: resolve every RESOLVE:<finding_id> listed "
@@ -418,6 +425,7 @@ class PackageSpec:
     acceptance_commands: tuple[str, ...]
     attempt: int
     max_attempts: int
+    attempt_kind: str
 
     def __post_init__(self) -> None:
         for name in ("task_id", "lineage_root"):
@@ -492,6 +500,19 @@ class PackageSpec:
                 "ATTEMPT_INVALID",
                 f"require 1 <= attempt <= max_attempts <= {MAX_ATTEMPTS_CEILING}",
             )
+        kind = _str("attempt_kind", self.attempt_kind)
+        if kind not in ATTEMPT_KINDS:
+            raise _fail(
+                "ATTEMPT_KIND_INVALID", f"attempt_kind must be one of {sorted(ATTEMPT_KINDS)}"
+            )
+        if kind == "repair":
+            if attempt < 2:
+                raise _fail("REPAIR_ATTEMPT_INVALID", "a repair attempt requires attempt > 1")
+            if not any(c.startswith(RESOLVE_PREFIX) for c in self.acceptance_contract):
+                raise _fail(
+                    "REPAIR_RESOLVE_MISSING",
+                    f"a repair attempt needs at least one {RESOLVE_PREFIX!r} contract entry",
+                )
 
     @property
     def execution_id(self) -> str:
@@ -558,10 +579,22 @@ def spec_sha256(spec: PackageSpec) -> str:
     return _canonical_sha256(asdict(spec))
 
 
+def effective_statement(spec: PackageSpec) -> str:
+    """The statement the executor receives: REPAIR_SUFFIX only for attempt_kind == "repair"."""
+    return spec.statement + REPAIR_SUFFIX if spec.attempt_kind == "repair" else spec.statement
+
+
 def instructions_sha256(spec: PackageSpec) -> str:
-    """sha256 over the canonical JSON of {statement, acceptance_commands} (sealed into work)."""
+    """sha256 over canonical JSON of {attempt_kind, effective statement, acceptance_commands}.
+
+    Sealed into the work item, so each of them changes ``work_seal``.
+    """
     return _canonical_sha256(
-        {"statement": spec.statement, "acceptance_commands": list(spec.acceptance_commands)}
+        {
+            "attempt_kind": spec.attempt_kind,
+            "statement": effective_statement(spec),
+            "acceptance_commands": list(spec.acceptance_commands),
+        }
     )
 
 
@@ -587,16 +620,16 @@ def build_work(spec: PackageSpec) -> WorkItem:
         raise _fail("WORK_INVALID", str(exc)) from exc
 
 
-def _statement(spec: PackageSpec) -> str:
-    return spec.statement + REPAIR_SUFFIX if spec.attempt > 1 else spec.statement
-
-
 def build_package(spec: PackageSpec) -> dict[str, Any]:
-    """Same key structure as ``dev_first_run.build_package`` plus ``provenance``."""
+    """Same key structure as ``dev_first_run.build_package`` plus ``attempt_kind`` and
+    ``provenance`` (both top-level additions; every shared key keeps its shape)."""
     w = build_work(spec)
     commands = spec.acceptance_commands
     payload = build_dispatch_payload(
-        w, base_branch=BASE_BRANCH, task_statement=_statement(spec), acceptance_commands=commands
+        w,
+        base_branch=BASE_BRANCH,
+        task_statement=effective_statement(spec),
+        acceptance_commands=commands,
     )
     if len(payload.inputs["task_prompt"].encode()) > MAX_PROMPT_BYTES:
         raise _fail("PROMPT_TOO_LONG", f"assembled task_prompt exceeds {MAX_PROMPT_BYTES} bytes")
@@ -663,6 +696,7 @@ def build_package(spec: PackageSpec) -> dict[str, Any]:
             "owner statement)"
         },
         "grant_required": "ONE_WORKFLOW_DISPATCH_GRANT",
+        "attempt_kind": spec.attempt_kind,
         "provenance": {"builder": BUILDER_ID, "spec_sha256": spec_sha256(spec)},
     }
 
