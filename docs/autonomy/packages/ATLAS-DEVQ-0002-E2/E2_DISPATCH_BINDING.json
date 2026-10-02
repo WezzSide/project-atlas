@@ -1,0 +1,23 @@
+{
+  "label": "E2_DISPATCH_BOUND",
+  "run_id": 37023482722,
+  "created_at": "2026-10-02T14:57:05Z",
+  "event": "workflow_dispatch",
+  "workflow": ".github/workflows/atlas-agent-execute.yml",
+  "workflow_ref": "main",
+  "run_head_sha": "64195b71b14cdb072948c08bddc440b5343d28ce",
+  "run_attempt": 1,
+  "sealed_base": "64195b71b14cdb072948c08bddc440b5343d28ce",
+  "sealed_base_tree": "de1ef3bc700e28096b091c3cbc7aae59c3d87c62",
+  "work_seal": "ac1cc81f985614f84a742f8a7ace4bcbad855748656d61c03c779d1bc3febfff",
+  "workflow_inputs_sha256": "c1c913330e0143ac98ded649fcb25192165397104cd77ed77965f8e09e058e39",
+  "package_sha256": "b8035f9b0cb24e6ff9423b466e117d0dc8c8577eac6835147df5ceddb1bf62fe",
+  "execution_id": "ATLAS-DEVQ-0002-E2",
+  "attempt_kind": "implementation",
+  "implementation_attempt": "2/3",
+  "dispatch_window_utc": ["2026-10-02T14:56:49Z", "2026-10-02T14:57:06Z"],
+  "dispatch_response": "HTTP 204",
+  "dispatch_body_sha256": "8051567d674fd3fd564c1b61bd26b116a71f8b9bdc55f699aa2bfa3b797c2de8",
+  "correlation": "exactly one workflow_dispatch run of this workflow created at/after the pre-dispatch timestamp; head_branch main; head_sha = sealed base",
+  "grant_status": "CONSUMED"
+}
