@@ -103,3 +103,25 @@ Validate:
 ```bash
 python scripts/check_documentation.py --vault /path/to/atlas-vault
 ```
+
+### Resume captured Vault events
+
+If a managed `document` command captured raw Vault events but normalization or
+routing stopped before session accounting closed, resume only the event IDs
+already registered to that session:
+
+```bash
+atlas-agent reprocess-events \
+  --vault-root /path/to/atlas-vault \
+  --session-id AS-... \
+  --mda-command mda \
+  --json
+```
+
+The command discovers raw events from the selected session state, validates
+their Vault/session/skill bindings, and composes the existing normalizer and
+router. It does not accept arbitrary event paths, capture new events, process
+spool work, issue receipts, or complete sessions. Pending spool work must use
+`atlas-agent sync-spool`. Existing normalized outputs are revalidated and
+routed idempotently; session counters are reconciled only after every
+registered event succeeds.
