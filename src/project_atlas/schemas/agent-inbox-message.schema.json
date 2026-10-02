@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://project-atlas.local/schemas/agent-inbox-message.schema.json",
+  "title": "Atlas Agent Inbox Message v1",
+  "description": "Transport-only message envelope. It carries no execution, merge, or owner authority.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "message_id", "idempotency_key", "project_id", "task_id", "correlation_id",
+    "producer", "message_kind", "task_class", "trusted_head", "trusted_tree",
+    "payload", "payload_digest", "created_at"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "message_id": { "$ref": "#/$defs/id" },
+    "idempotency_key": { "$ref": "#/$defs/id" },
+    "project_id": { "$ref": "#/$defs/id" },
+    "task_id": { "$ref": "#/$defs/id" },
+    "run_id": { "anyOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] },
+    "dispatch_id": { "anyOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] },
+    "attempt_id": { "anyOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] },
+    "correlation_id": { "$ref": "#/$defs/id" },
+    "causation_id": { "anyOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] },
+    "requester_id": { "anyOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] },
+    "authority_reference": { "anyOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] },
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "agent_id"],
+      "properties": {
+        "role": { "enum": ["local", "integration", "autonomous"] },
+        "agent_id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" }
+      }
+    },
+    "message_kind": { "enum": ["AGENT_RESULT", "BLOCKED", "PROGRESS", "VERIFY_REQUEST", "VERIFICATION_RESULT", "CONTINUATION", "OWNER_REQUIRED"] },
+    "task_class": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
+    "reason_code": { "anyOf": [{ "type": "string", "maxLength": 64, "pattern": "^[A-Z][A-Z0-9_]{0,63}$" }, { "type": "null" }] },
+    "trusted_head": { "$ref": "#/$defs/gitObjectId" },
+    "trusted_tree": { "$ref": "#/$defs/gitObjectId" },
+    "payload": { "type": "object", "maxProperties": 64 },
+    "payload_digest": { "$ref": "#/$defs/sha256" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "expires_at": { "anyOf": [{ "type": "string", "format": "date-time" }, { "type": "null" }] },
+    "retryable": { "type": "boolean", "default": false },
+    "owner_required": { "type": "boolean", "default": false, "description": "Producer hint only; never used as an authority decision." },
+    "authority_claimed": { "const": false, "default": false },
+    "execution_authorized": { "const": false, "default": false },
+    "merge_authorized": { "const": false, "default": false }
+  },
+  "$defs": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
+    "gitObjectId": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+  }
+}

@@ -7,6 +7,7 @@ and never auto-dispatches a next 001D hop.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 from project_atlas.orchestration.autonomy.continuation import select_next
@@ -164,6 +165,10 @@ class AutonomousGovernor:
         self._last_verifier: str | None = None
         self._last_implementer: str | None = None
         self._remediation_needed = False
+        self._governed_host_overrides: dict[str, ExecutionHostClass] = {}
+        self._mailbox_materialization_guards: dict[
+            str, tuple[Callable[[], bool], Callable[[int, int, str, object], bool]]
+        ] = {}
 
     def _next_sequence(self) -> int:
         self._sequence += 1
@@ -197,14 +202,12 @@ class AutonomousGovernor:
             nodes=nodes,
             agents=tuple(self._agents),
             leases=tuple(self._leases),
-            dependencies=tuple(
-                f"{edge.source}->{edge.target}" for edge in self._edges(nodes)
-            ),
+            dependencies=tuple(f"{edge.source}->{edge.target}" for edge in self._edges(nodes)),
             dag_edges=self._edges(nodes),
-            mutation_surfaces=tuple(
-                sorted({node.mutation_surface.surface_id for node in nodes})
-            ),
-            overlap_state=overlap_gate(nodes) if nodes else OverlapState(
+            mutation_surfaces=tuple(sorted({node.mutation_surface.surface_id for node in nodes})),
+            overlap_state=overlap_gate(nodes)
+            if nodes
+            else OverlapState(
                 parallel_execution=False,
                 conflict_surfaces=(),
                 reason="NO_NODES",
@@ -212,9 +215,7 @@ class AutonomousGovernor:
             ci_state=self._ci_state,
             iv_state=self._iv_state,
             certification_state=self._certification_state,
-            owner_gates=tuple(
-                node.owner_gate for node in nodes if node.owner_gate is not None
-            ),
+            owner_gates=tuple(node.owner_gate for node in nodes if node.owner_gate is not None),
             hard_blockers=tuple(self._hard_blockers),
             sequence=self._sequence,
         )
@@ -378,6 +379,122 @@ class AutonomousGovernor:
         self._replace(updated)
         self._transitions.append(record)
         return record
+
+    def _register_mailbox_materialization_guards(
+        self,
+        package_id: str,
+        *,
+        execution_guard: Callable[[], bool],
+        recovery_guard: Callable[[int, int, str, object], bool],
+    ) -> None:
+        """Register the mailbox bridge's current-context validation callbacks."""
+        if not package_id.startswith("MBX-SUCC-"):
+            raise GovernorError(
+                "mailbox guard requires a successor package", code="NOT_MAILBOX_NODE"
+            )
+        self._mailbox_materialization_guards[package_id] = (execution_guard, recovery_guard)
+
+    def _restore_blocked_materialization(
+        self,
+        package_id: str,
+        *,
+        generation: int,
+        lifecycle_revision: int,
+        owner_token: str,
+        guard: object,
+    ) -> TransitionRecord:
+        """Restore a mailbox node only through its current-context revalidation."""
+        node = self._require_node(package_id)
+        guards = self._mailbox_materialization_guards.get(package_id)
+        recovery_guard = guards[1] if guards is not None else None
+        try:
+            revalidated = recovery_guard is not None and bool(
+                recovery_guard(generation, lifecycle_revision, owner_token, guard)
+            )
+        except Exception:
+            revalidated = False
+        if node.state != NodeState.BLOCKED or not revalidated:
+            raise GovernorError(
+                "blocked node cannot be restored without current materialization validation",
+                code="MATERIALIZATION_REVALIDATION_REQUIRED",
+            )
+        updated, record = apply_transition(
+            node,
+            NodeState.READY,
+            reason="MAILBOX_MATERIALIZATION_REVALIDATED",
+            sequence=self._next_sequence(),
+            allow_materialization_recovery=True,
+        )
+        self._replace(updated)
+        self._transitions.append(record)
+        return record
+
+    def dispatch_external_leased(
+        self, lease_id: str, dispatch: Callable[[], dict[str, object]]
+    ) -> dict[str, object]:
+        """Run one external dispatch only after revalidating its active lease."""
+        lease = next((item for item in self._leases if item.lease_id == lease_id), None)
+        if lease is None or not lease.active:
+            raise GovernorError("lease not active", code="LEASE_INACTIVE")
+        node = self._require_node(lease.package_id)
+        self._require_dispatch_host_class(node)
+        self._require_execution_guard(lease.package_id)
+        return dispatch()
+
+    def record_governed_host_override(
+        self, package_id: str, host_class: ExecutionHostClass
+    ) -> None:
+        """Record that ``host_class`` was selected through the governed
+        override path (``lease(execution_host_class_override=...)`` or its
+        rehydration mirror), i.e. only after every authority check and only
+        by an explicit, operator-configured caller. This is the capability
+        binding ``LOCAL_PROCESS`` dispatch requires; it never widens what a
+        node is authorized to do and is not settable from node content."""
+        self._governed_host_overrides[package_id] = host_class
+
+    def _require_dispatch_host_class(self, node: WorkNode) -> None:
+        """Host-class contract for the external-dispatch seam.
+
+        ``EXTERNAL_AGENT`` is the mailbox/agent contract. ``LOCAL_PROCESS`` is
+        NOT a blanket bypass: it is allowed only for a node whose host class
+        was granted through the governed override path (see
+        ``record_governed_host_override``) and never for a mailbox-derived
+        successor. Every other/unknown host class is denied (fail closed).
+        """
+        host_class = node.execution_host_class
+        if host_class == ExecutionHostClass.EXTERNAL_AGENT:
+            return
+        if (
+            host_class == ExecutionHostClass.LOCAL_PROCESS
+            and self._governed_host_overrides.get(node.package_id)
+            == ExecutionHostClass.LOCAL_PROCESS
+            and node.package_id not in self._mailbox_materialization_guards
+            and not node.package_id.startswith("MBX-SUCC-")
+        ):
+            return
+        raise GovernorError(
+            f"execution host class {host_class!s} is not authorized for external dispatch",
+            code="HOST_NOT_AUTHORIZED",
+        )
+
+    def _require_execution_guard(self, package_id: str) -> None:
+        guards = self._mailbox_materialization_guards.get(package_id)
+        if guards is None:
+            if package_id.startswith("MBX-SUCC-"):
+                raise GovernorError(
+                    "mailbox execution guard is not registered",
+                    code="MAILBOX_AUTHORITY_REVALIDATION_REQUIRED",
+                )
+            return
+        try:
+            allowed = bool(guards[0]())
+        except Exception:
+            allowed = False
+        if not allowed:
+            raise GovernorError(
+                "current mailbox authority is not validated",
+                code="MAILBOX_AUTHORITY_REVALIDATION_REQUIRED",
+            )
 
     def mark_ready(self, package_id: str) -> TransitionRecord:
         return self.transition(package_id, NodeState.READY, "GOVERNOR_MARK_READY")
@@ -590,6 +707,16 @@ class AutonomousGovernor:
                 require_owner(node.owner_gate, owner_grant=owner_grant)
             except OwnerGateError as exc:
                 raise GovernorError(str(exc), code="OWNER_GATE_REQUIRED") from exc
+        self._require_execution_guard(package_id)
+        if execution_host_class_override is not None and (
+            package_id in self._mailbox_materialization_guards or package_id.startswith("MBX-SUCC-")
+        ):
+            # A mailbox successor is EXTERNAL_AGENT-only; no caller-supplied
+            # host-class selection may redirect it (IV finding, Lane D).
+            raise GovernorError(
+                "mailbox successor cannot take a host-class override",
+                code="HOST_NOT_AUTHORIZED",
+            )
         if would_overlap(tuple(self._nodes), node):
             raise GovernorError("surface overlap forbids lease", code="SURFACE_OVERLAP")
         agent = self._require_agent(agent_id)
@@ -633,6 +760,7 @@ class AutonomousGovernor:
             # closing that partial-mutation window.
             node = node.model_copy(update={"execution_host_class": execution_host_class_override})
             self._replace(node)
+            self.record_governed_host_override(package_id, execution_host_class_override)
         self.transition(package_id, NodeState.LEASED, f"LEASED_TO_{agent_id}")
         return lease
 
@@ -754,6 +882,7 @@ class AutonomousGovernor:
         if lease is None or not lease.active:
             raise GovernorError("lease not active", code="LEASE_INACTIVE")
         node = self._require_node(lease.package_id)
+        self._require_execution_guard(lease.package_id)
         if node.execution_host_class != ExecutionHostClass.IN_PROCESS:
             raise GovernorError("external host is not authorized", code="HOST_NOT_AUTHORIZED")
         self._last_implementer = lease.agent_id

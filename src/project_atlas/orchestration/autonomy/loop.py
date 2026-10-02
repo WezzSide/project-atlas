@@ -32,6 +32,7 @@ from project_atlas.orchestration.autonomy.lease_projection import ProjectionErro
 from project_atlas.orchestration.autonomy.leases import expand_lease
 from project_atlas.orchestration.autonomy.models import (
     CANONICAL_REPOSITORY_IDENTITY,
+    AgentCapability,
     ExecutionHostClass,
     NodeState,
     OwnerGateKind,
@@ -295,9 +296,10 @@ class AutonomousLoop:
         self._worktree = worktree
         self._execution_host_class_override = execution_host_class_override
         snapshot = governor.snapshot()
-        if evaluate_target_moved(
-            snapshot.current_main, snapshot.current_tree, trusted
-        ) or snapshot.target_moved:
+        if (
+            evaluate_target_moved(snapshot.current_main, snapshot.current_tree, trusted)
+            or snapshot.target_moved
+        ):
             raise LoopError("refusing loop on moved target", code="TARGET_MOVED")
         if not store.exists():
             persist_loop_state(store, initial_loop_state(trusted))
@@ -575,12 +577,52 @@ class AutonomousLoop:
         if node.state is NodeState.LEASED:
             self._governor.transition(package_id, NodeState.ACTIVE, "LOOP_PROCESS_STARTED")
         if passed:
-            self._governor.transition(package_id, NodeState.VERIFYING, "LOOP_RESULT_VALIDATED")
-            try:
-                self._governor.complete_verification(package_id, passed=True)
-            except OwnerGateError:
-                return self._stop(StopReason.OWNER_GATE)
+            if node.iv_requirements.certification_required:
+                # RESULT != VERDICT / EXECUTION_SUCCESS != CERTIFICATION: a
+                # successful implementation/process result is not independent
+                # verification. Route to an independent verifier and leave the
+                # node VERIFYING until a separately bound verifier result
+                # arrives (IMPLEMENTER != VERIFIER).
+                routed_lease_id = self._state.active_lease_id
+                lease = next(
+                    (
+                        item
+                        for item in self._governor.snapshot().leases
+                        if item.lease_id == routed_lease_id
+                    ),
+                    None,
+                )
+                if lease is None:
+                    raise LoopError("implementer lease identity is missing", code="LEASE_MISMATCH")
+                try:
+                    self._governor.route_and_verify(
+                        package_id,
+                        implementer_id=lease.agent_id,
+                    )
+                except Exception:
+                    # Fail closed without wedging the single active loop slot.
+                    self._governor.transition(
+                        package_id,
+                        NodeState.BLOCKED,
+                        "IV_VERIFIER_UNAVAILABLE",
+                    )
+            else:
+                self._governor.transition(
+                    package_id, NodeState.VERIFYING, "LOOP_RESULT_VALIDATED"
+                )
+                try:
+                    self._governor.complete_verification(package_id, passed=True)
+                except OwnerGateError:
+                    return self._stop(StopReason.OWNER_GATE)
+        elif node.execution_host_class is ExecutionHostClass.EXTERNAL_AGENT:
+            # RESULT != VERDICT: a failed external-agent execution is a worker
+            # result, not an independent-review FAIL. It must not consume a
+            # remediation cycle or set the IV state; only a separately bound
+            # verifier result may do that. Keep the lane BLOCKED (fail closed).
+            self._governor.transition(package_id, NodeState.BLOCKED, "LOOP_EXECUTION_FAILED")
         else:
+            # IN_PROCESS / governed LOCAL_PROCESS keep the established
+            # controlled-failure -> remediation-retry contract (PR-C).
             self._governor.transition(package_id, NodeState.VERIFYING, "LOOP_RESULT_FAILED")
             self._governor.complete_verification(package_id, passed=False)
             node = next(
@@ -670,7 +712,7 @@ class AutonomousLoop:
         try:
             lease = self._governor.lease(
                 node.package_id,
-                self._first_agent(),
+                self._first_agent(node.agent_capabilities_required),
                 branch=self._branch,
                 worktree=self._worktree,
                 execution_host_class_override=self._execution_host_class_override,
@@ -823,8 +865,14 @@ class AutonomousLoop:
             return self.apply_observed_result(in_process_id, in_process_id, passed=True)
         if self._dispatch is None:
             return self._fail("external dispatch port is required", code="DISPATCH_UNAVAILABLE")
+        dispatch = self._dispatch
         self._save(phase=LoopPhase.DISPATCHING)
-        receipt = self._dispatch.dispatch_once(self._root)
+        try:
+            receipt = self._governor.dispatch_external_leased(
+                lease_id, lambda: dispatch.dispatch_once(self._root)
+            )
+        except GovernorError as exc:
+            return self._fail(str(exc), code=exc.code)
         dispatch_id = str(receipt.get("dispatch_id") or "")
         if not dispatch_id:
             return self._fail("001D dispatch returned no identity", code="DISPATCH_UNAVAILABLE")
@@ -929,6 +977,24 @@ class AutonomousLoop:
                     code="VALIDATION_STATE_AMBIGUOUS",
                 )
             return self._finalize_validated(dispatch_id, digest, recovered=True)
+        if node.state == NodeState.VERIFYING and node.iv_requirements.certification_required:
+            # EXECUTION_SUCCESS != CERTIFICATION: a successful implementer
+            # result on a certification-required node is routed to
+            # independent IV and legitimately rests in VERIFYING until a
+            # separately bound verifier verdict. Only the LoopState
+            # bookkeeping tail remained; finish it without any governor
+            # mutation (never certifies, never re-routes).
+            observed_passed, digest = self._reobserve_dispatch_outcome(
+                dispatch_id, in_process=is_in_process
+            )
+            if not observed_passed:
+                self._fail(
+                    f"node {package_id!r} is awaiting independent verification "
+                    f"but the dispatch outcome now reobserves as failed for "
+                    f"{dispatch_id!r} -- durable evidence is inconsistent",
+                    code="VALIDATION_STATE_AMBIGUOUS",
+                )
+            return self._finalize_validated(dispatch_id, digest, recovered=True)
         # VERIFYING (complete_verification() itself was interrupted -- no
         # normal, synchronous code path leaves a node here, see the
         # docstring above) or any other state this crash window has no
@@ -992,11 +1058,17 @@ class AutonomousLoop:
             safe_dag_work_remains=True,
         )
 
-    def _first_agent(self) -> str:
+    def _first_agent(self, required: tuple[AgentCapability, ...] = ()) -> str:
+        required_set = frozenset(required)
         for agent in self._governor.snapshot().agents:
-            if agent.available:
+            if agent.available and required_set.issubset(frozenset(agent.capabilities)):
                 return agent.agent_id
-        raise LoopError("no available agent", code="AGENT_UNAVAILABLE")
+        if not required_set:
+            raise LoopError("no available agent", code="AGENT_UNAVAILABLE")
+        raise LoopError(
+            "no available agent has the required capabilities",
+            code="CAPABILITY_UNAVAILABLE",
+        )
 
 
 class CallableDispatchPort:

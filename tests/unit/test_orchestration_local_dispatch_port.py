@@ -224,7 +224,8 @@ def test_a_ready_node_dispatches_to_a_real_local_process_and_certifies(tmp_path:
     # 1-2): the change never touches repo's own working tree at all.
     assert not (repo / "allowed" / "output.txt").exists()
     final = next(n for n in gov.snapshot().nodes if n.package_id == "PRC-A-001")
-    assert final.state == NodeState.CERTIFIED
+    # EXECUTION_SUCCESS != CERTIFICATION: routed to independent IV, not self-certified.
+    assert final.state == NodeState.VERIFYING
 
 
 # ---------------------------------------------------------------------------
@@ -572,7 +573,8 @@ def test_k_a_legitimate_remediation_retry_is_not_a_duplicate(tmp_path: Path) -> 
     worktree_1 = repo / receipt_1["worktree"]
     assert (worktree_1 / "allowed" / "output.txt").is_file()  # proof the retry actually executed
     final = next(n for n in gov.snapshot().nodes if n.package_id == "PRC-K-002")
-    assert final.state == NodeState.CERTIFIED
+    # EXECUTION_SUCCESS != CERTIFICATION: routed to independent IV, not self-certified.
+    assert final.state == NodeState.VERIFYING
 
 
 def test_unrelated_lease_dispatches_after_a_prior_successful_dispatch(tmp_path: Path) -> None:
@@ -782,7 +784,8 @@ def test_envelope_authority_fields_come_from_the_lease_never_a_caller(tmp_path: 
     )
     loop.run_until_stop()
     final = next(n for n in gov.snapshot().nodes if n.package_id == "PRC-ENV-001")
-    assert final.state == NodeState.CERTIFIED
+    # EXECUTION_SUCCESS != CERTIFICATION: routed to independent IV, not self-certified.
+    assert final.state == NodeState.VERIFYING
 
 
 def test_governor_lease_override_never_applies_without_explicit_opt_in(tmp_path: Path) -> None:
