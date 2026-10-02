@@ -63,6 +63,7 @@ def test_job_token_is_only_used_by_the_action_and_the_dedicated_branch_push():
     assert users == [
         "Run agent (bounded prompt, restricted tools)",
         "Commit and push dedicated branch",
+        "Persist envelope-rejected result on the dedicated branch (candidate only)",
     ]
 
 
@@ -75,6 +76,6 @@ def test_dedicated_branch_and_tool_constraints_are_unchanged():
     assert 'git push -u origin "HEAD:${AGENT_BRANCH}"' in TEXT
     args = _agent_step()["with"]["claude_args"]
     assert "--max-turns 20" in args
-    tools = "Edit Read Write Glob Grep Bash(pytest:*) Bash(ruff:*) Bash(bash:*)"
+    tools = "Edit Read Write Glob Grep Bash(pytest:*) Bash(ruff:*) Bash(mypy:*) Bash(bash:*)"
     assert f"--allowedTools {tools}" in args
     assert _agent_step()["with"]["base_branch"] == "${{ env.AGENT_BRANCH }}"
