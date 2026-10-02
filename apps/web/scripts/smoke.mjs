@@ -376,6 +376,29 @@ if (startPs1.includes("VITE_ATLAS_API_PRIVILEGED") || startPs1.includes("PRIVILE
   process.exit(1);
 }
 
+// STYLE-001 (SM-SEPARATION / SM-TRUTH): selection state (.mode-*) must never
+// be painted with the health "ok" green — LIVE may be selected while failed.
+const stylesCss = readFileSync(join(root, "src/styles.css"), "utf8").replace(
+  /\/\*[\s\S]*?\*\//g,
+  "",
+);
+for (const [, selector, body] of stylesCss.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+  if (body.includes("var(--atlas-ok)") && /\.mode\b|\.mode-/.test(selector)) {
+    console.error(
+      `STYLE-001 smoke FAIL — selection selector uses --atlas-ok green: ${selector.trim()}`,
+    );
+    process.exit(1);
+  }
+}
+const signalRack = readFileSync(
+  join(root, "src/pages/design-lab/SignalRackPage.tsx"),
+  "utf8",
+);
+if (/lamp-dot ok"[^>]*\/>\s*Projects/.test(signalRack)) {
+  console.error("STYLE-001 smoke FAIL — 'listed' Projects lamp must not be lamp-dot ok");
+  process.exit(1);
+}
+
 console.log(
   "AS-WEB-ACCEPT-004 + AS-2.1-WEB-MISSION-WORKSPACE-UX smoke PASS — LIVE/DEMO/FIXTURE modes visible (ACCEPTED=YES; no PILOT invent)",
 );
