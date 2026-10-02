@@ -62,8 +62,8 @@ Crash windows that remain open today:
 - **Environments:** `atlas-vps02` has no protection rules.
 - **Grant writers:** `autonomy/grants/**` is supervisor-writable from loop level 2.
 
-Therefore "the grant is on `main`" does not prove owner issuance. Issuer proof must be an
-owner signing key held off-host.
+Therefore "the grant is on `main`" does not prove owner issuance. With the shared owner
+credential, issuer proof needs an owner signing key held off-host. D5 may change this.
 
 | Property | (a) Owner-allowlisted pinned local command | (b) GitHub-side dispatcher workflow behind an environment |
 |---|---|---|

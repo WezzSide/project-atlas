@@ -147,6 +147,7 @@ def test_contract_authority_is_owner_issued_and_bypass_is_never_grantable() -> N
     assert "**Owner approval.**" in text and "**Verifiable issuance.**" in text
     assert "held off every agent host" in text and "pinned owner signer list" in text
     assert "An owner-account merge is *not* verifiable issuance" in text
+    assert "It does **not** by itself let an agent\nperform a boundary action below." in text
     assert "An agent never issues an `AUTHORITY DELTA` to itself." in text
     assert "never overrides a platform or\nclassifier denial" in text
     assert "**Not grantable by any directive.**" in text
@@ -171,6 +172,10 @@ def test_loop_rules_keep_loop_scope_and_open_decisions_stay_open() -> None:
     note = _read("baseline/2026-10-02-AUTHORITY-COMPATIBILITY.md")
     for decision in ("| **D1** |", "| **D2** |", "| **D3** |", "| **D4** |", "| **D5** |"):
         assert decision in note, decision
+    table = note.split("## 3. Open owner decisions", 1)[1].split("Protections", 1)[0]
+    rows = [line for line in table.splitlines() if line.startswith("| **D")]
+    assert len(rows) == 5
+    assert "\n\n| **D" not in table
     brief = _read("baseline/2026-10-02-OPERATIONAL-SLICE-AND-F2-BRIEF.md")
     assert "This brief does not choose." in brief
     assert "**Never** fabricate or rewrite `workflow_conclusion`" in brief

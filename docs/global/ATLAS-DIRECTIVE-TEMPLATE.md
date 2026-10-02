@@ -40,7 +40,7 @@ INVARIANTS:
   <task-specific invariants beyond the global ones; cite OC-*/SM-* rather than restating them>
 
 AUTHORITY DELTA:
-  issued_by: owner @ <owner-signed grant ID | owner-adopted commit SHA>   (owner-signed = machine-verifiable; owner-adopted = governance only)
+  issued_by: owner @ <owner-signed grant ID | owner-adopted commit SHA>   (owner-signed = machine-verifiable; owner-adopted = governance only, and does not let an agent perform a contract §3 boundary action until D1/D5 are decided)
   grants:   <exact, bounded authority beyond contract section 3; e.g. "one workflow_dispatch
              of atlas-agent-execute.yml with workflow_inputs_sha256=<sha>">
   revokes:  <any default authority narrowed for this task>

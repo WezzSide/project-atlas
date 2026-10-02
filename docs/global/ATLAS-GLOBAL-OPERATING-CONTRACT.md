@@ -84,8 +84,9 @@ depends on the governing authority, and this contract does not widen it:
 - **RSI loop:** REDESIGN under the same grant, within the retry cap (`autonomy/policy.md` §9,
   §12.1). A third REDESIGN is an immediate stop.
 - **DEVQ lineage:** a bounded repair attempt within the WorkItem's sealed `max_attempts`
-  (`dev_contracts.materialize_repair`). Every new dispatch still needs its own owner
-  authority (section 3).
+  (`dev_contracts.materialize_repair`). The failed IV is still reported to the owner.
+  Materializing the repair WorkItem is not a dispatch: every new dispatch still needs its
+  own owner authority (section 3).
 - **All other work:** the `GOVERNANCE.md` stop boundary applies: stop and escalate to the
   owner.
 
@@ -134,8 +135,8 @@ correctness / trust  >  safety  >  evidence  >  completion  >  autonomy  >  spee
 ## 3. Owner authority boundaries (default)
 
 No agent may do the following without owner authority for that exact action, consistent
-with `autonomy/policy.md` and `GOVERNANCE.md`. Owner authority takes two forms, and they are
-not interchangeable.
+with `autonomy/policy.md` and `GOVERNANCE.md`. Owner authority takes the three forms below,
+and they are not interchangeable.
 
 **Owner approval.** The owner's instruction in a session or on a PR. This is genuine owner
 authority: it authorizes owner-performed actions and the work a directive describes.
@@ -148,9 +149,17 @@ action; it prepares it and reports it as an owner action (OC-F).
 decision. This is how `autonomy/policy.md` itself became binding, and it is the governance
 adoption mechanism for docs and policy.
 
+Owner adoption makes text binding as governance. It does **not** by itself let an agent
+perform a boundary action below. Whether an owner-adopted `AUTHORITY DELTA` does so is part
+of open decision D1, and it depends on D5, because on this host an owner-account merge cannot
+be told apart from an agent merge. Until the owner decides, the agent prepares the action
+and reports it as an owner action.
+
 **Verifiable issuance.** What a machine authority can check without trusting the agent (for
-example preflight, a dispatch authority or a classifier). It is a signature by an owner key
-that is **held off every agent host**, verified against a pinned owner signer list. This
+example preflight, a dispatch authority or a classifier). Under the current shared-credential
+setup it is a signature by an owner key that is **held off every agent host**, verified
+against a pinned owner signer list. D5 may add other forms, such as a separate agent
+identity. This
 covers an owner-signed grant, or a §5 grant once signatures are required.
 
 An owner-account merge is *not* verifiable issuance on a host where agents operate with the
@@ -184,10 +193,14 @@ owner's own configuration or files:
 - bypassing or weakening a permission classifier, policy gate, branch protection or CI
   requirement;
 - reading secret values;
-- editing `autonomy/policy.md` or `autonomy/loop.yaml`. Agents may propose a change in a PR;
-  only the owner adopts it (`autonomy/policy.md` §16);
+- editing `autonomy/policy.md` or `autonomy/loop.yaml`.
+  - Agents outside the loop may propose a change in a PR.
+  - Loop roles never touch these files (§4.1 floor); they propose via
+    `autonomy/proposals/**`.
+  - Only the owner adopts a change (`autonomy/policy.md` §16);
 - modifying or removing `HALT` / `HALT-REQUEST`. Any role may still *create* them
-  (policy invariant 4), and raising the kill switch is always permitted.
+  (policy invariant 4), and raising the kill switch is always permitted. This bullet applies
+  to all agents, not only loop roles; see the authority note.
 
 The non-grantable list overrides any delta, including an owner-issued one.
 
