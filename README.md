@@ -161,9 +161,9 @@ Repository layout (high-level)
 Governance, agents, and controlled workflows
 - Governed agent sessions use `atlas-vault-documentation/scripts/atlas_agent.py`
   and the canonical skill (`atlas-vault-documentation/skill/SKILL.md`).
-- The `AGENT-BOOTSTRAP.md` and `universal-directive.md` files define the
-  bootstrap and evidence-first rules for autonomous agents working on this
-  repository; agents must follow session lifecycle: bootstrap → preflight →
+- `AGENT-BOOTSTRAP.md` defines the bootstrap rules and `docs/global/` (the
+  ATLAS global operating foundation) the evidence-first operating contract for
+  autonomous agents working on this repository; agents must follow session lifecycle: bootstrap → preflight →
   session-start → work → validate → completion → postflight → receipt.
 - The control plane is intentionally separate from the Core package and must
   not be imported into core runtime code.
@@ -219,5 +219,5 @@ License
 —
 This README synthesizes the authoritative documentation in this repository's
 `docs/` and top-level governance files. For any non-trivial change follow the
-evidence-first directives in `universal-directive.md` and the governed agent
+global operating foundation in `docs/global/README.md` and the governed agent
 bootstrap protocol in `AGENT-BOOTSTRAP.md`.

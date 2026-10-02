@@ -6,6 +6,8 @@ Guidance for AI coding agents working in this repository. Written for a reader w
 
 **Current product direction (Coder Alpha):** Project Atlas is the persistent brain for AI-native projects (Knowledge / Context / Truth). Owner precedence and dogfood contract: `docs/product/CODER-ALPHA-NORTH-STAR.md` (D-037). Historical roadmaps are input to reconciliation, not authority to override owner product priority.
 
+**Global operating foundation:** how agents act, what UI must never claim, and the Global Goals are canonical in `docs/global/` (operating contract, style mission, goals G1–G15, directive template). Directives inherit them by ID and state only their deltas; `autonomy/policy.md` and `GOVERNANCE.md` remain the more specific authorities in their scopes.
+
 **Project Atlas** is a local-first, source-backed "project knowledge compiler". It scans approved documentation sources, classifies and normalizes them, extracts evidence-backed concepts, and generates a structured Obsidian vault following an internal **Open Knowledge Format (OKF)** profile. The output is both a human-readable portfolio operating system and an agent-readable knowledge substrate.
 
 Core principles (from `docs/plan.md` and `docs/prp.md`):

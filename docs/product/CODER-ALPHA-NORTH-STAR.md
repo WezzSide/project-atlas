@@ -189,6 +189,8 @@ Full product-impact table: `docs/CODER-ALPHA-035-REBASE.md` Phase 1.
 3. Stable product/truth invariants (`docs/prp.md`, `docs/plan.md`, acceptance, ADRs, security)
 4. Historical execution planning (master/implementation roadmaps, backlog, old branches) — **input only**
 
+The global operating foundation (`docs/global/`) is a stable invariant at level 3. It governs *how* work is done (operating contract, style mission, Global Goals) and does not change product direction.
+
 ---
 
 ## 12. Honesty stamps
