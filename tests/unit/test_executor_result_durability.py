@@ -63,11 +63,12 @@ def test_agent_step_and_worker_hardening_are_not_weakened():
     assert _step(AGENT)["with"]["github_token"] == "${{ secrets.GITHUB_TOKEN }}"
 
 
-def test_only_agent_and_push_steps_use_the_job_token():
+def test_only_agent_push_and_envelope_persist_steps_use_the_job_token():
     users = [
         n for n, s in zip(NAMES, STEPS, strict=True) if "secrets.GITHUB_TOKEN" in yaml.safe_dump(s)
     ]
-    assert sorted(users) == sorted([AGENT, PUSH])
+    persist = "Persist envelope-rejected result on the dedicated branch (candidate only)"
+    assert sorted(users) == sorted([AGENT, PUSH, persist])
 
 
 _POSIX_ONLY = pytest.mark.skipif(
