@@ -15301,3 +15301,20 @@ GitHub artifacts; fragment merge is future work); setup-python unsupported
 on the worker image (use the image's python3); CLAUDE_E2E=
 NOT_RUN_REQUIRES_EXTERNAL_AUTHORITY (no ANTHROPIC_API_KEY).
 EXECUTOR_SUCCESS != VERIFIED; PASS != MERGE AUTHORIZATION.
+
+## 2026-10-03 — Runner transport-authority incident record (F-RUNNER-1..7)
+
+Branch `docs/runner-authority-incident-2026-10-03`, base `main` b413aa1a. Record only;
+`MERGE_AUTHORIZATION = NOT_GRANTED`; no runtime behaviour change.
+- Added `docs/global/baseline/2026-10-03-RUNNER-AUTHORITY-INCIDENT.md` (+ one row in
+  `docs/global/README.md`): code-grounded analysis of transport-grant handling, the
+  2026-10-02 expiry incident as relayed, and a ranked hardening backlog.
+- OBSERVED in code: an expired transport grant fails closed but is written only to the
+  SQLite `audit_log` (`blocked_authority`); nothing reaches the journal, `health` stays
+  `healthy`, no CLI reads the audit table.
+- F-RUNNER-3: reconcile is startup-only (`cli.py:79`) plus manual (`cli.py:290`); the
+  "periodically here" comment in `controller.py` `run_forever` was stale and is corrected
+  in a separate comment-only commit. Periodic reconcile is proposed, not implemented.
+- VPS2 state and the temporary grant were NOT observed by this session (UNKNOWN).
+- Commands: `python -m pytest tests/unit/test_atlas_global_foundation_docs_001.py -q`;
+  `python -m pytest infra/atlas-runner/tests -q --no-cov`. Results recorded in the PR body.
