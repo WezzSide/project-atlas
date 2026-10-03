@@ -194,6 +194,15 @@ REPAIR_CONTRACT = [*BASE_SPEC["acceptance_contract"], "RESOLVE:F-0001 handle the
 
 def _repair_over() -> dict[str, Any]:
     """Overrides turning BASE_SPEC into the canonical repair of its attempt-1 WorkItem."""
+    over = _repair_over_unsealed()
+    probe = {**BASE_SPEC, **over, "expected_work_seal": "0" * 64}
+    with pytest.raises(PackageSpecError) as ei:  # the builder reports the seal it built
+        build_work(load_spec(json.dumps(probe)))
+    assert ei.value.reason == "REPAIR_WORK_SEAL_MISMATCH"
+    return {**over, "expected_work_seal": ei.value.detail.split("built seal ")[1][:64]}
+
+
+def _repair_over_unsealed() -> dict[str, Any]:
     parent = load_spec(_spec_text())
     return {
         "task_id": "SYNTH-PKG-0001-R1",

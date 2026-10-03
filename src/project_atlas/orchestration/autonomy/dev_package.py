@@ -71,6 +71,7 @@ __all__ = [
     "load_spec",
     "package_sha256",
     "render_package",
+    "repair_spec_from_work",
     "sealed_instructions_sha256",
     "spec_sha256",
     "verify_checkout_ref",
@@ -212,6 +213,10 @@ _TASK_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _AUTHORITY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,199}$")
 _REPO = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$")
 _SHA = re.compile(r"^[0-9a-f]{40}$")
+_SEAL = re.compile(r"^[0-9a-f]{64}$")
+MAX_BRANCH_CHARS = 255
+# AGENT_BRANCH with bounded digit groups (run_id, run_attempt).
+_RESULT_BRANCH = re.compile(r"^atlas/agent-[0-9]{1,20}-[0-9]{1,6}$")
 _PATH_CHARS = re.compile(r"^[A-Za-z0-9._/-]+$")
 # Same shape rules as the "Validate base_branch shape" step of atlas-agent-execute.yml.
 _BRANCH_CHARS = re.compile(r"^[A-Za-z0-9._/-]+$")
@@ -410,7 +415,8 @@ def _check_command(cmd: str) -> None:
 def _check_base_branch(branch: str) -> None:
     """Workflow shape rules: charset, no ``..``, no leading ``/``, no ``.git`` suffix."""
     if (
-        not _BRANCH_CHARS.fullmatch(branch)
+        len(branch) > MAX_BRANCH_CHARS
+        or not _BRANCH_CHARS.fullmatch(branch)
         or ".." in branch
         or branch.startswith("/")
         or branch.endswith(".git")
@@ -459,6 +465,7 @@ class PackageSpec:
     parent_task_id: str | None = None
     parent_execution_id: str | None = None
     base_branch: str | None = None
+    expected_work_seal: str | None = None
 
     def __post_init__(self) -> None:
         for name in ("task_id", "lineage_root"):
@@ -495,7 +502,8 @@ class PackageSpec:
         ]
         # Only a repair may carry such an entry: the one it inherited from its sealed parent
         # (checked byte-exactly against this spec's own instructions below).
-        if inherited and self.attempt_kind != "repair":
+        # (An invalid attempt_kind falls through to ATTEMPT_KIND_INVALID below.)
+        if inherited and self.attempt_kind == "implementation":
             raise _fail("CONTRACT_RESERVED", f"{INSTRUCTIONS_PREFIX!r} entries are builder-only")
         if not allowed:
             raise _fail("ALLOWED_PATHS_EMPTY", "allowed_paths must not be empty")
@@ -588,10 +596,10 @@ class PackageSpec:
                 "branch",
             )
         _check_base_branch(branch)
-        if not AGENT_BRANCH.fullmatch(branch):
+        if not AGENT_BRANCH.fullmatch(branch) or not _RESULT_BRANCH.fullmatch(branch):
             raise _fail(
                 "REPAIR_BASE_BRANCH_NOT_RESULT_BRANCH",
-                f"repair base_branch must match {AGENT_BRANCH.pattern}",
+                f"repair base_branch must match {_RESULT_BRANCH.pattern}",
             )
         # The contract is the parent's sealed contract plus RESOLVE entries, verbatim. The
         # parent's instructions digest must be the one this spec's statement and commands
@@ -616,6 +624,17 @@ class PackageSpec:
                 f"only {RESOLVE_PREFIX!r} entries may follow the inherited instructions entry, "
                 "and at least one must",
             )
+        # Mandatory binding to the canonical repair WorkItem: the spec must name the seal that
+        # ``materialize_repair`` produced; ``build_work`` refuses unless it reproduces it.
+        if self.expected_work_seal is None:
+            raise _fail(
+                "REPAIR_WORK_SEAL_MISSING",
+                "a repair attempt requires expected_work_seal (the materialized repair's seal)",
+            )
+        if not _SEAL.fullmatch(_str("expected_work_seal", self.expected_work_seal)):
+            raise _fail(
+                "REPAIR_WORK_SEAL_INVALID", "expected_work_seal must be 64 lowercase hex chars"
+            )
 
     @property
     def execution_id(self) -> str:
@@ -624,7 +643,12 @@ class PackageSpec:
         return f"{self.task_id}-E{self.execution_ordinal}"
 
 
-_REPAIR_ONLY_FIELDS: tuple[str, ...] = ("parent_task_id", "parent_execution_id", "base_branch")
+_REPAIR_ONLY_FIELDS: tuple[str, ...] = (
+    "parent_task_id",
+    "parent_execution_id",
+    "base_branch",
+    "expected_work_seal",
+)
 _ALL_FIELDS: tuple[str, ...] = tuple(f.name for f in fields(PackageSpec))
 # Required JSON keys. The repair-only keys are optional in the JSON (absent == null).
 _FIELDS: tuple[str, ...] = tuple(n for n in _ALL_FIELDS if n not in _REPAIR_ONLY_FIELDS)
@@ -735,14 +759,16 @@ def build_work(spec: PackageSpec) -> WorkItem:
 
     Implementation: the instructions digest is appended as the last acceptance-contract entry.
     Repair: the contract is used verbatim (it already carries the inherited digest, validated
-    by the spec), which makes the result seal-identical to ``materialize_repair``'s WorkItem.
+    by the spec) and the result must be seal-identical to ``materialize_repair``'s WorkItem:
+    any drift in identity, parent, authority, scope, base, ceiling or contract is refused with
+    ``REPAIR_WORK_SEAL_MISMATCH`` rather than rendered under a different seal.
     """
     if spec.attempt_kind == "repair":
         contract = spec.acceptance_contract
     else:
         contract = (*spec.acceptance_contract, INSTRUCTIONS_PREFIX + instructions_sha256(spec))
     try:
-        return make_work(
+        work: WorkItem = make_work(
             task_id=spec.task_id,
             execution_id=spec.execution_id,
             lineage_root=spec.lineage_root,
@@ -759,6 +785,54 @@ def build_work(spec: PackageSpec) -> WorkItem:
         )
     except ContractError as exc:
         raise _fail("WORK_INVALID", str(exc)) from exc
+    if spec.attempt_kind == "repair" and work.seal != spec.expected_work_seal:
+        raise _fail(
+            "REPAIR_WORK_SEAL_MISMATCH",
+            "spec does not reproduce the materialized repair WorkItem "
+            f"(built seal {work.seal}, expected {spec.expected_work_seal})",
+        )
+    return work
+
+
+def repair_spec_from_work(
+    work: WorkItem,
+    *,
+    statement: str,
+    acceptance_commands: tuple[str, ...],
+    base_branch: str,
+    parent_execution_id: str,
+    execution_ordinal: int = 1,
+) -> PackageSpec:
+    """Repair spec derived from a sealed repair WorkItem (no hand transcription). Pure.
+
+    The WorkItem's seal is verified first and becomes ``expected_work_seal``; every other
+    rule is enforced by ``PackageSpec`` / ``build_work`` as for a hand-written spec.
+    """
+    try:
+        work.verify_seal()
+    except ContractError as exc:
+        raise _fail("WORK_INVALID", str(exc)) from exc
+    return PackageSpec(
+        task_id=work.task_id,
+        execution_ordinal=execution_ordinal,
+        lineage_root=work.lineage_root,
+        repository=work.repository,
+        base_revision=work.base_revision,
+        authority_ref=work.authority_ref,
+        allowed_paths=work.allowed_paths,
+        forbidden_paths=work.forbidden_paths,
+        expected_outputs=work.expected_outputs,
+        acceptance_contract=work.acceptance_contract,
+        statement=statement,
+        acceptance_commands=acceptance_commands,
+        attempt=work.attempt,
+        max_attempts=work.max_attempts,
+        attempt_kind="repair",
+        parent_task_id=work.parent_task_id,
+        parent_execution_id=parent_execution_id,
+        base_branch=base_branch,
+        expected_work_seal=work.seal,
+    )
 
 
 def build_package(spec: PackageSpec) -> dict[str, Any]:
@@ -852,6 +926,7 @@ def build_package(spec: PackageSpec) -> dict[str, Any]:
         pkg["lineage_root"] = w.lineage_root
         pkg["parent_task_id"] = w.parent_task_id
         pkg["parent_execution_id"] = spec.parent_execution_id
+        pkg["expected_work_seal"] = spec.expected_work_seal
         pkg["checkout"] = {
             "base_branch": base_branch,
             "required_revision": w.base_revision,
@@ -869,6 +944,10 @@ def verify_checkout_ref(package: Mapping[str, Any], resolved_sha: object) -> Non
     package must name a previous result branch (never ``main``) and an implementation package
     must name ``main``; the recorded workflow inputs must still hash to
     ``workflow_inputs_sha256``. Raises ``PackageSpecError`` with a stable reason otherwise.
+
+    This checks the package's INTERNAL consistency only. It does not authenticate the package:
+    a forged but self-consistent document passes. The trust anchor is the reviewed
+    ``package_sha256`` of the rendered package; verify that first, then call this.
     """
     inputs = package.get("workflow_inputs")
     required = package.get("base_revision")
@@ -895,10 +974,10 @@ def verify_checkout_ref(package: Mapping[str, Any], resolved_sha: object) -> Non
             raise _fail(
                 "REPAIR_BASE_BRANCH_IS_MAIN", f"a repair package never checks out {BASE_BRANCH!r}"
             )
-        if not AGENT_BRANCH.fullmatch(branch):
+        if not AGENT_BRANCH.fullmatch(branch) or not _RESULT_BRANCH.fullmatch(branch):
             raise _fail(
                 "REPAIR_BASE_BRANCH_NOT_RESULT_BRANCH",
-                f"repair base_branch must match {AGENT_BRANCH.pattern}",
+                f"repair base_branch must match {_RESULT_BRANCH.pattern}",
             )
         checkout = package.get("checkout")
         if (
@@ -906,6 +985,7 @@ def verify_checkout_ref(package: Mapping[str, Any], resolved_sha: object) -> Non
             or checkout.get("base_branch") != branch
             or checkout.get("required_revision") != required
             or not package.get("parent_task_id")
+            or package.get("expected_work_seal") != package.get("work_seal")
         ):
             raise _fail("CHECKOUT_PACKAGE_INVALID", "repair checkout block is inconsistent")
     elif branch != BASE_BRANCH:

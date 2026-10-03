@@ -34,6 +34,7 @@ from project_atlas.orchestration.autonomy.dev_package import (
     load_spec,
     package_sha256,
     render_package,
+    repair_spec_from_work,
     sealed_instructions_sha256,
     spec_sha256,
     verify_checkout_ref,
@@ -121,6 +122,7 @@ def _repair_spec(repair: WorkItem, parent: WorkItem, **over: Any) -> dict[str, A
         "parent_execution_id": parent.execution_id,
         "base_revision": repair.base_revision,
         "base_branch": RESULT_BRANCH,
+        "expected_work_seal": repair.seal,
         "acceptance_contract": list(repair.acceptance_contract),
         "attempt": repair.attempt,
         "max_attempts": repair.max_attempts,
@@ -309,6 +311,7 @@ def test_b_implementation_spec_cannot_carry_repair_fields() -> None:
         ("base_branch", "main"),
         ("parent_task_id", "SYNTH-PKG-0001"),
         ("parent_execution_id", "SYNTH-PKG-0001-E1"),
+        ("expected_work_seal", "0" * 64),
     ):
         assert _reason({**PARENT_SPEC, name: value}) == "IMPLEMENTATION_REPAIR_FIELD"
 
@@ -352,14 +355,16 @@ def test_c_repair_parent_and_identity_rejections(
 
 
 def test_c_wrong_parent_changes_the_seal(repair: Any) -> None:
-    """parent_task_id / parent_execution_id are sealed: a wrong one is a different WorkItem."""
-    _, work, spec = repair
+    """parent_task_id / parent_execution_id are sealed: a wrong one is refused, not rendered."""
+    _, _, spec = repair
     for over in (
         {"parent_task_id": "SYNTH-PKG-0009"},
         {"parent_execution_id": "SYNTH-PKG-0001-E9"},
     ):
-        other = build_work(load_spec(json.dumps({**spec, **over})))
-        assert other.seal != work.seal
+        with pytest.raises(PackageSpecError) as ei:
+            build_work(load_spec(json.dumps({**spec, **over})))
+        assert ei.value.reason == "REPAIR_WORK_SEAL_MISMATCH"
+        assert _reason({**spec, **over}) == "REPAIR_WORK_SEAL_MISMATCH"
 
 
 # -- D. the packaged WorkItem is seal-identical to the materialized repair ------------------
@@ -414,9 +419,9 @@ def test_d_packaged_work_is_seal_identical_to_materialized_repair(repair: Any) -
 def test_d_any_authority_or_scope_drift_breaks_seal_equality(
     repair: Any, over: dict[str, Any]
 ) -> None:
-    """The builder cannot widen silently: a drifted spec is a DIFFERENT seal, never this one."""
-    _, work, spec = repair
-    assert build_work(load_spec(json.dumps({**spec, **over}))).seal != work.seal
+    """The builder cannot widen silently: a drifted repair spec is refused, never rendered."""
+    _, _, spec = repair
+    assert _reason({**spec, **over}) == "REPAIR_WORK_SEAL_MISMATCH"
 
 
 def test_d_repair_cannot_change_the_sealed_instructions(repair: Any) -> None:
@@ -570,3 +575,206 @@ def test_g_repair_spec_fields_are_bound_into_the_package_hash(repair: Any) -> No
     assert base["workflow_inputs_sha256"] != moved["workflow_inputs_sha256"]
     assert base["provenance"]["spec_sha256"] != moved["provenance"]["spec_sha256"]
     assert package_sha256(render_package(base)) != package_sha256(render_package(moved))
+
+
+# -- H. mandatory binding to the materialized repair WorkItem (expected_work_seal) ----------
+
+
+def _contract(spec: dict[str, Any]) -> list[str]:
+    return list(spec["acceptance_contract"])
+
+
+def _insert_prose(spec: dict[str, Any]) -> dict[str, Any]:
+    c = _contract(spec)
+    return {"acceptance_contract": [c[0], "an extra requirement", *c[1:]]}
+
+
+def _swap_resolve(spec: dict[str, Any], new: list[str]) -> dict[str, Any]:
+    c = _contract(spec)
+    assert c[-2:] == ["RESOLVE:F-0001", "RESOLVE:F-0002"]
+    return {"acceptance_contract": [*c[:-2], *new]}
+
+
+DRIFT_ROWS: list[tuple[str, Any, str]] = [
+    ("authority_ref", lambda s: {"authority_ref": "TEST-AUTHORITY-WIDER"}, "MISMATCH"),
+    ("parent_task_id", lambda s: {"parent_task_id": "SYNTH-PKG-0009"}, "MISMATCH"),
+    ("parent_execution_id", lambda s: {"parent_execution_id": "SYNTH-PKG-0001-E9"}, "MISMATCH"),
+    (
+        "lineage_root+task_id",
+        lambda s: {"lineage_root": "OTHER-ROOT", "task_id": "OTHER-ROOT-R2"},
+        "MISMATCH",
+    ),
+    ("max_attempts", lambda s: {"max_attempts": 4}, "MISMATCH"),
+    ("forbidden-dropped", lambda s: {"forbidden_paths": [*FORBIDDEN_FLOOR]}, "MISMATCH"),
+    (
+        "allowed-extra",
+        lambda s: {"allowed_paths": [*s["allowed_paths"], "docs/"]},
+        "MISMATCH",
+    ),
+    ("repository", lambda s: {"repository": "example-owner/other-repo"}, "MISMATCH"),
+    ("expected_outputs", lambda s: {"expected_outputs": ["something else"]}, "MISMATCH"),
+    ("base_revision", lambda s: {"base_revision": OTHER_REVISION}, "MISMATCH"),
+    ("contract-prose-inserted", _insert_prose, "MISMATCH"),
+    (
+        "parent-contract-entry-dropped",
+        lambda s: {"acceptance_contract": _contract(s)[1:]},
+        "MISMATCH",
+    ),
+    (
+        "resolve-different-id",
+        lambda s: _swap_resolve(s, ["RESOLVE:F-0001", "RESOLVE:F-0009"]),
+        "MISMATCH",
+    ),
+    (
+        "resolve-extra-id",
+        lambda s: _swap_resolve(s, ["RESOLVE:F-0001", "RESOLVE:F-0002", "RESOLVE:F-0003"]),
+        "MISMATCH",
+    ),
+    ("resolve-dropped-id", lambda s: _swap_resolve(s, ["RESOLVE:F-0001"]), "MISMATCH"),
+    (
+        "resolve-reordered",
+        lambda s: _swap_resolve(s, ["RESOLVE:F-0002", "RESOLVE:F-0001"]),
+        "MISMATCH",
+    ),
+    (
+        "resolve-trailing-text",
+        lambda s: _swap_resolve(s, ["RESOLVE:F-0001 and also rewrite x", "RESOLVE:F-0002"]),
+        "MISMATCH",
+    ),
+    ("attempt-without-task", lambda s: {"attempt": 2}, "REPAIR_IDENTITY_MISMATCH"),
+    (
+        "attempt+task-consistent",
+        lambda s: {"attempt": 2, "task_id": "SYNTH-PKG-0001-R1"},
+        "MISMATCH",
+    ),
+    ("seal-other", lambda s: {"expected_work_seal": "0" * 64}, "MISMATCH"),
+    ("seal-absent", lambda s: {"expected_work_seal": ...}, "REPAIR_WORK_SEAL_MISSING"),
+    ("seal-null", lambda s: {"expected_work_seal": None}, "REPAIR_WORK_SEAL_MISSING"),
+    ("seal-empty", lambda s: {"expected_work_seal": ""}, "REPAIR_WORK_SEAL_INVALID"),
+    (
+        "seal-upper",
+        lambda s: {"expected_work_seal": s["expected_work_seal"].upper()},
+        "REPAIR_WORK_SEAL_INVALID",
+    ),
+    (
+        "seal-short",
+        lambda s: {"expected_work_seal": s["expected_work_seal"][:63]},
+        "REPAIR_WORK_SEAL_INVALID",
+    ),
+    (
+        "seal-long",
+        lambda s: {"expected_work_seal": s["expected_work_seal"] + "0"},
+        "REPAIR_WORK_SEAL_INVALID",
+    ),
+    (
+        "seal-newline",
+        lambda s: {"expected_work_seal": s["expected_work_seal"] + "\n"},
+        "REPAIR_WORK_SEAL_INVALID",
+    ),
+    ("seal-sha40", lambda s: {"expected_work_seal": RESULT_REVISION}, "REPAIR_WORK_SEAL_INVALID"),
+    ("seal-int", lambda s: {"expected_work_seal": 7}, "SPEC_TYPE"),
+]
+
+
+@pytest.mark.parametrize(
+    ("mutate", "reason"),
+    [(m, r) for _, m, r in DRIFT_ROWS],
+    ids=[i for i, _, _ in DRIFT_ROWS],
+)
+def test_h_any_drift_from_the_materialized_repair_is_refused_by_the_builder(
+    repair: Any, mutate: Any, reason: str
+) -> None:
+    _, _, spec = repair
+    drifted = {k: v for k, v in {**spec, **mutate(spec)}.items() if v is not ...}
+    expected = "REPAIR_WORK_SEAL_MISMATCH" if reason == "MISMATCH" else reason
+    assert _reason(drifted) == expected
+    with pytest.raises(PackageSpecError):  # build_work alone refuses too
+        build_work(load_spec(json.dumps(drifted)))
+
+
+def test_h_parent_seal_is_not_accepted_as_the_repair_seal(repair: Any) -> None:
+    parent, _, spec = repair
+    assert _reason({**spec, "expected_work_seal": parent.seal}) == "REPAIR_WORK_SEAL_MISMATCH"
+
+
+def test_h_faithful_spec_passes_and_records_the_bound_seal(repair: Any) -> None:
+    _, work, spec = repair
+    pkg = build_package(load_spec(json.dumps(spec)))
+    assert pkg["work_seal"] == pkg["expected_work_seal"] == work.seal == work.compute_seal()
+    assert verify_checkout_ref(pkg, RESULT_REVISION) is None
+    forged = copy.deepcopy(pkg)
+    forged["expected_work_seal"] = "0" * 64
+    assert _verify_reason(forged, RESULT_REVISION) == "CHECKOUT_PACKAGE_INVALID"
+    # the seal is part of the spec hash
+    other = {**spec, "expected_work_seal": "0" * 64}
+    assert spec_sha256(load_spec(json.dumps(spec))) != spec_sha256(load_spec(json.dumps(other)))
+
+
+def test_h_repair_spec_from_work_equals_the_hand_written_spec(repair: Any) -> None:
+    parent, work, spec = repair
+    derived = repair_spec_from_work(
+        work,
+        statement=PARENT_SPEC["statement"],
+        acceptance_commands=tuple(PARENT_SPEC["acceptance_commands"]),
+        base_branch=RESULT_BRANCH,
+        parent_execution_id=parent.execution_id,
+        execution_ordinal=PARENT_SPEC["execution_ordinal"],
+    )
+    assert derived == load_spec(json.dumps(spec))
+    assert build_work(derived).seal == work.seal
+    assert render_package(build_package(derived)) == render_package(
+        build_package(load_spec(json.dumps(spec)))
+    )
+
+
+def test_h_repair_spec_from_work_fails_closed(repair: Any) -> None:
+    parent, work, _ = repair
+    kw: dict[str, Any] = {
+        "statement": PARENT_SPEC["statement"],
+        "acceptance_commands": tuple(PARENT_SPEC["acceptance_commands"]),
+        "base_branch": RESULT_BRANCH,
+        "parent_execution_id": parent.execution_id,
+    }
+
+    def reason(w: WorkItem, **over: Any) -> str:
+        with pytest.raises(PackageSpecError) as ei:
+            build_work(repair_spec_from_work(w, **{**kw, **over}))
+        return ei.value.reason
+
+    tampered = work.model_copy(update={"authority_ref": "TEST-AUTHORITY-WIDER"})  # stale seal
+    assert reason(tampered) == "WORK_INVALID"
+    assert reason(work.model_copy(update={"seal": ""})) == "WORK_INVALID"
+    assert reason(parent) == "REPAIR_RESOLVE_MISSING"  # not a repair WorkItem
+    assert reason(work, statement="Do something else entirely.") == "REPAIR_INSTRUCTIONS_MISMATCH"
+    assert reason(work, base_branch="main") == "REPAIR_BASE_BRANCH_IS_MAIN"
+    assert reason(work, parent_execution_id="SYNTH-PKG-0001-E9") == "REPAIR_WORK_SEAL_MISMATCH"
+
+
+@pytest.mark.parametrize(
+    ("branch", "reason"),
+    [
+        ("atlas/agent-" + "1" * 20 + "-" + "1" * 6, None),
+        ("atlas/agent-" + "1" * 21 + "-1", "REPAIR_BASE_BRANCH_NOT_RESULT_BRANCH"),
+        ("atlas/agent-1-" + "1" * 7, "REPAIR_BASE_BRANCH_NOT_RESULT_BRANCH"),
+        ("atlas/agent-" + "1" * 300 + "-1", "BASE_BRANCH_INVALID"),
+        ("a" * 256, "BASE_BRANCH_INVALID"),
+    ],
+    ids=["max-ok", "run-id-too-long", "run-attempt-too-long", "over-255", "over-255-plain"],
+)
+def test_h_repair_base_branch_length_is_bounded(
+    repair: Any, branch: str, reason: str | None
+) -> None:
+    parent, work, _ = repair
+    spec = _repair_spec(work, parent, base_branch=branch)
+    if reason is None:
+        assert build_package(load_spec(json.dumps(spec)))["checkout"]["base_branch"] == branch
+    else:
+        assert _reason(spec) == reason
+
+
+def test_h_invalid_attempt_kind_with_inherited_digest_reports_the_kind(repair: Any) -> None:
+    """Not CONTRACT_RESERVED: the offending field is attempt_kind."""
+    _, _, spec = repair
+    for kind in ("Repair", "repair ", "retry", ""):
+        assert _reason({**spec, "attempt_kind": kind}) == "ATTEMPT_KIND_INVALID"
+    assert _reason({**spec, "attempt_kind": None}) == "SPEC_TYPE"

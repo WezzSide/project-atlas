@@ -15365,6 +15365,27 @@ Commands and results:
 - `python -m ruff check src tests`, `ruff format --check` on changed files, `python -m mypy src`:
   clean.
 
+Follow-up after independent verification of 5907c085 (P1=1, P2=6), second commit:
+- P1 fixed: a repair spec MUST carry `expected_work_seal` (64 lowercase hex, the seal of the
+  WorkItem `materialize_repair` produced). `build_work` refuses with
+  `REPAIR_WORK_SEAL_MISMATCH` unless the built WorkItem reproduces it, so drift in authority,
+  parent, lineage, scope, base, ceiling or contract (including `RESOLVE:` text) is refused in
+  the builder instead of being rendered under a different seal. Also
+  `REPAIR_WORK_SEAL_MISSING` / `REPAIR_WORK_SEAL_INVALID`; refused on implementation specs
+  (`IMPLEMENTATION_REPAIR_FIELD`), so implementation bytes stay pinned to d9a36c92. The seal
+  is part of `spec_sha256` and is recorded in the repair package (`expected_work_seal`).
+- `Finding.finding_id` is unconstrained in `dev_contracts` (`min_length=1` only), so no
+  charset rule is applied to `RESOLVE:` entries; the seal binding is the control.
+- `repair_spec_from_work(work, statement=, acceptance_commands=, base_branch=,
+  parent_execution_id=)`: pure helper deriving the spec from a sealed repair WorkItem.
+- P2: `base_branch` bounded (255 chars; run id <= 20 digits, run attempt <= 6);
+  `verify_checkout_ref` docstring states it checks internal consistency only and that the
+  trust anchor is the reviewed `package_sha256` (it now also requires
+  `expected_work_seal == work_seal`); an invalid `attempt_kind` alongside an inherited digest
+  now reports `ATTEMPT_KIND_INVALID` instead of `CONTRACT_RESERVED`.
+- Left open: `execution_ordinal` is still required but unused for repair identity.
+- Re-run: targeted pytest all passed; ruff check, ruff format --check, mypy src clean.
+
 Open follow-ups (not implemented; owner-reviewed surfaces):
 - `atlas-agent-execute.yml` does not assert the checked-out sha equals the sealed base
   revision, so a branch that moves between `verify_checkout_ref` and checkout is not caught by
