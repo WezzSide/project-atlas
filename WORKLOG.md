@@ -15301,3 +15301,34 @@ GitHub artifacts; fragment merge is future work); setup-python unsupported
 on the worker image (use the image's python3); CLAUDE_E2E=
 NOT_RUN_REQUIRES_EXTERNAL_AUTHORITY (no ANTHROPIC_API_KEY).
 EXECUTOR_SUCCESS != VERIFIED; PASS != MERGE AUTHORIZATION.
+
+## 2026-10-03 — STYLE-002: missing ≠ zero / clean sweep (apps/web)
+
+Audit: `docs/global/baseline/2026-10-02-STYLE-AUDIT.md` finding 4 (SM-TRUTH).
+All cited locations addressed; no API contract or backend change.
+
+- New shared primitive `apps/web/src/lib/missingState.ts`
+  (`countOrUnknown`, `lengthOrUnknown`, `boolOrUnknown`, `listState`,
+  `missingListText`).
+- Knowledge: truth counts and capture `items` render `unknown` when absent;
+  "No pending reviews / conflicts recorded" only when the truth panel provided
+  an empty list.
+- Roadmap: critical path, blockers and unknowns render UNKNOWN / UNAVAILABLE /
+  loading when no roadmap payload was read; clean copy only for a loaded lens.
+- Ops Health: "no ops receipts on disk" only after a successful LIVE read;
+  fetch failure, demo stub and `ops_root=unknown` are separate states;
+  `completion_claimed=false` labelled as UI policy.
+- ReadStatusPanel: missing `data_source` is DATA SOURCE UNKNOWN, not LIVE_API;
+  fixture labelled FIXTURE.
+- Discovery: summary counts `unknown` when absent.
+- Mission Control / Workspace: board availability `unknown` when absent;
+  browser-forced PILOT constants labelled as UI policy.
+
+Gates: `npm run test:missing-not-zero`, `npm run smoke`,
+`tests/unit/test_style_002_missing_not_zero_web.py`; `tsc -b` + `vite build` OK.
+Browser E2E is NOT a passing gate for this entry: the pinned Playwright 1.62.0
+wants Chromium build 1234 and the host only has 1194. With a temporary
+uncommitted `executablePath` override the suite ran 2 passed / 3 failed, and the
+same 3 fail identically on unmodified `main` b413aa1 (host has no
+`VITE_ATLAS_API_TOKEN`, so LIVE reads fail closed with the SEC-009 auth error).
+`BROWSER_E2E` for this change = UNKNOWN. UI ≠ canonical; UNKNOWN ≠ healthy.

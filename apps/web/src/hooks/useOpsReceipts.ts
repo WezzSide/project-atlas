@@ -15,6 +15,8 @@ export interface OpsReceiptRow {
 
 export interface OpsReceiptInventory {
   receipt_source: string;
+  /** Backend-reported ops root status (already in /v1/ops/receipts). */
+  ops_root?: string;
   receipt_rows: number;
   receipts: OpsReceiptRow[];
   available: boolean;

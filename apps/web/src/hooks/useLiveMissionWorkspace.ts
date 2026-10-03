@@ -29,6 +29,15 @@ export interface LensView {
   [key: string]: unknown;
 }
 
+/**
+ * STYLE-002: `pilot_estate_rows: []` and `authentic_pilot: false` below are
+ * constants forced by this browser shell in every mode (LIVE / DEMO / FIXTURE),
+ * not values read from the vault. Lenses must label them as UI policy so a
+ * forced `0` / `false` is never mistaken for a measured backend result.
+ */
+export const PILOT_UI_POLICY_NOTE =
+  "UI policy — forced by the browser shell, not read from the vault";
+
 function stampDemo(stub: LensView): LensView {
   return {
     ...stub,
@@ -101,6 +110,7 @@ async function loadLens(
         fixture_isolated: false,
         authentic_pilot: false,
         // Never surface invented PILOT estate rows from the browser shell.
+        // Browser-forced constant — rendered with PILOT_UI_POLICY_NOTE.
         pilot_estate_rows: [],
       },
       source: "live_api",

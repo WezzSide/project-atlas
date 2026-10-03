@@ -60,6 +60,18 @@ npm run smoke
 node apps/web/scripts/smoke.mjs
 ```
 
+STYLE-002 (missing ≠ zero / clean) gates — runtime tests of
+`src/lib/missingState.ts` plus source gates for each audited lens:
+
+```bash
+cd apps/web
+npm run test:missing-not-zero
+```
+
+Use `countOrUnknown` / `lengthOrUnknown` / `boolOrUnknown` / `listState` from
+`src/lib/missingState.ts` instead of `?? 0`, `?? false` or `?? []` whenever the
+value comes from a source that may be absent, failed or unread.
+
 ## Browser E2E acceptance (`AS-WEB-BROWSER-E2E-001`)
 
 `e2e/mission-control.acceptance.spec.ts` is the first repository-native browser

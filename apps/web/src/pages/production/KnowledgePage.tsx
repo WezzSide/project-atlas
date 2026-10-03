@@ -3,6 +3,12 @@ import { ProdShell } from "../../components/ProdShell";
 import { useLiveBrief } from "../../hooks/useLiveBrief";
 import { useLiveKnowledge } from "../../hooks/useLiveKnowledge";
 import { useReadStatus } from "../../hooks/useReadStatus";
+import {
+  countOrUnknown,
+  lengthOrUnknown,
+  listState,
+  missingListText,
+} from "../../lib/missingState";
 
 /**
  * AS-CODER-ALPHA-WEB-001 / TRUTH-UX-001 — project Knowledge UX.
@@ -57,6 +63,15 @@ export default function KnowledgePage() {
     useLiveKnowledge(projectId);
   const isDemo = dataSource === "demo_stub";
   const truth = brief?.truth;
+  // STYLE-002: a brief without a truth panel is UNKNOWN, never a clean sweep.
+  const pendingMissing = missingListText(
+    listState({ loaded: Boolean(truth), list: truth?.pending_reviews }),
+    "pending reviews",
+  );
+  const conflictsMissing = missingListText(
+    listState({ loaded: Boolean(truth), list: truth?.conflicts }),
+    "conflicts",
+  );
   const nextWork = Array.isArray(brief?.suggested_next_work)
     ? brief.suggested_next_work
     : [];
@@ -206,7 +221,7 @@ export default function KnowledgePage() {
                         {String(capture.label ?? "Conversation capture — non-authoritative")}{" "}
                         · provider={String(capture.source_provider ?? "unknown")} ·
                         classification={String(capture.classification ?? "NON_CANONICAL")} ·
-                        items={String(capture.item_count ?? 0)} · authority=false
+                        items={countOrUnknown(capture.item_count)} · authority=false
                       </span>
                     </li>
                   ))}
@@ -222,16 +237,24 @@ export default function KnowledgePage() {
               </p>
               <p className="flags">
                 <span className="chip">
-                  pending={truth?.pending_review_count ?? 0}
-                </span>
-                <span className="chip">conflicts={truth?.conflict_count ?? 0}</span>
-                <span className="chip">
-                  human_decisions={truth?.human_decision_count ?? 0}
+                  pending={countOrUnknown(truth?.pending_review_count)}
                 </span>
                 <span className="chip">
-                  evidence={(truth?.evidence ?? []).length}
+                  conflicts={countOrUnknown(truth?.conflict_count)}
+                </span>
+                <span className="chip">
+                  human_decisions={countOrUnknown(truth?.human_decision_count)}
+                </span>
+                <span className="chip">
+                  evidence={lengthOrUnknown(truth?.evidence)}
                 </span>
               </p>
+              {!truth ? (
+                <p className="banner warn">
+                  UNKNOWN — truth panel not provided by this brief; counts and
+                  lists below are unknown, not zero
+                </p>
+              ) : null}
 
               <h3>Evidence</h3>
               {(truth?.evidence ?? []).length === 0 ? (
@@ -251,7 +274,9 @@ export default function KnowledgePage() {
               )}
 
               <h3>Pending human review</h3>
-              {(truth?.pending_reviews ?? []).length === 0 ? (
+              {pendingMissing ? (
+                <p className="banner warn">{pendingMissing}</p>
+              ) : (truth?.pending_reviews ?? []).length === 0 ? (
                 <p className="banner">No pending reviews recorded</p>
               ) : (
                 <ul className="theme-hub">
@@ -268,7 +293,9 @@ export default function KnowledgePage() {
               )}
 
               <h3>Conflicts</h3>
-              {(truth?.conflicts ?? []).length === 0 ? (
+              {conflictsMissing ? (
+                <p className="banner warn">{conflictsMissing}</p>
+              ) : (truth?.conflicts ?? []).length === 0 ? (
                 <p className="banner">No unresolved conflicts recorded</p>
               ) : (
                 <ul className="theme-hub">

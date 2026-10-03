@@ -30,6 +30,8 @@ const required = [
   "src/pages/production/SourceHealthPage.tsx",
   "src/hooks/useLiveSourceHealth.ts",
   "scripts/test-source-health-web.mjs",
+  "src/lib/missingState.ts",
+  "scripts/test-missing-not-zero.mjs",
   "src/pages/design-lab/LedgerDeskPage.tsx",
   "src/pages/design-lab/SignalRackPage.tsx",
   "src/pages/design-lab/CartographQuietPage.tsx",

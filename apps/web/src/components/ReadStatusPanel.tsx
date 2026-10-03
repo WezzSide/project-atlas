@@ -7,18 +7,33 @@ interface ReadStatusPanelProps {
 
 /** Shared read-status fields — LIVE labelled; demo stub isolated; never canonical. */
 export function ReadStatusPanel({ status, compact = false }: ReadStatusPanelProps) {
-  const source = status.data_source ?? (status.read_plane === "stub" ? "demo_stub" : "live_api");
+  // STYLE-002: a missing data_source is UNKNOWN provenance — never defaulted to LIVE_API.
+  const source = status.data_source ?? (status.read_plane === "stub" ? "demo_stub" : null);
   const isDemo = source === "demo_stub" || status.demo_isolated === true;
+  const isFixture =
+    !isDemo && (source === "fixture" || status.fixture_isolated === true);
+  const isLive = !isDemo && !isFixture && source === "live_api";
+  const sourceLabel = isDemo
+    ? "demo stub"
+    : isFixture
+      ? "fixture"
+      : isLive
+        ? "live API"
+        : "data source unknown";
   return (
     <section
       className="panel"
-      aria-label={isDemo ? "Vault read status (demo stub)" : "Vault read status (live API)"}
+      aria-label={`Vault read status (${sourceLabel})`}
     >
       <h2>Vault read status</h2>
-      <p className={isDemo ? "banner warn" : "banner"}>
+      <p className={isLive ? "banner" : "banner warn"}>
         {isDemo
           ? "DEMO STUB — isolated sample data · not live vault · not acceptance"
-          : "LIVE_API — read-only vault projection · UI ≠ canonical"}
+          : isFixture
+            ? "FIXTURE — deterministic sample · not live vault · not acceptance"
+            : isLive
+              ? "LIVE_API — read-only vault projection · UI ≠ canonical"
+              : "DATA SOURCE UNKNOWN — provenance not provided · not labelled LIVE · UI ≠ canonical"}
       </p>
       <p className="disclaimer">
         UI ≠ canonical · Graph ≠ authority · Unknown ≠ healthy
@@ -27,7 +42,7 @@ export function ReadStatusPanel({ status, compact = false }: ReadStatusPanelProp
       <dl className="grid">
         <div>
           <dt>Data source</dt>
-          <dd>{source}</dd>
+          <dd>{source ?? "unknown"}</dd>
         </div>
         <div>
           <dt>Vault</dt>
