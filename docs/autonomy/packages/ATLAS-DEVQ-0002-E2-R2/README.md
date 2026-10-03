@@ -37,7 +37,7 @@ The inherited statement still describes the original E2 defect and says "new fil
 |---|---|---|
 | v1 (commit `8298beb9`) | `ef1d8bd6accbb10e4d0d5afc3341e588fcfc948ba95a7443afe2d58371d7bc8a` (work seal `97ca15622913f4234e61a4b9aaef3586bdf0d7ad03d82323beb4328393cac098`) | **Superseded, never dispatched.** Independent package review: P0 0 / P1 1 / P2 7. The P1: the RESOLVE text prescribed `from None`, which leaves the Location reachable through `__context__` |
 | commits `fdb177e7`, `40fcf512` | same bytes as v1 | **Preparation errors, never dispatched.** The re-seal step failed (entry over the 500-character cap) and these commits carried v1 bytes under a v2 label |
-| **v2 (current)** | **`ba388db38537ba1f9b3012131f7bdf14e1be91fd9c261e97835b50081b9ee095`** (work seal `a5c75996bd6276cc3836f96daad6796dcdb3299400bc87b3186e390399f0f205`) | Finding text reworded: raise after leaving the except block; extend, do not rewrite, the test file; keep unrelated diagnostics. Independent review: see `REVIEW.md` once recorded |
+| **v2 (current)** | **`ba388db38537ba1f9b3012131f7bdf14e1be91fd9c261e97835b50081b9ee095`** (work seal `a5c75996bd6276cc3836f96daad6796dcdb3299400bc87b3186e390399f0f205`) | Finding text reworded: raise after leaving the except block; extend, do not rewrite, the test file; keep unrelated diagnostics. Independent review: P0 0 / P1 0 / P2 8, see `REVIEW.md` |
 
 ## Dispatch notes (for the owner; an agent does not dispatch)
 
