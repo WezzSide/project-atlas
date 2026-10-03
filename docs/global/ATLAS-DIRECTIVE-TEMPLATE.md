@@ -4,7 +4,7 @@
 |---|---|
 | Canonical ID | `ATLAS_DIRECTIVE_TEMPLATE` |
 | Version | 1 |
-| Status | PROPOSED — binding once the owner merges it to `main` |
+| Status | ADOPTED — binding as governance on `main` (owner-merged, PR #1047) |
 | Use for | Owner mission directives and WorkItems |
 | Not for | Governed RSI loop iterations: they keep [`autonomy/instruments/directive-template.md`](../../autonomy/instruments/directive-template.md) |
 | Index | [README.md](./README.md) |
