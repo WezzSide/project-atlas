@@ -15318,3 +15318,77 @@ Branch `docs/runner-authority-incident-2026-10-03`, base `main` b413aa1a. Record
 - VPS2 state and the temporary grant were NOT observed by this session (UNKNOWN).
 - Commands: `python -m pytest tests/unit/test_atlas_global_foundation_docs_001.py -q`;
   `python -m pytest infra/atlas-runner/tests -q --no-cov`. Results recorded in the PR body.
+
+## 2026-10-03 — DEVQ package builder: faithful repair packages (`dev_package`)
+
+Branch `feat/devq-repair-package-support`, base `main` d9a36c92. Local commit only;
+`MERGE_AUTHORIZATION = NOT_GRANTED`. Nothing dispatched, no grant consumed, no workflow edited.
+
+Gap (OBSERVED at d9a36c92): `dev_package.build_package` hardcoded `base_branch=BASE_BRANCH`
+(`main`), `PackageSpec` had no `parent_task_id`, `execution_id` was always
+`<task_id>-E<ordinal>`, and `build_work` always appended a fresh `instructions_sha256=` entry.
+A WorkItem from `dev_contracts.materialize_repair` (base = failed result revision, ids
+`<lineage_root>-R<n>` / `<execution_id>-R<n>`, parent set, inherited contract + `RESOLVE:`)
+could therefore not be reproduced, and a repair package would have checked out `main`.
+
+Change (`src/project_atlas/orchestration/autonomy/dev_package.py` only):
+- Repair-only optional spec keys `parent_task_id`, `parent_execution_id`, `base_branch`; all
+  three required for `attempt_kind == "repair"`, refused for `"implementation"`
+  (`IMPLEMENTATION_REPAIR_FIELD`).
+- Repair identity follows `materialize_repair`; the contract is taken verbatim and must carry
+  exactly one inherited `instructions_sha256=` entry equal to the digest of this spec's
+  statement and commands, followed only by `RESOLVE:` entries. A repair cannot change the
+  sealed instructions, scope or authority without producing a different seal.
+- A repair never checks out `main`: `base_branch` must be explicit, pass the workflow's shape
+  rules and match `atlas/agent-<run_id>-<run_attempt>`.
+- `verify_checkout_ref(package, resolved_sha)`: pure check that the package's checkout branch
+  resolves to exactly the sealed `base_revision`; the caller supplies the sha.
+- Implementation packages are byte-identical to d9a36c92 (pinned hashes in the new test file).
+
+New reason codes: `REPAIR_PARENT_MISSING`, `REPAIR_PARENT_INVALID`, `REPAIR_IDENTITY_MISMATCH`,
+`REPAIR_BASE_BRANCH_MISSING`, `REPAIR_BASE_BRANCH_IS_MAIN`,
+`REPAIR_BASE_BRANCH_NOT_RESULT_BRANCH`, `BASE_BRANCH_INVALID`, `REPAIR_INSTRUCTIONS_MISSING`,
+`REPAIR_INSTRUCTIONS_MISMATCH`, `REPAIR_CONTRACT_SHAPE`, `IMPLEMENTATION_REPAIR_FIELD`,
+`CHECKOUT_PACKAGE_INVALID`, `CHECKOUT_SHA_INVALID`, `CHECKOUT_REF_MISMATCH`.
+
+Tests: new `tests/unit/test_orchestration_dev_package_repair.py` (A-G); two existing repair
+tests in `tests/unit/test_orchestration_dev_package.py` now build a canonical repair spec
+(the old minimal repair spec is refused by design).
+
+Commands and results:
+- `python -m pytest tests/unit -k "orchestration_dev or dev_package or dev_contracts or
+  dev_first_run or dev_fabric" -q --no-cov`: all passed.
+- `python -m pytest tests/unit -q --no-cov`: 2 failed, both unrelated and also failing on
+  unmodified d9a36c92 in this sandbox (runs as uid 0):
+  `test_as_coder_alpha_044_d041_high.py::test_live_api_dual_bind_fail_closed`,
+  `test_as_demo_2_2_recovery_id_001.py::test_ensure_fails_closed_on_unwritable_identity_path`.
+- `python -m ruff check src tests`, `ruff format --check` on changed files, `python -m mypy src`:
+  clean.
+
+Follow-up after independent verification of 5907c085 (P1=1, P2=6), second commit:
+- P1 fixed: a repair spec MUST carry `expected_work_seal` (64 lowercase hex, the seal of the
+  WorkItem `materialize_repair` produced). `build_work` refuses with
+  `REPAIR_WORK_SEAL_MISMATCH` unless the built WorkItem reproduces it, so drift in authority,
+  parent, lineage, scope, base, ceiling or contract (including `RESOLVE:` text) is refused in
+  the builder instead of being rendered under a different seal. Also
+  `REPAIR_WORK_SEAL_MISSING` / `REPAIR_WORK_SEAL_INVALID`; refused on implementation specs
+  (`IMPLEMENTATION_REPAIR_FIELD`), so implementation bytes stay pinned to d9a36c92. The seal
+  is part of `spec_sha256` and is recorded in the repair package (`expected_work_seal`).
+- `Finding.finding_id` is unconstrained in `dev_contracts` (`min_length=1` only), so no
+  charset rule is applied to `RESOLVE:` entries; the seal binding is the control.
+- `repair_spec_from_work(work, statement=, acceptance_commands=, base_branch=,
+  parent_execution_id=)`: pure helper deriving the spec from a sealed repair WorkItem.
+- P2: `base_branch` bounded (255 chars; run id <= 20 digits, run attempt <= 6);
+  `verify_checkout_ref` docstring states it checks internal consistency only and that the
+  trust anchor is the reviewed `package_sha256` (it now also requires
+  `expected_work_seal == work_seal`); an invalid `attempt_kind` alongside an inherited digest
+  now reports `ATTEMPT_KIND_INVALID` instead of `CONTRACT_RESERVED`.
+- Left open: `execution_ordinal` is still required but unused for repair identity.
+- Re-run: targeted pytest all passed; ruff check, ruff format --check, mypy src clean.
+
+Open follow-ups (not implemented; owner-reviewed surfaces):
+- `atlas-agent-execute.yml` does not assert the checked-out sha equals the sealed base
+  revision, so a branch that moves between `verify_checkout_ref` and checkout is not caught by
+  the workflow itself.
+- A chained repair whose verdict repeats an earlier finding id yields a duplicate `RESOLVE:`
+  entry, which the builder's `LIST_DUPLICATE` rule refuses.
