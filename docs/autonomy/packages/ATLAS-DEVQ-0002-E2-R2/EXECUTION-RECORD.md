@@ -64,3 +64,19 @@ Outside the standard, reported not counted: traceback frame locals hold the toke
 ## Why this is not merged
 - The run is red; `ingest_report` requires `workflow_conclusion == "success"`, and no supported path adopts a salvaged candidate. Adoption is an explicit owner decision.
 - Merge is not authorized. No second dispatch is authorized or needed.
+
+## Owner adoption, reconciliation push and integration PR (2026-10-03)
+
+This section supersedes the earlier statement that the reconciliation was "prepared locally, NOT pushed".
+
+- OBSERVED: owner decision — candidate `1182d0e40b6e5206af36cde07ed09f88c14ddd48` adopted as SOURCE PATCH only; PR #1058 is evidence-only and must not be merged.
+- OBSERVED: owner pushed `integration/atlas-devq-0002-e2-r2` — HEAD `8b975e2cbd8bc4120e1c0e26c323367f9971fc4c`, TREE `4df673aff46b78a15e63250356c93672ceb4413f`, single parent `4b04621f8a7b081f9ad9efd356339d983eb1c6ce` (main at that time).
+- PROVEN (remote re-read): exactly two paths differ from parent — `M src/project_atlas/orchestration/autonomy/dev_github_port.py` (blob `1c5c61b4fefe0f8bc1c1c22a7381430d0381b50b`), `A tests/unit/test_orchestration_dev_github_port_redirects.py` (blob `17c1368e522faa84f5a856adbd595ed212aa2209`); unchanged `tests/unit/test_orchestration_dev_github_port.py` = `505726eaba5c27a37a4c12bb83f98776e18437af`. The tree equals the previously independently verified reconciliation tree, so the full scenario verification was not repeated.
+- OBSERVED: draft integration PR #1059 (`integration/atlas-devq-0002-e2-r2` -> `main`), head `8b975e2c…`, the sole integration carrier.
+- OBSERVED: exact-head CI run `37128248393` (workflow `ci`, event `pull_request`, attempt 1, head `8b975e2cbd8bc4120e1c0e26c323367f9971fc4c`), conclusion `success`:
+  - `111217897001` control-plane — success
+  - `111217897180` quality (ubuntu-latest, 3.12, full) — success
+  - `111217897152` quality (ubuntu-latest, 3.13, compat) — success
+  - `111217897130` quality (windows-latest, 3.12, windows) — success
+- Run `37120070769` proves candidate head `1182d0e4` only and is not counted as reconciliation CI.
+- Result: `RECONCILIATION_EXACT_HEAD_CI_PASS`. MERGE NOT AUTHORIZED; no merge, auto-merge, dispatch or job re-run was performed.
