@@ -42,6 +42,33 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+def _origin(url: str) -> tuple[str, str, int | None] | None:
+    parts = urllib.parse.urlsplit(url)
+    scheme = parts.scheme.lower()
+    try:
+        port = parts.port or {"http": 80, "https": 443}.get(scheme)
+    except ValueError:
+        return None
+    return scheme, (parts.hostname or "").lower(), port
+
+
+class _CrossOriginRedirect(Exception):
+    """Carries nothing: the refused Location must never reach a message or cause."""
+
+
+class _SameOriginRedirect(urllib.request.HTTPRedirectHandler):
+    """Follow redirects only within the API origin, so Authorization never leaves it."""
+
+    def redirect_request(
+        self, req: Any, fp: Any, code: int, msg: str, headers: Any, newurl: str
+    ) -> urllib.request.Request | None:
+        api = _origin(API)
+        if api is None or _origin(newurl) != api:
+            fp.close()
+            raise _CrossOriginRedirect
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 def _run(d: dict[str, Any]) -> RunInfo:
     return RunInfo(
         run_id=int(d["id"]),
@@ -80,16 +107,31 @@ class GitHubRestPort:
                 "Content-Type": "application/json",
             },
         )
+        opener = urllib.request.build_opener(_SameOriginRedirect)
+        # Errors that may carry a redirect Location are raised after the except block, detached
+        # (no __cause__/__context__), so neither the URL nor its query can leak via the chain.
+        detached: str | None = None
         try:
-            with urllib.request.urlopen(req, timeout=30) as r:
-                raw = r.read()
-                return r.status, (json.loads(raw) if raw else None)
+            with opener.open(req, timeout=30) as r:
+                status, raw = r.status, r.read()
+        except _CrossOriginRedirect:
+            detached = f"github {method} {path} refused cross-origin redirect"
         except urllib.error.HTTPError as exc:
             if exc.code == 404:
                 return 404, None
-            raise AdapterError(f"github {method} {path} -> {exc.code}") from exc
+            hdrs = exc.headers
+            redirected = hdrs is not None and ("location" in hdrs or "uri" in hdrs)
+            if not redirected and exc.filename == req.full_url:
+                raise AdapterError(f"github {method} {path} -> {exc.code}") from exc
+            detached = f"github {method} {path} -> {exc.code}"
         except (urllib.error.URLError, TimeoutError) as exc:
             raise AdapterError(f"github {method} {path} unreachable: {exc}") from exc
+        except ValueError:
+            # urllib rejects a malformed Location (e.g. invalid bracketed host) with ValueError.
+            detached = f"github {method} {path} rejected invalid URL"
+        if detached is not None:
+            raise AdapterError(detached) from None
+        return status, (json.loads(raw) if raw else None)
 
     def dispatch_workflow(self, workflow: str, ref: str, inputs: dict[str, str]) -> None:
         st, _ = self._request(
