@@ -1,0 +1,24 @@
+{"at": "2026-09-10T09:24:25.871Z", "event": "PROGRAM_INITIALISED", "program_digest": "1ffbf66c9cfcc0adadcc2394afc0302b7aa07ad3ff9d90454eedca9d12425b7b", "program_id": "atlas-real-runtime-demo", "tasks": ["step-a", "step-b"]}
+{"at": "2026-09-10T09:24:25.872Z", "event": "TASK_TRANSITION", "from": "DISCOVERED", "reason": "no external precondition gates this task", "task_id": "step-a", "to": "READY"}
+{"at": "2026-09-10T09:24:25.872Z", "event": "TASK_TRANSITION", "from": "DISCOVERED", "reason": "no external precondition gates this task", "task_id": "step-b", "to": "READY"}
+{"at": "2026-09-10T09:24:25.882Z", "event": "TASK_TRANSITION", "from": "READY", "reason": "ownership granted", "task_id": "step-a", "to": "LEASED"}
+{"agent_id": "claude-code-implementer", "at": "2026-09-10T09:24:25.882Z", "authorized_paths": ["hello.txt"], "event": "LEASE_GRANTED", "lease_id": "atlas-real-runtime-demo-step-a-1", "task_id": "step-a"}
+{"adapter": "claude-code", "agent_id": "claude-code-implementer", "at": "2026-09-10T09:24:25.882Z", "attempt_id": "atlas-real-runtime-demo.step-a.run.1.6d3823a1", "event": "DISPATCH_INTENT", "idempotency_key": "13b71f9c659ff0133b991c0bad449a4bb7008916edc374c21905a7ac23ea286d", "mode": "NEW", "profile_id": "implementer", "runtime_session_id": "e6fe0cc5-7b86-45e5-8fd1-53967c0a3ad3", "task_id": "step-a"}
+{"at": "2026-09-10T09:24:25.882Z", "event": "TASK_TRANSITION", "from": "LEASED", "reason": "worker starting", "task_id": "step-a", "to": "ACTIVE"}
+{"at": "2026-09-10T09:24:38.393Z", "attempt_id": "atlas-real-runtime-demo.step-a.run.1.6d3823a1", "confidence": "CONFIRMED", "event": "ADAPTER_RETURNED", "exit_status": 0, "failure_class": null, "task_id": "step-a", "terminal_state": "completed"}
+{"at": "2026-09-10T09:24:38.397Z", "attempt_id": "atlas-real-runtime-demo.step-a.run.1.6d3823a1", "event": "ACCEPTANCE_EVALUATED", "failed_checks": [], "passed": true, "task_id": "step-a"}
+{"at": "2026-09-10T09:24:38.397Z", "event": "TASK_TRANSITION", "from": "ACTIVE", "reason": "worker finished; acceptance evaluated by the supervisor", "task_id": "step-a", "to": "VERIFYING"}
+{"at": "2026-09-10T09:24:38.397Z", "event": "TASK_TRANSITION", "from": "VERIFYING", "reason": "every acceptance condition observed to hold", "task_id": "step-a", "to": "CERTIFIED"}
+{"at": "2026-09-10T09:24:38.398Z", "event": "LEASE_RELEASED", "lease_id": "atlas-real-runtime-demo-step-a-1", "task_id": "step-a"}
+{"at": "2026-09-10T09:24:38.398Z", "attempt_id": "atlas-real-runtime-demo.step-a.run.1.6d3823a1", "event": "TASK_ACCEPTED", "task_id": "step-a"}
+{"at": "2026-09-10T09:24:38.402Z", "event": "TASK_TRANSITION", "from": "READY", "reason": "ownership granted", "task_id": "step-b", "to": "LEASED"}
+{"agent_id": "claude-code-implementer", "at": "2026-09-10T09:24:38.402Z", "authorized_paths": ["world.txt"], "event": "LEASE_GRANTED", "lease_id": "atlas-real-runtime-demo-step-b-2", "task_id": "step-b"}
+{"adapter": "claude-code", "agent_id": "claude-code-implementer", "at": "2026-09-10T09:24:38.403Z", "attempt_id": "atlas-real-runtime-demo.step-b.run.1.b2cb5b29", "event": "DISPATCH_INTENT", "idempotency_key": "ba86e03397715002bc503f48b458f2ad2aa251e3cb818b457de3b300a8165159", "mode": "NEW", "profile_id": "implementer", "runtime_session_id": "2281a762-401f-419e-b869-7098ff404547", "task_id": "step-b"}
+{"at": "2026-09-10T09:24:38.403Z", "event": "TASK_TRANSITION", "from": "LEASED", "reason": "worker starting", "task_id": "step-b", "to": "ACTIVE"}
+{"at": "2026-09-10T09:25:00.172Z", "attempt_id": "atlas-real-runtime-demo.step-b.run.1.b2cb5b29", "confidence": "CONFIRMED", "event": "ADAPTER_RETURNED", "exit_status": 0, "failure_class": null, "task_id": "step-b", "terminal_state": "completed"}
+{"at": "2026-09-10T09:25:00.178Z", "attempt_id": "atlas-real-runtime-demo.step-b.run.1.b2cb5b29", "event": "ACCEPTANCE_EVALUATED", "failed_checks": [], "passed": true, "task_id": "step-b"}
+{"at": "2026-09-10T09:25:00.178Z", "event": "TASK_TRANSITION", "from": "ACTIVE", "reason": "worker finished; acceptance evaluated by the supervisor", "task_id": "step-b", "to": "VERIFYING"}
+{"at": "2026-09-10T09:25:00.178Z", "event": "TASK_TRANSITION", "from": "VERIFYING", "reason": "every acceptance condition observed to hold", "task_id": "step-b", "to": "CERTIFIED"}
+{"at": "2026-09-10T09:25:00.179Z", "event": "LEASE_RELEASED", "lease_id": "atlas-real-runtime-demo-step-b-2", "task_id": "step-b"}
+{"at": "2026-09-10T09:25:00.180Z", "attempt_id": "atlas-real-runtime-demo.step-b.run.1.b2cb5b29", "event": "TASK_ACCEPTED", "task_id": "step-b"}
+{"at": "2026-09-10T09:25:00.181Z", "event": "NOTIFY_PROGRAM_COMPLETE", "message": "every task in the approved program reached an accepted state", "tasks": ["step-a", "step-b"]}

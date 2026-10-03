@@ -1,0 +1,24 @@
+{"at": "2026-09-10T09:35:33.702Z", "event": "PROGRAM_INITIALISED", "program_digest": "b98932f7b31e2cdb623ff045f79946a2d9fbfb8da781a2c58be06bea689507cd", "program_id": "atlas-codex-runtime-demo", "tasks": ["codex-step-a", "codex-step-b"]}
+{"at": "2026-09-10T09:35:33.706Z", "event": "TASK_TRANSITION", "from": "DISCOVERED", "reason": "no external precondition gates this task", "task_id": "codex-step-a", "to": "READY"}
+{"at": "2026-09-10T09:35:33.708Z", "event": "TASK_TRANSITION", "from": "DISCOVERED", "reason": "no external precondition gates this task", "task_id": "codex-step-b", "to": "READY"}
+{"at": "2026-09-10T09:35:33.749Z", "event": "TASK_TRANSITION", "from": "READY", "reason": "ownership granted", "task_id": "codex-step-a", "to": "LEASED"}
+{"agent_id": "codex-implementer", "at": "2026-09-10T09:35:33.751Z", "authorized_paths": ["alpha.txt"], "event": "LEASE_GRANTED", "lease_id": "atlas-codex-runtime-demo-codex-step-a-1", "task_id": "codex-step-a"}
+{"adapter": "codex", "agent_id": "codex-implementer", "at": "2026-09-10T09:35:33.754Z", "attempt_id": "atlas-codex-runtime-demo.codex-step-a.run.1.eeee53fb", "event": "DISPATCH_INTENT", "idempotency_key": "7aab2dfa66bc536d0c5c2c2abb150de766cd0bd7d984f9ef5c3f975dd7fe2236", "mode": "NEW", "profile_id": "codex-implementer", "runtime_session_id": null, "task_id": "codex-step-a"}
+{"at": "2026-09-10T09:35:33.756Z", "event": "TASK_TRANSITION", "from": "LEASED", "reason": "worker starting", "task_id": "codex-step-a", "to": "ACTIVE"}
+{"at": "2026-09-10T09:36:00.285Z", "attempt_id": "atlas-codex-runtime-demo.codex-step-a.run.1.eeee53fb", "confidence": "CONFIRMED", "event": "ADAPTER_RETURNED", "exit_status": 0, "failure_class": null, "task_id": "codex-step-a", "terminal_state": "turn.completed"}
+{"at": "2026-09-10T09:36:00.296Z", "attempt_id": "atlas-codex-runtime-demo.codex-step-a.run.1.eeee53fb", "event": "ACCEPTANCE_EVALUATED", "failed_checks": [], "passed": true, "task_id": "codex-step-a"}
+{"at": "2026-09-10T09:36:00.297Z", "event": "TASK_TRANSITION", "from": "ACTIVE", "reason": "worker finished; acceptance evaluated by the supervisor", "task_id": "codex-step-a", "to": "VERIFYING"}
+{"at": "2026-09-10T09:36:00.299Z", "event": "TASK_TRANSITION", "from": "VERIFYING", "reason": "every acceptance condition observed to hold", "task_id": "codex-step-a", "to": "CERTIFIED"}
+{"at": "2026-09-10T09:36:00.304Z", "event": "LEASE_RELEASED", "lease_id": "atlas-codex-runtime-demo-codex-step-a-1", "task_id": "codex-step-a"}
+{"at": "2026-09-10T09:36:00.307Z", "attempt_id": "atlas-codex-runtime-demo.codex-step-a.run.1.eeee53fb", "event": "TASK_ACCEPTED", "task_id": "codex-step-a"}
+{"at": "2026-09-10T09:36:00.317Z", "event": "TASK_TRANSITION", "from": "READY", "reason": "ownership granted", "task_id": "codex-step-b", "to": "LEASED"}
+{"agent_id": "codex-implementer", "at": "2026-09-10T09:36:00.319Z", "authorized_paths": ["beta.txt"], "event": "LEASE_GRANTED", "lease_id": "atlas-codex-runtime-demo-codex-step-b-2", "task_id": "codex-step-b"}
+{"adapter": "codex", "agent_id": "codex-implementer", "at": "2026-09-10T09:36:00.322Z", "attempt_id": "atlas-codex-runtime-demo.codex-step-b.run.1.ba3b3cbd", "event": "DISPATCH_INTENT", "idempotency_key": "cf9f94444dfcfeb80c66bafbbd168efca0586554cf2c0255653ecda56d7db65d", "mode": "NEW", "profile_id": "codex-implementer", "runtime_session_id": null, "task_id": "codex-step-b"}
+{"at": "2026-09-10T09:36:00.324Z", "event": "TASK_TRANSITION", "from": "LEASED", "reason": "worker starting", "task_id": "codex-step-b", "to": "ACTIVE"}
+{"at": "2026-09-10T09:36:22.599Z", "attempt_id": "atlas-codex-runtime-demo.codex-step-b.run.1.ba3b3cbd", "confidence": "CONFIRMED", "event": "ADAPTER_RETURNED", "exit_status": 0, "failure_class": null, "task_id": "codex-step-b", "terminal_state": "turn.completed"}
+{"at": "2026-09-10T09:36:22.609Z", "attempt_id": "atlas-codex-runtime-demo.codex-step-b.run.1.ba3b3cbd", "event": "ACCEPTANCE_EVALUATED", "failed_checks": [], "passed": true, "task_id": "codex-step-b"}
+{"at": "2026-09-10T09:36:22.610Z", "event": "TASK_TRANSITION", "from": "ACTIVE", "reason": "worker finished; acceptance evaluated by the supervisor", "task_id": "codex-step-b", "to": "VERIFYING"}
+{"at": "2026-09-10T09:36:22.612Z", "event": "TASK_TRANSITION", "from": "VERIFYING", "reason": "every acceptance condition observed to hold", "task_id": "codex-step-b", "to": "CERTIFIED"}
+{"at": "2026-09-10T09:36:22.617Z", "event": "LEASE_RELEASED", "lease_id": "atlas-codex-runtime-demo-codex-step-b-2", "task_id": "codex-step-b"}
+{"at": "2026-09-10T09:36:22.620Z", "attempt_id": "atlas-codex-runtime-demo.codex-step-b.run.1.ba3b3cbd", "event": "TASK_ACCEPTED", "task_id": "codex-step-b"}
+{"at": "2026-09-10T09:36:22.623Z", "event": "NOTIFY_PROGRAM_COMPLETE", "message": "every task in the approved program reached an accepted state", "tasks": ["codex-step-a", "codex-step-b"]}

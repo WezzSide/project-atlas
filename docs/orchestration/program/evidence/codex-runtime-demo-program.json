@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "program": {
+    "program_id": "atlas-codex-runtime-demo",
+    "objective": "Demonstrate the supervisor running two dependent tasks through the real Codex runtime with no user prompt between them.",
+    "approved_by": "wesley",
+    "approval_reference": "docs/orchestration/program/evidence/REAL-RUNTIME-DEMO-CODEX.md",
+    "workspace_root": "workspace",
+    "base_pin": "e8aab8692fdced206b0a7a5072ab79368f2f5de3",
+    "limits": {
+      "max_task_launches": 4,
+      "max_attempts_per_task": 2,
+      "max_task_seconds": 420,
+      "max_program_seconds": 1800,
+      "max_cycles": 12,
+      "max_idle_cycles": 2,
+      "idle_sleep_seconds": 0.0
+    },
+    "tasks": [
+      {
+        "task_id": "codex-step-a",
+        "title": "Create the marker file",
+        "instruction": "Create a file named exactly alpha.txt in the current working directory whose entire content is the single line: CODEX-STEP-A-DONE\nDo not create or modify any other file. Stop when it exists.",
+        "profile_ref": "codex-implementer",
+        "mutation_paths": ["alpha.txt"],
+        "surface_id": "codex-marker-a",
+        "surface_semantic": "CODEX_MARKER_A",
+        "capabilities_required": ["IMPLEMENT"],
+        "acceptance": [
+          {"check_id": "alpha-content", "kind": "FILE_MATCHES", "description": "alpha.txt contains CODEX-STEP-A-DONE", "path": "alpha.txt", "pattern": "CODEX-STEP-A-DONE"}
+        ]
+      },
+      {
+        "task_id": "codex-step-b",
+        "title": "Derive the second file from the first",
+        "instruction": "Read alpha.txt in the current working directory. Create a file named exactly beta.txt whose entire content is the single line: DERIVED-FROM:<trimmed contents of alpha.txt>\nFor example if alpha.txt contains CODEX-STEP-A-DONE then beta.txt must contain DERIVED-FROM:CODEX-STEP-A-DONE\nDo not create or modify any other file. Stop when it exists.",
+        "profile_ref": "codex-implementer",
+        "depends_on": ["codex-step-a"],
+        "mutation_paths": ["beta.txt"],
+        "surface_id": "codex-marker-b",
+        "surface_semantic": "CODEX_MARKER_B",
+        "capabilities_required": ["IMPLEMENT"],
+        "acceptance": [
+          {"check_id": "beta-derived", "kind": "FILE_MATCHES", "description": "beta.txt records that it was derived from codex-step-a's output", "path": "beta.txt", "pattern": "DERIVED-FROM:CODEX-STEP-A-DONE"}
+        ]
+      }
+    ]
+  },
+  "profile_defaults": {"adapter": "codex", "credential": "SUBSCRIPTION_OAUTH"},
+  "profiles": {
+    "codex-implementer": {
+      "agent_id": "codex-implementer",
+      "description": "Real Codex worker, workspace-write sandbox.",
+      "capabilities": ["IMPLEMENT"],
+      "permission_mode": "acceptEdits",
+      "allowed_mutation_prefixes": ["alpha.txt", "beta.txt"],
+      "limits": {"max_seconds": 420, "max_attempts": 2},
+      "env_allowlist": []
+    }
+  }
+}

@@ -1,0 +1,62 @@
+{
+  "cycles_run": 5,
+  "estimated_cost_note": "client-side estimate reported by the runtime; not billed spend",
+  "estimated_cost_usd": 0.289126,
+  "execution_authorized": false,
+  "launches_this_run": 4,
+  "max_concurrent_workers_observed": 2,
+  "merge_authorized": false,
+  "notifications": [
+    {
+      "detail": {
+        "states": {
+          "claude-a": "CERTIFIED",
+          "claude-b": "CERTIFIED",
+          "codex-a": "CERTIFIED",
+          "codex-b": "ACTIVE"
+        }
+      },
+      "kind": "NO_ELIGIBLE_WORK",
+      "message": "no task is eligible and nothing is pending"
+    },
+    {
+      "detail": {
+        "tasks": [
+          "claude-a",
+          "claude-b",
+          "codex-a",
+          "codex-b"
+        ]
+      },
+      "kind": "PROGRAM_COMPLETE",
+      "message": "every task in the approved program reached an accepted state"
+    }
+  ],
+  "program_complete": true,
+  "program_id": "atlas-systemwide-acceptance",
+  "stop_reason": "PROGRAM_COMPLETE",
+  "tasks_dispatched": [
+    {
+      "cycle": 1,
+      "mode": "NEW",
+      "task_id": "claude-a"
+    },
+    {
+      "cycle": 1,
+      "mode": "NEW",
+      "task_id": "codex-a"
+    },
+    {
+      "cycle": 2,
+      "mode": "NEW",
+      "task_id": "claude-b"
+    },
+    {
+      "cycle": 3,
+      "mode": "NEW",
+      "task_id": "codex-b"
+    }
+  ],
+  "total_launches": 4,
+  "truth_boundary": "PROGRAM_APPROVAL != MERGE_AUTHORIZATION / WORKER_REPORTED_COMPLETION != ACCEPTANCE / ACCEPTANCE != INDEPENDENT_VERIFICATION / TASK_COMPLETE != PROGRAM_COMPLETE / ADAPTER_EXIT_ZERO != ACCEPTANCE_PASSED / ESTIMATED_COST != BILLED_SPEND"
+}

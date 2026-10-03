@@ -1,0 +1,47 @@
+{"at": "2026-09-10T09:54:07.847Z", "event": "PROGRAM_INITIALISED", "program_digest": "fe2186559b7cd766b772edb4cb0b4813ec3a69d56d8ea0999ed5a36f200d6750", "program_id": "atlas-systemwide-acceptance", "tasks": ["claude-a", "claude-b", "codex-a", "codex-b"]}
+{"at": "2026-09-10T09:54:07.851Z", "event": "TASK_TRANSITION", "from": "DISCOVERED", "reason": "no external precondition gates this task", "task_id": "claude-a", "to": "READY"}
+{"at": "2026-09-10T09:54:07.854Z", "event": "TASK_TRANSITION", "from": "DISCOVERED", "reason": "no external precondition gates this task", "task_id": "claude-b", "to": "READY"}
+{"at": "2026-09-10T09:54:07.855Z", "event": "TASK_TRANSITION", "from": "DISCOVERED", "reason": "no external precondition gates this task", "task_id": "codex-a", "to": "READY"}
+{"at": "2026-09-10T09:54:07.857Z", "event": "TASK_TRANSITION", "from": "DISCOVERED", "reason": "no external precondition gates this task", "task_id": "codex-b", "to": "READY"}
+{"at": "2026-09-10T09:54:07.874Z", "event": "TASK_TRANSITION", "from": "READY", "reason": "ownership granted", "task_id": "claude-a", "to": "LEASED"}
+{"agent_id": "claude-worker", "at": "2026-09-10T09:54:07.875Z", "authorized_paths": ["claude-1.txt"], "event": "LEASE_GRANTED", "lease_id": "atlas-systemwide-acceptance-claude-a-1", "task_id": "claude-a"}
+{"adapter": "claude-code", "agent_id": "claude-worker", "at": "2026-09-10T09:54:07.879Z", "attempt_id": "atlas-systemwide-acceptance.claude-a.run.1.def41d89", "event": "DISPATCH_INTENT", "idempotency_key": "7bc820ca996b3582945613bca607cced051d49d7f78a60e4992c731911989a5a", "mode": "NEW", "profile_id": "claude-impl", "runtime_session_id": "01654693-2615-4982-af80-f41ae1505d3a", "task_id": "claude-a"}
+{"at": "2026-09-10T09:54:07.880Z", "event": "TASK_TRANSITION", "from": "LEASED", "reason": "worker starting", "task_id": "claude-a", "to": "ACTIVE"}
+{"at": "2026-09-10T09:54:07.927Z", "event": "TASK_TRANSITION", "from": "READY", "reason": "ownership granted", "task_id": "codex-a", "to": "LEASED"}
+{"agent_id": "codex-worker", "at": "2026-09-10T09:54:07.928Z", "authorized_paths": ["codex-1.txt"], "event": "LEASE_GRANTED", "lease_id": "atlas-systemwide-acceptance-codex-a-2", "task_id": "codex-a"}
+{"adapter": "codex", "agent_id": "codex-worker", "at": "2026-09-10T09:54:07.933Z", "attempt_id": "atlas-systemwide-acceptance.codex-a.run.1.aa08f6db", "event": "DISPATCH_INTENT", "idempotency_key": "e3e261f47a14647e9e5da6e337ee7edbd05710b475dbc176b512ffb3a0e8d4f9", "mode": "NEW", "profile_id": "codex-impl", "runtime_session_id": null, "task_id": "codex-a"}
+{"at": "2026-09-10T09:54:07.934Z", "event": "TASK_TRANSITION", "from": "LEASED", "reason": "worker starting", "task_id": "codex-a", "to": "ACTIVE"}
+{"at": "2026-09-10T09:54:21.405Z", "attempt_id": "atlas-systemwide-acceptance.claude-a.run.1.def41d89", "confidence": "CONFIRMED", "event": "ADAPTER_RETURNED", "exit_status": 0, "failure_class": null, "task_id": "claude-a", "terminal_state": "completed"}
+{"at": "2026-09-10T09:54:21.414Z", "attempt_id": "atlas-systemwide-acceptance.claude-a.run.1.def41d89", "event": "ACCEPTANCE_EVALUATED", "failed_checks": [], "passed": true, "task_id": "claude-a"}
+{"at": "2026-09-10T09:54:21.416Z", "event": "TASK_TRANSITION", "from": "ACTIVE", "reason": "worker finished; acceptance evaluated by the supervisor", "task_id": "claude-a", "to": "VERIFYING"}
+{"at": "2026-09-10T09:54:21.417Z", "event": "TASK_TRANSITION", "from": "VERIFYING", "reason": "every acceptance condition observed to hold", "task_id": "claude-a", "to": "CERTIFIED"}
+{"at": "2026-09-10T09:54:21.422Z", "event": "LEASE_RELEASED", "lease_id": "atlas-systemwide-acceptance-claude-a-1", "task_id": "claude-a"}
+{"at": "2026-09-10T09:54:21.425Z", "attempt_id": "atlas-systemwide-acceptance.claude-a.run.1.def41d89", "event": "TASK_ACCEPTED", "task_id": "claude-a"}
+{"at": "2026-09-10T09:54:21.437Z", "event": "TASK_TRANSITION", "from": "READY", "reason": "ownership granted", "task_id": "claude-b", "to": "LEASED"}
+{"agent_id": "claude-worker", "at": "2026-09-10T09:54:21.438Z", "authorized_paths": ["claude-2.txt"], "event": "LEASE_GRANTED", "lease_id": "atlas-systemwide-acceptance-claude-b-3", "task_id": "claude-b"}
+{"adapter": "claude-code", "agent_id": "claude-worker", "at": "2026-09-10T09:54:21.441Z", "attempt_id": "atlas-systemwide-acceptance.claude-b.run.1.2b50cf53", "event": "DISPATCH_INTENT", "idempotency_key": "687ee4ab4c425787255bdb51c4b12bed86b084f9ffa69145079af8a71c88b2b8", "mode": "NEW", "profile_id": "claude-impl", "runtime_session_id": "e1d4db8a-419b-426a-9a04-f924682d823c", "task_id": "claude-b"}
+{"at": "2026-09-10T09:54:21.442Z", "event": "TASK_TRANSITION", "from": "LEASED", "reason": "worker starting", "task_id": "claude-b", "to": "ACTIVE"}
+{"at": "2026-09-10T09:54:28.963Z", "attempt_id": "atlas-systemwide-acceptance.codex-a.run.1.aa08f6db", "confidence": "CONFIRMED", "event": "ADAPTER_RETURNED", "exit_status": 0, "failure_class": null, "task_id": "codex-a", "terminal_state": "turn.completed"}
+{"at": "2026-09-10T09:54:28.973Z", "attempt_id": "atlas-systemwide-acceptance.codex-a.run.1.aa08f6db", "event": "ACCEPTANCE_EVALUATED", "failed_checks": [], "passed": true, "task_id": "codex-a"}
+{"at": "2026-09-10T09:54:28.974Z", "event": "TASK_TRANSITION", "from": "ACTIVE", "reason": "worker finished; acceptance evaluated by the supervisor", "task_id": "codex-a", "to": "VERIFYING"}
+{"at": "2026-09-10T09:54:28.976Z", "event": "TASK_TRANSITION", "from": "VERIFYING", "reason": "every acceptance condition observed to hold", "task_id": "codex-a", "to": "CERTIFIED"}
+{"at": "2026-09-10T09:54:28.979Z", "event": "LEASE_RELEASED", "lease_id": "atlas-systemwide-acceptance-codex-a-2", "task_id": "codex-a"}
+{"at": "2026-09-10T09:54:28.984Z", "attempt_id": "atlas-systemwide-acceptance.codex-a.run.1.aa08f6db", "event": "TASK_ACCEPTED", "task_id": "codex-a"}
+{"at": "2026-09-10T09:54:28.995Z", "event": "TASK_TRANSITION", "from": "READY", "reason": "ownership granted", "task_id": "codex-b", "to": "LEASED"}
+{"agent_id": "codex-worker", "at": "2026-09-10T09:54:28.996Z", "authorized_paths": ["codex-2.txt"], "event": "LEASE_GRANTED", "lease_id": "atlas-systemwide-acceptance-codex-b-4", "task_id": "codex-b"}
+{"adapter": "codex", "agent_id": "codex-worker", "at": "2026-09-10T09:54:28.999Z", "attempt_id": "atlas-systemwide-acceptance.codex-b.run.1.e770a7fe", "event": "DISPATCH_INTENT", "idempotency_key": "c0fc2201d863ea7665d5bae83dda4d07fcf319f867bb8c1de9f5ffb14488db99", "mode": "NEW", "profile_id": "codex-impl", "runtime_session_id": null, "task_id": "codex-b"}
+{"at": "2026-09-10T09:54:29.001Z", "event": "TASK_TRANSITION", "from": "LEASED", "reason": "worker starting", "task_id": "codex-b", "to": "ACTIVE"}
+{"at": "2026-09-10T09:54:37.717Z", "attempt_id": "atlas-systemwide-acceptance.claude-b.run.1.2b50cf53", "confidence": "CONFIRMED", "event": "ADAPTER_RETURNED", "exit_status": 0, "failure_class": null, "task_id": "claude-b", "terminal_state": "completed"}
+{"at": "2026-09-10T09:54:37.727Z", "attempt_id": "atlas-systemwide-acceptance.claude-b.run.1.2b50cf53", "event": "ACCEPTANCE_EVALUATED", "failed_checks": [], "passed": true, "task_id": "claude-b"}
+{"at": "2026-09-10T09:54:37.728Z", "event": "TASK_TRANSITION", "from": "ACTIVE", "reason": "worker finished; acceptance evaluated by the supervisor", "task_id": "claude-b", "to": "VERIFYING"}
+{"at": "2026-09-10T09:54:37.730Z", "event": "TASK_TRANSITION", "from": "VERIFYING", "reason": "every acceptance condition observed to hold", "task_id": "claude-b", "to": "CERTIFIED"}
+{"at": "2026-09-10T09:54:37.735Z", "event": "LEASE_RELEASED", "lease_id": "atlas-systemwide-acceptance-claude-b-3", "task_id": "claude-b"}
+{"at": "2026-09-10T09:54:37.738Z", "attempt_id": "atlas-systemwide-acceptance.claude-b.run.1.2b50cf53", "event": "TASK_ACCEPTED", "task_id": "claude-b"}
+{"at": "2026-09-10T09:54:37.746Z", "event": "NOTIFY_NO_ELIGIBLE_WORK", "message": "no task is eligible and nothing is pending", "states": {"claude-a": "CERTIFIED", "claude-b": "CERTIFIED", "codex-a": "CERTIFIED", "codex-b": "ACTIVE"}}
+{"at": "2026-09-10T09:54:55.280Z", "attempt_id": "atlas-systemwide-acceptance.codex-b.run.1.e770a7fe", "confidence": "CONFIRMED", "event": "ADAPTER_RETURNED", "exit_status": 0, "failure_class": null, "task_id": "codex-b", "terminal_state": "turn.completed"}
+{"at": "2026-09-10T09:54:55.291Z", "attempt_id": "atlas-systemwide-acceptance.codex-b.run.1.e770a7fe", "event": "ACCEPTANCE_EVALUATED", "failed_checks": [], "passed": true, "task_id": "codex-b"}
+{"at": "2026-09-10T09:54:55.292Z", "event": "TASK_TRANSITION", "from": "ACTIVE", "reason": "worker finished; acceptance evaluated by the supervisor", "task_id": "codex-b", "to": "VERIFYING"}
+{"at": "2026-09-10T09:54:55.293Z", "event": "TASK_TRANSITION", "from": "VERIFYING", "reason": "every acceptance condition observed to hold", "task_id": "codex-b", "to": "CERTIFIED"}
+{"at": "2026-09-10T09:54:55.297Z", "event": "LEASE_RELEASED", "lease_id": "atlas-systemwide-acceptance-codex-b-4", "task_id": "codex-b"}
+{"at": "2026-09-10T09:54:55.302Z", "attempt_id": "atlas-systemwide-acceptance.codex-b.run.1.e770a7fe", "event": "TASK_ACCEPTED", "task_id": "codex-b"}
+{"at": "2026-09-10T09:54:55.307Z", "event": "NOTIFY_PROGRAM_COMPLETE", "message": "every task in the approved program reached an accepted state", "tasks": ["claude-a", "claude-b", "codex-a", "codex-b"]}
