@@ -80,3 +80,34 @@ This section supersedes the earlier statement that the reconciliation was "prepa
   - `111217897130` quality (windows-latest, 3.12, windows) — success
 - Run `37120070769` proves candidate head `1182d0e4` only and is not counted as reconciliation CI.
 - Result: `RECONCILIATION_EXACT_HEAD_CI_PASS`. MERGE NOT AUTHORIZED; no merge, auto-merge, dispatch or job re-run was performed.
+
+## Final integration outcome (2026-10-03) — DEVQ-0002 CLOSED
+
+| Item | Value |
+|---|---|
+| Source task | `ATLAS-DEVQ-0002` |
+| Repair execution | `ATLAS-DEVQ-0002-E2-R2` |
+| Source executor run | `37119599227` (workflow conclusion: failure — red) |
+| Attempt accounting | 3/3 consumed; no executor attempts remain |
+| Salvaged source candidate | `1182d0e40b6e5206af36cde07ed09f88c14ddd48` |
+| Reconciliation head | `8b975e2cbd8bc4120e1c0e26c323367f9971fc4c` |
+| Reconciliation tree | `4df673aff46b78a15e63250356c93672ceb4413f` |
+| Integration PR | #1059 (merged by owner) |
+| Merge commit | `341f94ca95ea35f1ce4eb3154155d388bd9273dc` (parents `4b04621f…`, `8b975e2c…`) |
+| Merged main tree | `4df673aff46b78a15e63250356c93672ceb4413f` |
+| Candidate exact-head CI | `37120070769` PASS (proves `1182d0e4` only) |
+| Reconciliation exact-head CI | `37128248393` PASS |
+| Post-merge main CI | `37136880047` PASS (event `push`, head `341f94ca…`, attempt 1) |
+| P1-1 | RESOLVED |
+| P1-2 | RESOLVED |
+
+Post-merge CI jobs (run `37136880047`): `111243104836` control-plane — success; `111243104839` quality (ubuntu-latest, 3.12, full) — success; `111243104732` quality (ubuntu-latest, 3.13, compat) — success; `111243104769` quality (windows-latest, 3.12, windows) — success. No job was re-run.
+
+**The red executor envelope did not itself merge.** Executor run `37119599227` remains red (model completion used 24 turns against the 20-turn envelope) and is not relabelled. Its salvaged bytes reached `main` only after: independent Option B verification (P0 0 / P1 0), reconciliation onto then-current main (`4b04621f…`), exact-head CI on the reconciliation head, and an owner-authorized merge through #1059.
+
+Residuals (retained, NOT repaired under this lineage):
+
+- Seven P2 notes: broad `except ValueError` mislabels a bad token / non-ASCII path as "rejected invalid URL"; non-redirect errors carrying Content-Location/Link keep their cause (as on base); plain-dict header stub is case-sensitive; one test leaves an `HTTPError` unclosed; raw `InvalidURL`/JSON errors still escape `_request` (as on base); the redirects test file is slow; `read_json_artifact` exposure is outside the sealed scope.
+- ftp test observation: the ftp parameter fails on base only via `__context__ is None` — retained as a non-blocking test-semantics note.
+
+Evidence PRs #1058 (candidate `1182d0e4`) and #1050 (attempt-2 candidate `aee2026b`) are superseded and closed unmerged; their branches are preserved.
