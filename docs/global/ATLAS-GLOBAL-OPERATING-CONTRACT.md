@@ -5,7 +5,7 @@
 | Canonical ID | `ATLAS_GLOBAL_AUTONOMOUS_OPERATING_CONTRACT` |
 | Version | 1 |
 | Directive | `ATLAS-GLOBALIZE-AUTONOMY-2026-10-02` |
-| Status | PROPOSED — binding once the owner merges it to `main` |
+| Status | ADOPTED — binding as governance on `main` (owner-merged, PR #1047) |
 | Scope | Every agent, session, host and WorkItem acting on Project Atlas |
 | Index | [README.md](./README.md) |
 
