@@ -5,7 +5,7 @@
 | Canonical ID | `ATLAS_GLOBAL_STYLE_MISSION` |
 | Version | 1 |
 | Directive | `ATLAS-GLOBALIZE-AUTONOMY-2026-10-02` |
-| Status | PROPOSED — binding once the owner merges it to `main` |
+| Status | ADOPTED — binding as governance on `main` (owner-merged, PR #1047) |
 | Scope | Atlas Studio, Mission Control, operator surfaces, dashboards, execution, verification, fleet and evidence views |
 | Builds on | ADR-008 (web app), ADR-009 (design tokens), ADR-010 (web UX), ADR-032 (derived intelligence ≠ authority), [`apps/web/README.md`](../../apps/web/README.md) invariants, [`docs/atlas-3/PRODUCT-EXPERIENCE.md`](../atlas-3/PRODUCT-EXPERIENCE.md) |
 | Index | [README.md](./README.md) |
