@@ -2,6 +2,7 @@ import { useSearchParams } from "react-router-dom";
 import { ProdShell } from "../../components/ProdShell";
 import { useLiveRoadmap } from "../../hooks/useLiveRoadmap";
 import { useReadStatus } from "../../hooks/useReadStatus";
+import { listState, missingListText } from "../../lib/missingState";
 
 /**
  * AS-PROJECT-ROADMAP-001 web lens — derived Living Project Roadmap V1.
@@ -22,6 +23,21 @@ export default function RoadmapPage() {
   const path = roadmap?.critical_path ?? [];
   const briefProject =
     typeof roadmap?.project_id === "string" ? roadmap.project_id.trim() : "";
+  // STYLE-002: no roadmap payload (no project, demo-only, failed, loading) is
+  // UNKNOWN / unavailable — never "no blockers" or "no unknowns".
+  const roadmapSource = { loading, error, loaded: Boolean(roadmap) };
+  const pathMissing = missingListText(
+    listState({ ...roadmapSource, list: roadmap?.critical_path }),
+    "critical path",
+  );
+  const blockersMissing = missingListText(
+    listState({ ...roadmapSource, list: roadmap?.blockers }),
+    "blockers",
+  );
+  const unknownsMissing = missingListText(
+    listState({ ...roadmapSource, list: roadmap?.unknowns }),
+    "unknown signals",
+  );
   const projectMismatch = Boolean(
     roadmap && projectId && briefProject && briefProject !== projectId,
   );
@@ -126,7 +142,9 @@ export default function RoadmapPage() {
 
         <section className="panel" aria-label="Critical path">
           <h2>Critical path</h2>
-          {path.length === 0 ? (
+          {pathMissing ? (
+            <p className="banner warn">{pathMissing}</p>
+          ) : path.length === 0 ? (
             <p className="banner warn">
               {roadmap?.honesty?.cyclic_dependencies
                 ? "UNKNOWN — cyclic dependencies; no invented path"
@@ -139,7 +157,9 @@ export default function RoadmapPage() {
 
         <section className="panel" aria-label="Blockers">
           <h2>Blockers</h2>
-          {(roadmap?.blockers ?? []).length === 0 ? (
+          {blockersMissing ? (
+            <p className="banner warn">{blockersMissing}</p>
+          ) : (roadmap?.blockers ?? []).length === 0 ? (
             <p>No derived blockers on this lens.</p>
           ) : (
             <ul>
@@ -182,7 +202,9 @@ export default function RoadmapPage() {
 
         <section className="panel" aria-label="Unknowns">
           <h2>Unknowns</h2>
-          {(roadmap?.unknowns ?? []).length === 0 ? (
+          {unknownsMissing ? (
+            <p className="banner warn">{unknownsMissing}</p>
+          ) : (roadmap?.unknowns ?? []).length === 0 ? (
             <p>No UNKNOWN signals on this derived lens.</p>
           ) : (
             <ul>

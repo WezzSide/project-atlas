@@ -3,6 +3,7 @@ import {
   type DiscoveryCategoryKey,
   useEstateDiscovery,
 } from "../../hooks/useEstateDiscovery";
+import { countOrUnknown } from "../../lib/missingState";
 
 const CARE_ORDER: DiscoveryCategoryKey[] = [
   "DISCOVERED_PROJECTS",
@@ -86,9 +87,10 @@ export default function DiscoveryPage() {
               {view.volume_root_authorized
                 ? `authorized (${view.volume_root_kind ?? "NON_SYSTEM_WINDOWS_VOLUME"})`
                 : "not authorized"}{" "}
-              · projects {view.counts?.projects ?? 0} · knowledge{" "}
-              {view.counts?.knowledge ?? 0} · review {view.counts?.required_review ?? 0}{" "}
-              · connected {view.counts?.connected ?? 0}
+              · projects {countOrUnknown(view.counts?.projects)} · knowledge{" "}
+              {countOrUnknown(view.counts?.knowledge)} · review{" "}
+              {countOrUnknown(view.counts?.required_review)} · connected{" "}
+              {countOrUnknown(view.counts?.connected)}
               {view.scan?.project_limit_reached
                 ? ` · project output ${String(view.scan.project_candidates_emitted ?? "?")}/${String(view.scan.project_candidates_seen ?? "?")} enriched ${String(view.scan.project_candidates_enriched ?? "?")} (${view.scan.candidate_selection_policy ?? "bounded"})`
                 : ""}

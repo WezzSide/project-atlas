@@ -6,7 +6,11 @@ import {
   type LensModeId,
 } from "../../components/LensModeSwitcher";
 import { ProdShell } from "../../components/ProdShell";
-import { useLiveWorkspace } from "../../hooks/useLiveMissionWorkspace";
+import {
+  PILOT_UI_POLICY_NOTE,
+  useLiveWorkspace,
+} from "../../hooks/useLiveMissionWorkspace";
+import { boolOrUnknown, lengthOrUnknown } from "../../lib/missingState";
 
 /**
  * Workspace lens — AS-WEB-WORKSPACE-001 / AS-2.1-WEB-MISSION-WORKSPACE-UX.
@@ -97,15 +101,19 @@ export default function WorkspacePage() {
               </div>
               <div>
                 <dt>Board available</dt>
-                <dd>{String(view.workspace_board_available ?? false)}</dd>
+                <dd>{boolOrUnknown(view.workspace_board_available)}</dd>
               </div>
               <div>
                 <dt>PILOT estate rows</dt>
-                <dd>{Array.isArray(view.pilot_estate_rows) ? view.pilot_estate_rows.length : 0}</dd>
+                <dd>
+                  {lengthOrUnknown(view.pilot_estate_rows)} ({PILOT_UI_POLICY_NOTE})
+                </dd>
               </div>
               <div>
                 <dt>Authentic pilot</dt>
-                <dd>{String(view.authentic_pilot ?? false)}</dd>
+                <dd>
+                  {boolOrUnknown(view.authentic_pilot)} ({PILOT_UI_POLICY_NOTE})
+                </dd>
               </div>
             </dl>
           ) : null}
