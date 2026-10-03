@@ -1,0 +1,46 @@
+{
+  "blockers": [
+    {
+      "code": "MERGE_AUTHORIZATION_NOT_GRANTED"
+    },
+    {
+      "code": "CI_NOT_RUN_FOR_THIS_LANE"
+    },
+    {
+      "code": "INDEPENDENT_VERIFICATION_NOT_CLAIMED"
+    },
+    {
+      "code": "CANONICAL_VAULT_SYNC_NOT_PERFORMED"
+    }
+  ],
+  "observations": {
+    "extras": {
+      "branch": "feat/as-impr-plane-001-delivery-evidence-report",
+      "directive": "ATLAS-IMPROVEMENT-PLANE-DECISION-QUALITY-003",
+      "dq_baseline_head": "a1b3ee413d1ce5bc49e9ad1c083836fb3cada8b7",
+      "everyday_trust": "conditional",
+      "focused_tests_result": "PASS_24",
+      "impl_head": "34ca05a3ebc849ec96f1f92a0ef78c7fb507a347",
+      "package_id": "AS-IMPR-PLANE-001",
+      "pr": "https://github.com/B0LK13/project-atlas/pull/792",
+      "sync_state": "pending",
+      "tip_head": "f11ec826fdd106cc145fce3da684ddaecb8f822e",
+      "worktree": "/home/gebruiker/Projects/project-atlas-worktrees/improvement-plane"
+    },
+    "target_moved": false,
+    "unauthorized_mutations": 0
+  },
+  "outcome": "PASS",
+  "producer": {
+    "agent_id": "cursor-impr-plane-dq-003-20260910",
+    "role": "local"
+  },
+  "receipt": null,
+  "requested_transition": null,
+  "schema_version": 1,
+  "state": "COMPLETE",
+  "task": {
+    "attempt": 1,
+    "id": "ATLAS-IMPROVEMENT-PLANE-DECISION-QUALITY-003"
+  }
+}

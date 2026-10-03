@@ -99,3 +99,6 @@ fixtures/eval/holdouts/private/
 # committed as plaintext again (W2: HIDDEN_HOLDOUT_ISOLATION leak).
 **/*eval*expected*.json
 **/*holdout*expected*.json
+
+# AS-IMPR-PLANE local outcome annotations (non-authoritative)
+.atlas/improvement-plane/

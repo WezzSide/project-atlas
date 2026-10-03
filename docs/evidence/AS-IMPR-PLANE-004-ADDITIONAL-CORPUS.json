@@ -1,0 +1,105 @@
+{
+  "directive": "ATLAS-IMPROVEMENT-PLANE-PROGRESS-SENSITIVITY-004",
+  "frozen_subject": {
+    "head": "d4e084c769bfbddd4b6a390e133bcd39011d2b3b",
+    "tree": "087dc06e5678ca935e308543ab9eb640acff2a17"
+  },
+  "method": {
+    "replay_mode": "single_packet_isolated_snapshots",
+    "note": "Additional source-backed episodes selected before examining candidate outputs."
+  },
+  "held_out_policy": {
+    "declared_before_execution": true,
+    "held_out_split": [
+      "P05",
+      "P06"
+    ]
+  },
+  "episodes": [
+    {
+      "episode_id": "P01",
+      "split": "development",
+      "category": "candidate_identity_supersession_progress",
+      "source_file": "docs/evidence/AS-IMPR-PLANE-001-REVIEW-CANDIDATE-PIN.json",
+      "before_commit": "e57c0cfb06dd711f623acfb89a84261605744d76",
+      "after_commit": "d4e084c769bfbddd4b6a390e133bcd39011d2b3b",
+      "source_change_type": "identity_and_ci_freeze_repin",
+      "expected_signal": "delta_present",
+      "expected_rationale": "Review candidate head/tree and freeze interpretation changed materially.",
+      "acceptable_alternatives": [
+        "changed observation",
+        "new plus changed observation"
+      ]
+    },
+    {
+      "episode_id": "P02",
+      "split": "development",
+      "category": "status_progression_without_resolution_claim",
+      "source_file": "docs/evidence/atlas-core-ingestion-traversal.json",
+      "before_commit": "d5232206ae919d03524169683eee028c7d097787",
+      "after_commit": "b25cdb12aeaaaf3819378f30e1c6e1db349c0817",
+      "source_change_type": "remediation_status_progression",
+      "expected_signal": "delta_present",
+      "expected_rationale": "Status moved from pending-independent-replay to independently-verified evidence.",
+      "acceptable_alternatives": [
+        "changed progress marker only"
+      ]
+    },
+    {
+      "episode_id": "P03",
+      "split": "development",
+      "category": "closure_lookalike_without_open_finding",
+      "source_file": "docs/evidence/AS-ORCH-CONTINUATION-BROKER-001-six-p1-closure-088.json",
+      "before_commit": "58b2e2077b5c22ca8c85e927a144fd99c7ad2fca^",
+      "after_commit": "58b2e2077b5c22ca8c85e927a144fd99c7ad2fca",
+      "source_change_type": "closed_only_findings_packet_introduction",
+      "expected_signal": "no_material_delta",
+      "expected_rationale": "Closed-only findings should not create open blocker or resolved-improvement claims.",
+      "acceptable_alternatives": [
+        "none"
+      ]
+    },
+    {
+      "episode_id": "P04",
+      "split": "development",
+      "category": "self_ingest_review_ci_packet",
+      "source_file": "docs/evidence/AS-IMPR-PLANE-001-REVIEW-CI-REPORT.json",
+      "before_commit": "e57c0cfb06dd711f623acfb89a84261605744d76",
+      "after_commit": "38cec36dffd03d6cf0dc48180f9e0ffd5ba5dbbe",
+      "source_change_type": "lane_generated_ci_packet_revision",
+      "expected_signal": "no_material_delta",
+      "expected_rationale": "Lane-generated review CI packet remains excluded by self-ingest guard.",
+      "acceptable_alternatives": [
+        "none"
+      ]
+    },
+    {
+      "episode_id": "P05",
+      "split": "held_out",
+      "category": "generic_receipt_claim_boundary_change",
+      "source_file": "docs/evidence/d-phase2a/receipts/process-b-receipt.json",
+      "before_commit": "d05beb815842211b5e6c81b8ea389d7e379f4d73",
+      "after_commit": "459a9d2cf32b99f85bf6a5b4b104a7007757533e",
+      "source_change_type": "receipt_claim_boundary_refinement",
+      "expected_signal": "no_material_delta",
+      "expected_rationale": "Receipt claim-boundary prose changes are outside supported modeled observation fields.",
+      "acceptable_alternatives": [
+        "none"
+      ]
+    },
+    {
+      "episode_id": "P06",
+      "split": "held_out",
+      "category": "self_ingest_dq_audit_packet",
+      "source_file": "docs/evidence/AS-IMPR-PLANE-001-DQ-AUDIT-REPORT.json",
+      "before_commit": "34ca05a3ebc849ec96f1f92a0ef78c7fb507a347",
+      "after_commit": "7aecdc3fa6312335a0c237cba62f3dfa0365b29a",
+      "source_change_type": "lane_generated_audit_revision",
+      "expected_signal": "no_material_delta",
+      "expected_rationale": "DQ audit packet is self-ingest excluded by schema and package guard.",
+      "acceptable_alternatives": [
+        "none"
+      ]
+    }
+  ]
+}

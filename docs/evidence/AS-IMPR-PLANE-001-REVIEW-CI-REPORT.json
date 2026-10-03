@@ -1,0 +1,31 @@
+{
+  "baseline_vs_lane": "ubuntu_green_on_ee901aaa; windows_pending",
+  "ci_run_id": 34448415572,
+  "ci_run_url": "https://github.com/B0LK13/project-atlas/actions/runs/34448415572",
+  "conclusion": null,
+  "directive": "ATLAS-IMPROVEMENT-PLANE-REVIEW-READINESS-004",
+  "jobs_at_last_poll": {
+    "control-plane": "success",
+    "quality (ubuntu-latest, 3.12, full)": "success",
+    "quality (ubuntu-latest, 3.13, compat)": "success",
+    "quality (windows-latest, 3.12, windows)": "in_progress"
+  },
+  "local_shipped_install_checks": {
+    "absent_evidence_rc": 0,
+    "consumer_example_ok": true,
+    "invalid_compare_error_code": "input-not-found",
+    "invalid_compare_input_rc": 2,
+    "module_invocation": "python -m project_atlas.improvement_plane",
+    "outcome_self_ref_rejected": true,
+    "outcome_sequence_append": true,
+    "procedure": "pip install -e .[dev]",
+    "pythonpath_src_required": false,
+    "self_ingest_audit_report_excluded": true
+  },
+  "note": "Partial CI for DQ tip ee901aaa. Review-readiness commit starts a new run; refresh conclusions when terminal.",
+  "package_id": "AS-IMPR-PLANE-001",
+  "schema": "atlas.improvement-plane.review-ci.v1",
+  "status": "in_progress",
+  "tested_checkout_head": "ee901aaa864230af615562dbde6566f764e9998b",
+  "tested_checkout_tree": "9ea1fdeb13237a322030fe0e213ead31cf4c2011"
+}

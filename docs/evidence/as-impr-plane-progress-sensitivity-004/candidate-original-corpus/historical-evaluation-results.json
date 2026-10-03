@@ -1,0 +1,519 @@
+{
+  "counts": {
+    "compare_not_ok": 0,
+    "episodes_flagged_uncertain": 12,
+    "episodes_with_duplicate_recommendations": 0,
+    "false_resolution": 0,
+    "missed_progress_or_insensitive": 0,
+    "total_mismatches": 0,
+    "unexpected_or_false_signal": 0
+  },
+  "directive": "ATLAS-IMPROVEMENT-PLANE-HISTORICAL-EVALUATION-001",
+  "episodes": [
+    {
+      "actual": {
+        "claimed_closure_ids": [],
+        "comparison_status": "ok",
+        "counts": {
+          "changed": 0,
+          "claimed_closure": 0,
+          "new": 3,
+          "persistent": 0,
+          "resolved": 0,
+          "unobservable": 0
+        },
+        "coverage_reduced": false,
+        "duplicate_recommendation_ids_after": [],
+        "duplicate_recommendation_ids_before": [],
+        "resolved_ids": [],
+        "signal": "delta_present",
+        "uncertain": true
+      },
+      "after_commit": "0509287c8915f3fe06644d5a00bcc219bd290add",
+      "after_commit_ts": "2026-08-13T20:48:33Z",
+      "after_source_present": true,
+      "before_commit": "0509287c8915f3fe06644d5a00bcc219bd290add^",
+      "before_commit_ts": "2026-08-13T20:12:58Z",
+      "before_source_present": false,
+      "category": "new_observable_failure_signal",
+      "discrepancy_kind": null,
+      "episode_id": "E01",
+      "expected": {
+        "acceptable_alternatives": [
+          "new observations only",
+          "new plus changed observations"
+        ],
+        "rationale": "After snapshot introduces findings + hard_counters packet with explicit high-severity security/path signals.",
+        "signal": "delta_present"
+      },
+      "source_change_type": "authentic_packet_introduced",
+      "source_file": "docs/evidence/d064-overnight/path-stale-secret-results.json",
+      "split": "development",
+      "verdict": "match"
+    },
+    {
+      "actual": {
+        "claimed_closure_ids": [],
+        "comparison_status": "ok",
+        "counts": {
+          "changed": 0,
+          "claimed_closure": 0,
+          "new": 6,
+          "persistent": 0,
+          "resolved": 0,
+          "unobservable": 0
+        },
+        "coverage_reduced": false,
+        "duplicate_recommendation_ids_after": [],
+        "duplicate_recommendation_ids_before": [],
+        "resolved_ids": [],
+        "signal": "delta_present",
+        "uncertain": true
+      },
+      "after_commit": "94786c9c6e59aa0934296a71e8190959e34e914e",
+      "after_commit_ts": "2026-08-26T20:28:20+02:00",
+      "after_source_present": true,
+      "before_commit": "94786c9c6e59aa0934296a71e8190959e34e914e^",
+      "before_commit_ts": "2026-08-26T20:10:22+02:00",
+      "before_source_present": false,
+      "category": "owner_gate_frontier_signal",
+      "discrepancy_kind": null,
+      "episode_id": "E02",
+      "expected": {
+        "acceptable_alternatives": [
+          "owner observations appear as waiting or owner_decision ids"
+        ],
+        "rationale": "After snapshot introduces owner_gated_nodes; waiting/owner backlog should become observable.",
+        "signal": "delta_present"
+      },
+      "source_change_type": "authentic_packet_introduced",
+      "source_file": "docs/evidence/D-AUG26-FRONTIER-ACCOUNTING-RECONCILIATION-035.json",
+      "split": "development",
+      "verdict": "match"
+    },
+    {
+      "actual": {
+        "claimed_closure_ids": [],
+        "comparison_status": "ok",
+        "counts": {
+          "changed": 0,
+          "claimed_closure": 0,
+          "new": 6,
+          "persistent": 0,
+          "resolved": 0,
+          "unobservable": 0
+        },
+        "coverage_reduced": false,
+        "duplicate_recommendation_ids_after": [],
+        "duplicate_recommendation_ids_before": [],
+        "resolved_ids": [],
+        "signal": "delta_present",
+        "uncertain": true
+      },
+      "after_commit": "5c89c39f42ba0e485d2c6ed2c8575d3a4700a4e3",
+      "after_commit_ts": "2026-08-26T20:10:22+02:00",
+      "after_source_present": true,
+      "before_commit": "5c89c39f42ba0e485d2c6ed2c8575d3a4700a4e3^",
+      "before_commit_ts": "2026-08-26T19:56:12+02:00",
+      "before_source_present": false,
+      "category": "queued_and_external_dependency_signal",
+      "discrepancy_kind": null,
+      "episode_id": "E03",
+      "expected": {
+        "acceptable_alternatives": [
+          "new queued-opportunity/external-dependency observations"
+        ],
+        "rationale": "After snapshot introduces successor_dag with BLOCKED_EXTERNAL/READY/DERIVABLE classifications.",
+        "signal": "delta_present"
+      },
+      "source_change_type": "authentic_packet_introduced",
+      "source_file": "docs/evidence/D-AUG26-EVIDENCE-GROUNDED-GOLDEN-ESTATE-034.json",
+      "split": "development",
+      "verdict": "match"
+    },
+    {
+      "actual": {
+        "claimed_closure_ids": [],
+        "comparison_status": "ok",
+        "counts": {
+          "changed": 0,
+          "claimed_closure": 0,
+          "new": 0,
+          "persistent": 0,
+          "resolved": 0,
+          "unobservable": 0
+        },
+        "coverage_reduced": false,
+        "duplicate_recommendation_ids_after": [],
+        "duplicate_recommendation_ids_before": [],
+        "resolved_ids": [],
+        "signal": "no_material_delta",
+        "uncertain": true
+      },
+      "after_commit": "58b2e2077b5c22ca8c85e927a144fd99c7ad2fca",
+      "after_commit_ts": "2026-08-20T21:44:30+02:00",
+      "after_source_present": true,
+      "before_commit": "58b2e2077b5c22ca8c85e927a144fd99c7ad2fca^",
+      "before_commit_ts": "2026-08-20T21:16:06+02:00",
+      "before_source_present": false,
+      "category": "ci_gate_findings_signal",
+      "discrepancy_kind": null,
+      "episode_id": "E04",
+      "expected": {
+        "acceptable_alternatives": [
+          "new recurring-failure observations",
+          "changed observations if bucket merges related IDs"
+        ],
+        "rationale": "Packet introduces CLOSED-only findings; no open blocker signal should be inferred from this packet alone.",
+        "signal": "no_material_delta"
+      },
+      "source_change_type": "authentic_packet_introduced",
+      "source_file": "docs/evidence/AS-ORCH-CONTINUATION-BROKER-001-six-p1-closure-088.json",
+      "split": "development",
+      "verdict": "match"
+    },
+    {
+      "actual": {
+        "claimed_closure_ids": [],
+        "comparison_status": "ok",
+        "counts": {
+          "changed": 0,
+          "claimed_closure": 0,
+          "new": 0,
+          "persistent": 0,
+          "resolved": 0,
+          "unobservable": 0
+        },
+        "coverage_reduced": false,
+        "duplicate_recommendation_ids_after": [],
+        "duplicate_recommendation_ids_before": [],
+        "resolved_ids": [],
+        "signal": "no_material_delta",
+        "uncertain": true
+      },
+      "after_commit": "6ae66f2bbd569e1f29a93a9bd0df5e3387047789",
+      "after_commit_ts": "2026-08-20T22:11:51+02:00",
+      "after_source_present": true,
+      "before_commit": "6ae66f2bbd569e1f29a93a9bd0df5e3387047789^",
+      "before_commit_ts": "2026-08-20T21:45:07+02:00",
+      "before_source_present": false,
+      "category": "ci_runtime_wiring_signal",
+      "discrepancy_kind": null,
+      "episode_id": "E05",
+      "expected": {
+        "acceptable_alternatives": [
+          "new recurring-failure observations"
+        ],
+        "rationale": "Packet introduces CLOSED-only findings; this is closure documentation rather than open failure recurrence.",
+        "signal": "no_material_delta"
+      },
+      "source_change_type": "authentic_packet_introduced",
+      "source_file": "docs/evidence/AS-ORCH-CONTINUATION-BROKER-001-d092-runtime-wiring-audit.json",
+      "split": "development",
+      "verdict": "match"
+    },
+    {
+      "actual": {
+        "claimed_closure_ids": [],
+        "comparison_status": "ok",
+        "counts": {
+          "changed": 0,
+          "claimed_closure": 0,
+          "new": 0,
+          "persistent": 0,
+          "resolved": 0,
+          "unobservable": 0
+        },
+        "coverage_reduced": false,
+        "duplicate_recommendation_ids_after": [],
+        "duplicate_recommendation_ids_before": [],
+        "resolved_ids": [],
+        "signal": "no_material_delta",
+        "uncertain": true
+      },
+      "after_commit": "b0c77d2b1325039988bcaadc00f85b86f3f8f54f",
+      "after_commit_ts": "2026-09-10T09:03:01+02:00",
+      "after_source_present": true,
+      "before_commit": "47a6ef59d5f1dcfe14d82d8cf600a39d2b2c0577",
+      "before_commit_ts": "2026-09-10T08:32:06+02:00",
+      "before_source_present": true,
+      "category": "self_ingest_exclusion",
+      "discrepancy_kind": null,
+      "episode_id": "E06",
+      "expected": {
+        "acceptable_alternatives": [
+          "none"
+        ],
+        "rationale": "AS-IMPR lane-generated AgentResult packet is excluded by self-ingest policy.",
+        "signal": "no_material_delta"
+      },
+      "source_change_type": "lane_generated_packet_revised",
+      "source_file": "docs/evidence/AS-IMPR-PLANE-001-AGENT-RESULT.json",
+      "split": "development",
+      "verdict": "match"
+    },
+    {
+      "actual": {
+        "claimed_closure_ids": [],
+        "comparison_status": "ok",
+        "counts": {
+          "changed": 0,
+          "claimed_closure": 0,
+          "new": 0,
+          "persistent": 0,
+          "resolved": 0,
+          "unobservable": 0
+        },
+        "coverage_reduced": false,
+        "duplicate_recommendation_ids_after": [],
+        "duplicate_recommendation_ids_before": [],
+        "resolved_ids": [],
+        "signal": "no_material_delta",
+        "uncertain": true
+      },
+      "after_commit": "7aecdc3fa6312335a0c237cba62f3dfa0365b29a",
+      "after_commit_ts": "2026-09-10T09:06:19+02:00",
+      "after_source_present": true,
+      "before_commit": "34ca05a3ebc849ec96f1f92a0ef78c7fb507a347",
+      "before_commit_ts": "2026-09-10T09:01:03+02:00",
+      "before_source_present": true,
+      "category": "self_ingest_exclusion",
+      "discrepancy_kind": null,
+      "episode_id": "E07",
+      "expected": {
+        "acceptable_alternatives": [
+          "none"
+        ],
+        "rationale": "AS-IMPR DQ audit payload is excluded by schema-based self-ingest guard.",
+        "signal": "no_material_delta"
+      },
+      "source_change_type": "lane_generated_packet_revised",
+      "source_file": "docs/evidence/AS-IMPR-PLANE-001-DQ-AUDIT-REPORT.json",
+      "split": "development",
+      "verdict": "match"
+    },
+    {
+      "actual": {
+        "claimed_closure_ids": [],
+        "comparison_status": "ok",
+        "counts": {
+          "changed": 0,
+          "claimed_closure": 0,
+          "new": 0,
+          "persistent": 0,
+          "resolved": 0,
+          "unobservable": 0
+        },
+        "coverage_reduced": false,
+        "duplicate_recommendation_ids_after": [],
+        "duplicate_recommendation_ids_before": [],
+        "resolved_ids": [],
+        "signal": "no_material_delta",
+        "uncertain": true
+      },
+      "after_commit": "38cec36dffd03d6cf0dc48180f9e0ffd5ba5dbbe",
+      "after_commit_ts": "2026-09-10T09:26:47+02:00",
+      "after_source_present": true,
+      "before_commit": "e57c0cfb06dd711f623acfb89a84261605744d76",
+      "before_commit_ts": "2026-09-10T09:26:29+02:00",
+      "before_source_present": true,
+      "category": "self_ingest_exclusion",
+      "discrepancy_kind": null,
+      "episode_id": "E08",
+      "expected": {
+        "acceptable_alternatives": [
+          "none"
+        ],
+        "rationale": "AS-IMPR review CI packet is excluded by filename-based self-ingest guard.",
+        "signal": "no_material_delta"
+      },
+      "source_change_type": "lane_generated_packet_revised",
+      "source_file": "docs/evidence/AS-IMPR-PLANE-001-REVIEW-CI-REPORT.json",
+      "split": "development",
+      "verdict": "match"
+    },
+    {
+      "actual": {
+        "claimed_closure_ids": [],
+        "comparison_status": "ok",
+        "counts": {
+          "changed": 1,
+          "claimed_closure": 0,
+          "new": 0,
+          "persistent": 0,
+          "resolved": 0,
+          "unobservable": 0
+        },
+        "coverage_reduced": false,
+        "duplicate_recommendation_ids_after": [],
+        "duplicate_recommendation_ids_before": [],
+        "resolved_ids": [],
+        "signal": "delta_present",
+        "uncertain": true
+      },
+      "after_commit": "d4e084c769bfbddd4b6a390e133bcd39011d2b3b",
+      "after_commit_ts": "2026-09-10T09:27:08+02:00",
+      "after_source_present": true,
+      "before_commit": "e57c0cfb06dd711f623acfb89a84261605744d76",
+      "before_commit_ts": "2026-09-10T09:26:29+02:00",
+      "before_source_present": true,
+      "category": "candidate_identity_supersession",
+      "discrepancy_kind": null,
+      "episode_id": "E09",
+      "expected": {
+        "acceptable_alternatives": [
+          "none"
+        ],
+        "rationale": "Review-candidate head/tree and CI freeze context materially changed; identity supersession should be detectable as historical change.",
+        "signal": "delta_present"
+      },
+      "source_change_type": "identity_and_ci_annotation_repin",
+      "source_file": "docs/evidence/AS-IMPR-PLANE-001-REVIEW-CANDIDATE-PIN.json",
+      "split": "development",
+      "verdict": "match"
+    },
+    {
+      "actual": {
+        "claimed_closure_ids": [],
+        "comparison_status": "ok",
+        "counts": {
+          "changed": 1,
+          "claimed_closure": 0,
+          "new": 0,
+          "persistent": 0,
+          "resolved": 0,
+          "unobservable": 0
+        },
+        "coverage_reduced": false,
+        "duplicate_recommendation_ids_after": [],
+        "duplicate_recommendation_ids_before": [],
+        "resolved_ids": [],
+        "signal": "delta_present",
+        "uncertain": true
+      },
+      "after_commit": "b25cdb12aeaaaf3819378f30e1c6e1db349c0817",
+      "after_commit_ts": "2026-08-01T21:44:09+02:00",
+      "after_source_present": true,
+      "before_commit": "d5232206ae919d03524169683eee028c7d097787",
+      "before_commit_ts": "2026-08-01T21:35:27+02:00",
+      "before_source_present": true,
+      "category": "status_progress_outside_modeled_shape",
+      "discrepancy_kind": null,
+      "episode_id": "E10",
+      "expected": {
+        "acceptable_alternatives": [
+          "none"
+        ],
+        "rationale": "Status advances from remediated-pending to independently-verified; this is substantive remediation progress in primary evidence.",
+        "signal": "delta_present"
+      },
+      "source_change_type": "status_pending_to_independent_verified",
+      "source_file": "docs/evidence/atlas-core-ingestion-traversal.json",
+      "split": "held_out",
+      "verdict": "match"
+    },
+    {
+      "actual": {
+        "claimed_closure_ids": [],
+        "comparison_status": "ok",
+        "counts": {
+          "changed": 0,
+          "claimed_closure": 0,
+          "new": 0,
+          "persistent": 0,
+          "resolved": 0,
+          "unobservable": 0
+        },
+        "coverage_reduced": false,
+        "duplicate_recommendation_ids_after": [],
+        "duplicate_recommendation_ids_before": [],
+        "resolved_ids": [],
+        "signal": "no_material_delta",
+        "uncertain": true
+      },
+      "after_commit": "d5232206ae919d03524169683eee028c7d097787",
+      "after_commit_ts": "2026-08-01T21:35:27+02:00",
+      "after_source_present": true,
+      "before_commit": "2cc209109ae738b9456fcd3eaa85f3d1e37c4676",
+      "before_commit_ts": "2026-08-01T21:19:27+02:00",
+      "before_source_present": true,
+      "category": "measurement_schema_refinement",
+      "discrepancy_kind": null,
+      "episode_id": "E11",
+      "expected": {
+        "acceptable_alternatives": [
+          "none"
+        ],
+        "rationale": "Packet updates metric naming/measurement details without modeled finding or queue constructs.",
+        "signal": "no_material_delta"
+      },
+      "source_change_type": "metric_field_refinement",
+      "source_file": "docs/evidence/atlas-core-vertical-slice.json",
+      "split": "held_out",
+      "verdict": "match"
+    },
+    {
+      "actual": {
+        "claimed_closure_ids": [],
+        "comparison_status": "ok",
+        "counts": {
+          "changed": 0,
+          "claimed_closure": 0,
+          "new": 0,
+          "persistent": 0,
+          "resolved": 0,
+          "unobservable": 0
+        },
+        "coverage_reduced": false,
+        "duplicate_recommendation_ids_after": [],
+        "duplicate_recommendation_ids_before": [],
+        "resolved_ids": [],
+        "signal": "no_material_delta",
+        "uncertain": true
+      },
+      "after_commit": "c4e1cba10de915862bc59c0ca0ac951f8526920f",
+      "after_commit_ts": "2026-08-30T03:27:12+02:00",
+      "after_source_present": true,
+      "before_commit": "5891c27c36dfec5659dab88638423204ff71e6d5",
+      "before_commit_ts": "2026-08-29T20:58:54+02:00",
+      "before_source_present": true,
+      "category": "generic_receipt_identity_churn",
+      "discrepancy_kind": null,
+      "episode_id": "E12",
+      "expected": {
+        "acceptable_alternatives": [
+          "none"
+        ],
+        "rationale": "Receipt identity updates are meaningful governance history but outside the modeled observation fields.",
+        "signal": "no_material_delta"
+      },
+      "source_change_type": "work_identity_rebind",
+      "source_file": "docs/evidence/d-phase2a/receipts/process-a-receipt.json",
+      "split": "held_out",
+      "verdict": "match"
+    }
+  ],
+  "implementation_pin": {
+    "expected_frozen_head": "d4e084c769bfbddd4b6a390e133bcd39011d2b3b",
+    "expected_frozen_tree": "087dc06e5678ca935e308543ab9eb640acff2a17",
+    "head": "d4e084c769bfbddd4b6a390e133bcd39011d2b3b",
+    "note": "Evaluation lane is branched from the frozen subject. Only evaluation artifacts should differ.",
+    "tree": "087dc06e5678ca935e308543ab9eb640acff2a17"
+  },
+  "observed_limits": [
+    "Self-ingest exclusions prevent scoring lane-generated AS-IMPR packets.",
+    "Generic receipts without findings/owner_gated_nodes/successor_dag produce no observation deltas.",
+    "Status/prose updates in unsupported packet shapes can represent real progress but remain unclassified.",
+    "Coverage/incompatibility checks are conservative and avoided false resolved classifications in this corpus."
+  ],
+  "operator_assessment": "Corpus results match expected transitions. Keep current capability within the evaluated scope; continue monitoring with new authentic episodes.",
+  "recommendation": "retain_with_scope",
+  "summary": {
+    "development_total": 9,
+    "episodes_total": 12,
+    "held_out_matches": 3,
+    "held_out_total": 3,
+    "matches": 12,
+    "mismatches": 0
+  }
+}

@@ -1,0 +1,162 @@
+{
+  "classification_counts": {
+    "supported": 11
+  },
+  "directive": "ATLAS-IMPROVEMENT-PLANE-DECISION-QUALITY-003",
+  "duplicate_recommendation_ids": [],
+  "live_report": {
+    "accepted_count": 25,
+    "engineering_ids": [
+      "finding:GIT_REMOTE_PASSWORD_ECHO",
+      "finding:SYMLINK_LOOP_UNBOUNDED",
+      "finding:secrets.SECRET_LEAKS"
+    ],
+    "recommendation_count": 11,
+    "reference_utc": "2026-09-10T06:00:00Z"
+  },
+  "near_duplicate_emitted": false,
+  "package_id": "AS-IMPR-PLANE-001",
+  "productivity_gain_claimed": false,
+  "recommendation_audit": [
+    {
+      "classification": "supported",
+      "kind": "owner_decision",
+      "recommendation_id": "owner:OWNER-1",
+      "sources": [
+        "docs/evidence/D-AUG26-FRONTIER-ACCOUNTING-RECONCILIATION-035.json"
+      ],
+      "uncertainty": "stale_vs_live_owner_state"
+    },
+    {
+      "classification": "supported",
+      "kind": "engineering",
+      "recommendation_id": "finding:GIT_REMOTE_PASSWORD_ECHO",
+      "related_ids": [
+        "secrets.REMOTE_PASSWORD_ECHO"
+      ],
+      "sources": [
+        "docs/evidence/d064-overnight/path-stale-secret-results.json"
+      ]
+    },
+    {
+      "classification": "supported",
+      "kind": "owner_decision",
+      "recommendation_id": "owner:OWNER-2",
+      "sources": [
+        "docs/evidence/D-AUG26-FRONTIER-ACCOUNTING-RECONCILIATION-035.json"
+      ],
+      "uncertainty": "stale_vs_live_owner_state"
+    },
+    {
+      "classification": "supported",
+      "kind": "owner_decision",
+      "recommendation_id": "owner:OWNER-3",
+      "sources": [
+        "docs/evidence/D-AUG26-FRONTIER-ACCOUNTING-RECONCILIATION-035.json"
+      ],
+      "uncertainty": "stale_vs_live_owner_state"
+    },
+    {
+      "classification": "supported",
+      "kind": "owner_decision",
+      "recommendation_id": "owner:note:docs/evidence/D-029-SUPERSESSION-CLEANUP.json",
+      "sources": [
+        "docs/evidence/D-029-SUPERSESSION-CLEANUP.json"
+      ],
+      "uncertainty": "stale_vs_live_owner_state"
+    },
+    {
+      "classification": "supported",
+      "kind": "engineering",
+      "recommendation_id": "finding:SYMLINK_LOOP_UNBOUNDED",
+      "related_ids": [],
+      "sources": [
+        "docs/evidence/d064-overnight/path-stale-secret-results.json"
+      ]
+    },
+    {
+      "classification": "supported",
+      "kind": "engineering",
+      "recommendation_id": "finding:secrets.SECRET_LEAKS",
+      "related_ids": [],
+      "sources": [
+        "docs/evidence/d064-overnight/path-stale-secret-results.json"
+      ]
+    },
+    {
+      "classification": "supported",
+      "kind": "external_dependency",
+      "recommendation_id": "external:Windows-side execution of the D-034 packet",
+      "sources": [
+        "docs/evidence/D-AUG26-EVIDENCE-GROUNDED-GOLDEN-ESTATE-034.json"
+      ],
+      "uncertainty": "stale_packet_possible"
+    },
+    {
+      "classification": "supported",
+      "kind": "other",
+      "recommendation_id": "queue:DERIVABLE:PR608 retarget to main after #607 merges",
+      "sources": [
+        "docs/evidence/D-AUG26-EVIDENCE-GROUNDED-GOLDEN-ESTATE-034.json"
+      ],
+      "uncertainty": "stale_packet_possible"
+    },
+    {
+      "classification": "supported",
+      "kind": "other",
+      "recommendation_id": "queue:READY:SEC021 test hermeticity (PATH sanitization)",
+      "sources": [
+        "docs/evidence/D-AUG26-EVIDENCE-GROUNDED-GOLDEN-ESTATE-034.json"
+      ],
+      "uncertainty": "stale_packet_possible"
+    },
+    {
+      "classification": "supported",
+      "kind": "data_quality",
+      "reason": "derived from coverage/freshness panels over listed sources",
+      "recommendation_id": "quality:missing-timestamps",
+      "sources": [
+        "docs/evidence/AS-IMPR-PLANE-001-DQ-BASELINE-PIN.json",
+        "docs/evidence/AS-IMPR-PLANE-001-SOURCE-PIN.json",
+        "docs/evidence/AS-ORCH-CONTINUATION-BROKER-001-d092-runtime-wiring-audit.json",
+        "docs/evidence/AS-ORCH-CONTINUATION-BROKER-001-six-p1-closure-088.json",
+        "docs/evidence/D-028-INTEGRATED-ATLAS3-STACK.json",
+        "docs/evidence/D-029-SUPERSESSION-CLEANUP.json",
+        "docs/evidence/D-087-CLOUD-IV.json",
+        "docs/evidence/D-AUG26-EVIDENCE-GROUNDED-GOLDEN-ESTATE-034.json",
+        "docs/evidence/D-AUG26-FRONTIER-ACCOUNTING-RECONCILIATION-035.json",
+        "docs/evidence/atlas-core-ingestion-traversal.json",
+        "docs/evidence/atlas-core-vertical-slice.json",
+        "docs/evidence/d-phase2a/receipts/process-a-receipt.json"
+      ]
+    }
+  ],
+  "sample_size": 11,
+  "schema": "atlas.improvement-plane.dq-audit.v1",
+  "self_lane_cycle": {
+    "demo_agrees_with_inspection": true,
+    "demo_kind": "controlled_transition_plus_live_post_fix_inspect",
+    "demo_planted_compare_disposition": {
+      "changed": 0,
+      "claimed_closure": 1,
+      "new": 0,
+      "persistent": 0,
+      "resolved": 0,
+      "unobservable": 0
+    },
+    "demo_planted_evaluate": "inconclusive",
+    "limitation": "No suitable multi-day longitudinal evidence; T01 labeled controlled/synthetic",
+    "post_fix_engineering_ids": [
+      "finding:GIT_REMOTE_PASSWORD_ECHO",
+      "finding:SYMLINK_LOOP_UNBOUNDED",
+      "finding:secrets.SECRET_LEAKS"
+    ],
+    "recommendation": "Prevent planted CLOSED/annotation self-certification; merge related hard-counters; expose uncertain comparability"
+  },
+  "what_tests_and_demos_prove": {
+    "controlled_corpus_transitions": 4,
+    "live_trace_sample_size": 11,
+    "sample_1_demo_scope": "establishes only the observed case",
+    "unit_and_corpus_tests": "controlled fixtures/regressions only; not authentic longitudinal history"
+  }
+}
