@@ -21,6 +21,7 @@ Dated baselines are evidence snapshots. They are not doctrine and are never rewr
 | Operational slice, F2 decision brief, E2 runbook | [baseline/2026-10-02-OPERATIONAL-SLICE-AND-F2-BRIEF.md](./baseline/2026-10-02-OPERATIONAL-SLICE-AND-F2-BRIEF.md) |
 | Autonomy and fleet frontier, DEVQ-0002 record (2026-10-02) | [baseline/2026-10-02-AUTONOMY-FRONTIER.md](./baseline/2026-10-02-AUTONOMY-FRONTIER.md) |
 | Studio / Mission Control style audit (2026-10-02) | [baseline/2026-10-02-STYLE-AUDIT.md](./baseline/2026-10-02-STYLE-AUDIT.md) |
+| G1–G15 delta against that matrix: DEVQ-0002-E2 evidence, no status change (2026-10-03) | [baseline/2026-10-03-G1-G15-DELTA.md](./baseline/2026-10-03-G1-G15-DELTA.md) |
 
 ## Where this sits
 
