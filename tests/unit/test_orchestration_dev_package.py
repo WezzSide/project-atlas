@@ -24,6 +24,7 @@ from project_atlas.orchestration.autonomy.dev_package import (
     load_spec,
     package_sha256,
     render_package,
+    sealed_instructions_sha256,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -191,6 +192,24 @@ def test_package_has_provenance_and_never_asserts_secret_presence() -> None:
 REPAIR_CONTRACT = [*BASE_SPEC["acceptance_contract"], "RESOLVE:F-0001 handle the edge case"]
 
 
+def _repair_over() -> dict[str, Any]:
+    """Overrides turning BASE_SPEC into the canonical repair of its attempt-1 WorkItem."""
+    parent = load_spec(_spec_text())
+    return {
+        "task_id": "SYNTH-PKG-0001-R1",
+        "parent_task_id": "SYNTH-PKG-0001",
+        "parent_execution_id": parent.execution_id,
+        "base_branch": "atlas/agent-1000001-1",
+        "attempt": 2,
+        "attempt_kind": "repair",
+        "acceptance_contract": [
+            *BASE_SPEC["acceptance_contract"],
+            INSTRUCTIONS_PREFIX + sealed_instructions_sha256(parent),
+            "RESOLVE:F-0001 handle the edge case",
+        ],
+    }
+
+
 def test_build_work_is_sealed_and_first_attempt_has_no_suffix() -> None:
     w = build_work(load_spec(_spec_text()))
     w.verify_seal()
@@ -211,9 +230,7 @@ def test_implementation_attempt_2_is_not_a_repair() -> None:
 
 
 def test_repair_attempt_with_resolve_entry_gets_suffix() -> None:
-    spec = load_spec(
-        _spec_text(attempt=2, attempt_kind="repair", acceptance_contract=REPAIR_CONTRACT)
-    )
+    spec = load_spec(_spec_text(**_repair_over()))
     assert effective_statement(spec) == BASE_SPEC["statement"] + REPAIR_SUFFIX
     pkg = build_package(spec)
     assert "This is a REPAIR attempt" in pkg["workflow_inputs"]["task_prompt"]
@@ -262,10 +279,11 @@ def test_attempt_kind_is_required() -> None:
 
 
 def test_attempt_kind_changes_seal_inputs_and_package_hash() -> None:
-    """Only attempt_kind differs; it must change every identity hash."""
-    common: dict[str, Any] = {"attempt": 2, "acceptance_contract": REPAIR_CONTRACT}
-    impl = load_spec(_spec_text(attempt_kind="implementation", **common))
-    rep = load_spec(_spec_text(attempt_kind="repair", **common))
+    """An implementation attempt 2 and a repair attempt 2 differ in every identity hash."""
+    impl = load_spec(
+        _spec_text(attempt=2, attempt_kind="implementation", acceptance_contract=REPAIR_CONTRACT)
+    )
+    rep = load_spec(_spec_text(**_repair_over()))
     a, b = build_package(impl), build_package(rep)
     assert a["work_seal"] != b["work_seal"]
     assert a["workflow_inputs_sha256"] != b["workflow_inputs_sha256"]
