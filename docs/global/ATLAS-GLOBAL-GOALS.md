@@ -5,7 +5,7 @@
 | Canonical ID | `ATLAS_GLOBAL_GOALS` |
 | Version | 1 |
 | Directive | `ATLAS-GLOBALIZE-AUTONOMY-2026-10-02` |
-| Status | PROPOSED — binding once the owner merges it to `main` |
+| Status | ADOPTED — binding as governance on `main` (owner-merged, PR #1047) |
 | Current-state baseline | [baseline/2026-10-02-G1-G15-BASELINE.md](./baseline/2026-10-02-G1-G15-BASELINE.md) |
 | Index | [README.md](./README.md) |
 

@@ -15332,3 +15332,19 @@ uncommitted `executablePath` override the suite ran 2 passed / 3 failed, and the
 same 3 fail identically on unmodified `main` b413aa1 (host has no
 `VITE_ATLAS_API_TOKEN`, so LIVE reads fail closed with the SEC-009 auth error).
 `BROWSER_E2E` for this change = UNKNOWN. UI ≠ canonical; UNKNOWN ≠ healthy.
+## 2026-10-03 — Runner transport-authority incident record (F-RUNNER-1..7)
+
+Branch `docs/runner-authority-incident-2026-10-03`, base `main` b413aa1a. Record only;
+`MERGE_AUTHORIZATION = NOT_GRANTED`; no runtime behaviour change.
+- Added `docs/global/baseline/2026-10-03-RUNNER-AUTHORITY-INCIDENT.md` (+ one row in
+  `docs/global/README.md`): code-grounded analysis of transport-grant handling, the
+  2026-10-02 expiry incident as relayed, and a ranked hardening backlog.
+- OBSERVED in code: an expired transport grant fails closed but is written only to the
+  SQLite `audit_log` (`blocked_authority`); nothing reaches the journal, `health` stays
+  `healthy`, no CLI reads the audit table.
+- F-RUNNER-3: reconcile is startup-only (`cli.py:79`) plus manual (`cli.py:290`); the
+  "periodically here" comment in `controller.py` `run_forever` was stale and is corrected
+  in a separate comment-only commit. Periodic reconcile is proposed, not implemented.
+- VPS2 state and the temporary grant were NOT observed by this session (UNKNOWN).
+- Commands: `python -m pytest tests/unit/test_atlas_global_foundation_docs_001.py -q`;
+  `python -m pytest infra/atlas-runner/tests -q --no-cov`. Results recorded in the PR body.
