@@ -18,6 +18,7 @@ DEFAULT_LABELS = ["self-hosted", "linux", "x64", "atlas", "executor"]
 _LABEL_RE = r"[A-Za-z0-9][A-Za-z0-9._-]*"
 _ENV_KEY_RE = r"[A-Z_][A-Z0-9_]*"
 _ENV_DENY_SUBSTRINGS = ("TOKEN", "SECRET", "KEY", "PASSWORD")
+DEFAULT_TRANSPORT_GRANT_WARN_SECONDS = 86400  # 24 h; operations default (owner-tunable)
 
 # Keys allowed inside a worker task env block when not denied by default.
 # Deny-listed substrings win unless the key is explicitly listed here.
@@ -111,6 +112,11 @@ class ControllerConfig:
     # transport_grant_id resolves to a valid grant. Neither gate may bypass
     # the other (overnight admission mission, owner disposition P1-1).
     queued_transport_enabled: bool = False
+    # F-RUNNER-4: observability-only pre-expiry window for the transport grant.
+    # While the grant is valid but expires within this many seconds, `health` /
+    # `status` carry a TRANSPORT_GRANT_EXPIRING warning and the journal warns.
+    # It never blocks, defers or otherwise changes admission. 0 disables it.
+    transport_grant_warn_seconds: int = DEFAULT_TRANSPORT_GRANT_WARN_SECONDS
 
     @property
     def label_set(self) -> frozenset[str]:
@@ -227,6 +233,7 @@ def parse_config(data: dict[str, Any]) -> ControllerConfig:
             "allow_secret_env",
             "transport_grant_id",
             "queued_transport_enabled",
+            "transport_grant_warn_seconds",
         },
     )
     if "github" not in data:
@@ -247,6 +254,11 @@ def parse_config(data: dict[str, Any]) -> ControllerConfig:
     _require_type("root", "allow_secret_env", allow_secret_env_raw, list)
     transport_grant_id_raw = data.get("transport_grant_id")
     queued_transport_enabled_raw = data.get("queued_transport_enabled", False)
+    warn_seconds_raw = data.get(
+        "transport_grant_warn_seconds", DEFAULT_TRANSPORT_GRANT_WARN_SECONDS
+    )
+    if isinstance(warn_seconds_raw, bool):
+        raise ConfigError("[root] transport_grant_warn_seconds: expected an integer >= 0")
     env_key_re = re.compile(rf"^{_ENV_KEY_RE}$")
     allow_secret_env: list[str] = []
     for key in allow_secret_env_raw:
@@ -278,6 +290,9 @@ def parse_config(data: dict[str, Any]) -> ControllerConfig:
         transport_grant_id=_opt_str("transport_grant_id", transport_grant_id_raw),
         queued_transport_enabled=_require_type(
             "root", "queued_transport_enabled", queued_transport_enabled_raw, bool
+        ),
+        transport_grant_warn_seconds=_positive_int(
+            "root", "transport_grant_warn_seconds", warn_seconds_raw, minimum=0
         ),
     )
     # Permit explicitly allow-listed secret-shaped env keys (operator opt-in only).

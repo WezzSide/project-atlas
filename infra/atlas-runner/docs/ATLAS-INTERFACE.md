@@ -136,6 +136,19 @@ AND grant valid for this repository           (scope + active + unexpired)
   it is never set by the production CLI and grants itself no authority.
 - Configuration: `queued_transport_enabled` + `transport_grant_id` in
   `controller-config.schema.json`; non-boolean values fail closed at parse.
+- Every refusal carries a stable reason code (`TRANSPORT_DISABLED`,
+  `TRANSPORT_GRANT_NOT_CONFIGURED`, `TRANSPORT_GRANT_REGISTRY_UNAVAILABLE`,
+  `TRANSPORT_GRANT_UNKNOWN`, `TRANSPORT_GRANT_REVOKED`,
+  `TRANSPORT_GRANT_EXPIRED`, `TRANSPORT_GRANT_EXHAUSTED`,
+  `TRANSPORT_GRANT_SCOPE_MISMATCH`, fallback `TRANSPORT_GRANT_INVALID`) as
+  `detail.reason_code` in the `blocked_authority` audit record (the free-text
+  `detail.reason` is kept), in one rate-limited journal line, and in the
+  machine lenses: `health` → `checks.transport_admission` + `advisories`
+  (informational: never changes the exit code), `status --json` →
+  `transport_admission`. The code is derived from a discriminator set where
+  the refusal is raised, never from message text. `transport_grant_warn_seconds`
+  (default 86400, `0` = off) adds a `TRANSPORT_GRANT_EXPIRING` warning before
+  expiry without changing admission. Details: `docs/OPERATIONS.md`.
 
 ## Post-commit compensation and reconciliation (P1-2 disposition)
 

@@ -15,7 +15,7 @@ from pathlib import Path
 
 from controller import CONFIG_SCHEMA_VERSION, CONTROLLER_VERSION
 from controller.config import ConfigError, load_config
-from controller.controller import Controller, source_revision
+from controller.controller import Controller, source_revision, transport_admission_state
 from controller.dockerctl import DockerCtl
 from controller.evidence import validate_evidence
 from controller.github import GitHubClient, StaticTokenProvider, TokenProvider
@@ -44,6 +44,31 @@ def _build_context(config_path: str):
         token_provider=token_provider,
     )
     return config, store, docker, github
+
+
+@contextlib.contextmanager
+def _grant_reader(config, store: StateStore):
+    """Read-only grant registry lens for `health` / `status`.
+
+    Opens the registry with SQLite ``mode=ro`` (never creates, migrates or
+    writes). Yields None when queued transport is not configured, or when the
+    registry cannot be opened; the caller then reports the state as unknown
+    (TRANSPORT_GRANT_REGISTRY_UNAVAILABLE), never as OK.
+    """
+    from controller.grants import ReadOnlyGrantReader
+
+    reader = None
+    if config.queued_transport_enabled and config.transport_grant_id:
+        try:
+            reader = ReadOnlyGrantReader(store.db_path)
+        except Exception:
+            reader = None
+    try:
+        yield reader
+    finally:
+        if reader is not None:
+            with contextlib.suppress(Exception):
+                reader.close()
 
 
 def _attach_grants(controller: Controller, store: StateStore) -> None:
@@ -113,9 +138,12 @@ def cmd_submit(args: argparse.Namespace) -> int:
 
 
 def cmd_status(args: argparse.Namespace) -> int:
-    _config, store, _docker, _github = _build_context(args.config)
+    config, store, _docker, _github = _build_context(args.config)
     rows = store.active_executions()
+    with _grant_reader(config, store) as reader:
+        transport = transport_admission_state(config, reader)
     payload = {
+        "transport_admission": transport,
         "active_workers": store.count_active_workers(),
         "active": [
             {
@@ -131,6 +159,12 @@ def cmd_status(args: argparse.Namespace) -> int:
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
         print(f"active_workers: {payload['active_workers']}")
+        print(
+            f"transport_admission: {transport['state']} {transport['code']}"
+            f" grant_id={transport['grant_id'] or '-'}"
+            f" expires_at={transport['expires_at'] or '-'}"
+            + (f" warning={transport['warning']}" if transport["warning"] else "")
+        )
         for row in payload["active"]:
             print(
                 f"  {row['execution_id']} {row['status']} "
@@ -144,9 +178,15 @@ def cmd_health(args: argparse.Namespace) -> int:
     with contextlib.suppress(OSError):
         config_text = Path(args.config).read_text(encoding="utf-8")
     config, store, docker, github = _build_context(args.config)
-    report, exit_code = run_health(
-        config=config, store=store, docker=docker, github=github, config_text=config_text
-    )
+    with _grant_reader(config, store) as reader:
+        report, exit_code = run_health(
+            config=config,
+            store=store,
+            docker=docker,
+            github=github,
+            config_text=config_text,
+            grants=reader,
+        )
     print(health_json(report))
     return exit_code
 

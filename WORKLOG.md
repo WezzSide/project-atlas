@@ -15423,6 +15423,60 @@ Open follow-ups (not implemented; owner-reviewed surfaces):
 - A chained repair whose verdict repeats an earlier finding id yields a duplicate `RESOLVE:`
   entry, which the builder's `LIST_DUPLICATE` rule refuses.
 
+## 2026-10-03 — F-RUNNER-1 + F-RUNNER-4: transport grant refusal observability
+
+Specification: `docs/global/baseline/2026-10-03-RUNNER-AUTHORITY-INCIDENT.md` §4.1 and §4.2
+(not edited). Branch `feat/runner-transport-grant-observability`, base `ac08248`. Repository
+code only; nothing was run against, or read from, any runner host.
+
+Plan: make every queued-transport refusal carry a stable non-secret reason code in the audit
+log, the journal and the health/status surface, add the pre-expiry warning on the same pure
+read, and change nothing about what is admitted.
+
+Changes (`infra/atlas-runner/`):
+- `controller/grants.py`: each `GrantError` carries a `code` discriminator set at the raise
+  site (revoked vs exhausted share a class); `ReadOnlyGrantReader` (SQLite `mode=ro`, `get`
+  only) for `health` / `status`.
+- `controller/controller.py`: `TRANSPORT_*` vocabulary; `transport_reason_code` (type +
+  discriminator, no message parsing); pure `transport_admission_state` /
+  `Controller.transport_admission_state()`; `AdmissionJournal` (write on state change, then at
+  most once per 900 s; pre-expiry warning hourly; `repeats=N`); refusal branches write
+  `detail.reason_code` beside the unchanged `detail.reason`; `except Exception` split so a
+  non-`GrantError` is `TRANSPORT_GRANT_REGISTRY_UNAVAILABLE` (still fail closed, exception type
+  only); `poll_once` journals the state read-only so expiry is visible with an empty queue.
+- `controller/health.py`: informational `transport_admission` check + top-level `advisories`.
+- `controller/cli.py`: `health` and `status` open the registry read-only; `status` gains
+  `transport_admission`.
+- `controller/config.py`, `schemas/controller-config.schema.json`:
+  `transport_grant_warn_seconds` (default 86400, `0` disables, fail-closed parse).
+- `tests/test_transport_grant_observability.py` (new); `docs/OPERATIONS.md`,
+  `docs/RECOVERY.md`, `docs/ATLAS-INTERFACE.md`.
+
+Decision recorded (deviation from the record's proposal): the transport check does NOT change
+health `status` or exit code. `scripts/deploy-release.sh` rolls back on any non-zero health
+exit and the deploy workflow's post-deploy step fails the same way, so the record's proposed
+`degraded` / exit 1 would let an expired grant roll back an unrelated deploy. Two record test
+names that assert a verdict change were implemented under truthful names (see the test module
+docstring). Exit-code participation is left as an owner decision.
+
+Not done: no audit de-duplication (F-RUNNER-6), no GitHub poll-failure surfacing (rest of
+F-RUNNER-7), no grant issue/renew/rotate path (F-RUNNER-5), no scope binding (F-RUNNER-2), no
+periodic reconcile (F-RUNNER-3), `fabric-state` unchanged, `merge_gate.py` untouched.
+
+Commands and results:
+- `PYTHONPATH=src python -m pytest infra/atlas-runner/tests -q --no-cov -o addopts=""`:
+  422 passed, 1 skipped (base: 344 passed, 1 skipped).
+- Same suite from a `git archive` staged tree (CI "staged-release context"): 416 passed,
+  7 skipped (the skips are existing checkout-only / root-only tests, none from this change).
+- `python -m ruff check --config infra/atlas-runner/pyproject.toml infra/atlas-runner` and
+  `python -m ruff check .`: clean. `ruff format --check`: the new test module is formatted;
+  the touched controller modules were not ruff-formatted at base (13 of 18 controller files
+  differ at `ac08248`) and were deliberately not reformatted. mypy is not run on
+  `infra/atlas-runner` in CI (`atlas-runner-ci.yml`: pytest, ruff, shell, schema checks).
+
+Unverified: behaviour on the real host (systemd journal capture, read-only open of the live
+WAL database by the `health` invoker, actual grant rows). `PREP != IMPLEMENTED` for the host.
+
 ## 2026-10-03 — DEVQ execute workflow: in-workflow sealed-base assertion (trust surface, owner review)
 
 Branch `feat/devq-workflow-sealed-base-assert`, based on main
