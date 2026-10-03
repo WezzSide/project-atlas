@@ -364,5 +364,5 @@ class Controller:
         signal.signal(signal.SIGINT, self.request_stop)
         while not self._stop:
             self.poll_once()
-            # reconcile is run by the CLI on startup and periodically here
+            # No reconcile here: cli.cmd_run reconciles once at startup; there is no periodic pass.
             self.sleeper(self.config.poll_interval_seconds)
