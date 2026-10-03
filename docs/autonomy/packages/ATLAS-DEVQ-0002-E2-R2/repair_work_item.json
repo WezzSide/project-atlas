@@ -6,7 +6,7 @@
     "new offline cross-origin redirect tests fail on the sealed base revision and pass on the result",
     "ruff and mypy clean on changed files",
     "instructions_sha256=9b690c132fba6330f8eda12602a401ce18773ef955d2f1043abda30a3ec50228",
-    "RESOLVE:P1-1 redirect failures that urllib rejects before the redirect handler runs (non-http Location scheme; malformed or invalid bracketed-host Location) must raise a redacted AdapterError 'from None' so that no message, __cause__, __context__ or traceback exposes the Location URL or Location query data; add offline tests for both cases that fail on the repair base and pass on the result"
+    "RESOLVE:P1-1 REPAIR: change only GitHubRestPort._request and EXTEND (do not rewrite) tests/unit/test_orchestration_dev_github_port_redirects.py. When urllib rejects a redirect before the handler runs (non-http Location scheme; malformed or invalid bracketed-host Location) raise AdapterError AFTER leaving the except block, so message, __cause__ and __context__ hold no Location URL or query. Keep 4xx/5xx, URLError, timeout and JSON errors unchanged. New tests must fail on aee2026b"
   ],
   "allowed_paths": [
     "src/project_atlas/orchestration/autonomy/dev_github_port.py",
@@ -74,6 +74,6 @@
   "parent_task_id": "ATLAS-DEVQ-0002",
   "repository": "WezzSide/project-atlas",
   "required_role": "IMPLEMENTER",
-  "seal": "97ca15622913f4234e61a4b9aaef3586bdf0d7ad03d82323beb4328393cac098",
+  "seal": "a5c75996bd6276cc3836f96daad6796dcdb3299400bc87b3186e390399f0f205",
   "task_id": "ATLAS-DEVQ-0002-R2"
 }

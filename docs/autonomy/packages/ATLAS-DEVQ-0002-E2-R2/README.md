@@ -12,9 +12,9 @@ Preparation is not authorization. This branch is storage for exact, hashable evi
 | Attempt | **3/3**, `attempt_kind=repair`. E1 = 1/3 (result lost), E2 = 2/3 (salvaged, verification FAIL). After this attempt begins no bounded implementation attempt remains |
 | Repair base | `aee2026b1d8bf7a1293a0f758bc43100b9bed720` (TREE `40cb45361fceb77b715d3e5245c48613e4e3d013`): the failed E2 result revision, per `materialize_repair` |
 | Repair source branch | `atlas/agent-37023482722-1`; resolved by `git ls-remote` to the repair base at preparation; `verify_checkout_ref` passed for that sha and refused main's sha, a short sha and an uppercase sha |
-| `work_seal` | `97ca15622913f4234e61a4b9aaef3586bdf0d7ad03d82323beb4328393cac098` (= `expected_work_seal` = seal of the materialized repair WorkItem) |
-| `workflow_inputs_sha256` | `d659a1a03b965b4c8b23814129904fd6183f59fac840a7e4aa0661ed8d9386a6` |
-| `package_sha256` | `ef1d8bd6accbb10e4d0d5afc3341e588fcfc948ba95a7443afe2d58371d7bc8a` (sha256 of `ATLAS-DEVQ-0002-E2-R2.package.json`) |
+| `work_seal` | `a5c75996bd6276cc3836f96daad6796dcdb3299400bc87b3186e390399f0f205` (= `expected_work_seal` = seal of the materialized repair WorkItem) |
+| `workflow_inputs_sha256` | `fc87f8f8e5126986f6c755f704704fb771d6da3d4817e1d9b69b3b8cb62e370a` |
+| `package_sha256` | `ba388db38537ba1f9b3012131f7bdf14e1be91fd9c261e97835b50081b9ee095` (sha256 of `ATLAS-DEVQ-0002-E2-R2.package.json`) |
 | Builder | `dev_package.py` on `main` `ac08248344a6f3e039513b7c21ca61234806b774` (blob `30669d81967b0604e7f4cb2f691f4bb51440f28d`, with #1055 repair support) |
 | Grant required | `ONE_WORKFLOW_DISPATCH_GRANT` (not issued) |
 
@@ -27,7 +27,17 @@ Preparation is not authorization. This branch is storage for exact, hashable evi
 
 ## The finding id is the repair instruction
 
-A repair cannot change the statement, so the only channel that tells the executor what to fix is the `RESOLVE:<finding_id>` contract entry. The finding id therefore states the defect and the required behaviour in full (`P1-1 redirect failures that urllib rejects before the redirect handler runs …`). It contains no token bytes and no Location data.
+A repair cannot change the statement, so the only channel that tells the executor what to fix is the `RESOLVE:<finding_id>` contract entry. The finding id therefore states the defect, the required behaviour and the framing for a repair on top of the existing result. It contains no token bytes and no Location data.
+
+The inherited statement still describes the original E2 defect and says "new file" and "sealed base"; that wording is pinned by the parent's sealed `instructions_sha256` and cannot be edited. The RESOLVE entry tells the executor to extend the existing test file and that new tests must fail on `aee2026b`.
+
+## Versions
+
+| Version | package_sha256 | State |
+|---|---|---|
+| v1 (commit `8298beb9`) | `ef1d8bd6accbb10e4d0d5afc3341e588fcfc948ba95a7443afe2d58371d7bc8a` (work seal `97ca15622913f4234e61a4b9aaef3586bdf0d7ad03d82323beb4328393cac098`) | **Superseded, never dispatched.** Independent package review: P0 0 / P1 1 / P2 7. The P1: the RESOLVE text prescribed `from None`, which leaves the Location reachable through `__context__` |
+| commits `fdb177e7`, `40fcf512` | same bytes as v1 | **Preparation errors, never dispatched.** The re-seal step failed (entry over the 500-character cap) and these commits carried v1 bytes under a v2 label |
+| **v2 (current)** | **`ba388db38537ba1f9b3012131f7bdf14e1be91fd9c261e97835b50081b9ee095`** (work seal `a5c75996bd6276cc3836f96daad6796dcdb3299400bc87b3186e390399f0f205`) | Finding text reworded: raise after leaving the except block; extend, do not rewrite, the test file; keep unrelated diagnostics. Independent review: see `REVIEW.md` once recorded |
 
 ## Dispatch notes (for the owner; an agent does not dispatch)
 

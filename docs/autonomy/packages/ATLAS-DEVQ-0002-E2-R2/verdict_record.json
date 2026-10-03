@@ -3,7 +3,7 @@
   "findings": [
     {
       "category": "DEFECT",
-      "finding_id": "P1-1 redirect failures that urllib rejects before the redirect handler runs (non-http Location scheme; malformed or invalid bracketed-host Location) must raise a redacted AdapterError 'from None' so that no message, __cause__, __context__ or traceback exposes the Location URL or Location query data; add offline tests for both cases that fail on the repair base and pass on the result",
+      "finding_id": "P1-1 REPAIR: change only GitHubRestPort._request and EXTEND (do not rewrite) tests/unit/test_orchestration_dev_github_port_redirects.py. When urllib rejects a redirect before the handler runs (non-http Location scheme; malformed or invalid bracketed-host Location) raise AdapterError AFTER leaving the except block, so message, __cause__ and __context__ hold no Location URL or query. Keep 4xx/5xx, URLError, timeout and JSON errors unchanged. New tests must fail on aee2026b",
       "message": "PR #1050 IV verdict P0=0 P1=1 P2=5 on aee2026b; owner confirmed P1 on 2026-10-03 against the sealed acceptance entry 'errors never expose token bytes, the Location URL or Location query data'.",
       "paths": [
         "src/project_atlas/orchestration/autonomy/dev_github_port.py",
@@ -14,7 +14,7 @@
   "request_seal": "ec9a2937299135490ee441caba344977b15a4b20f386d0bd9af78df394687894",
   "result_revision": "aee2026b1d8bf7a1293a0f758bc43100b9bed720",
   "result_tree": "40cb45361fceb77b715d3e5245c48613e4e3d013",
-  "seal": "03b0b61bd816f3f75451cc166f7f85f5e25e819116a79e84be1af58db40ab721",
+  "seal": "368dab6945cfd86524e6ae6b9b4d80a726f04d35c1718f86a2eb21cb11f56392",
   "task_id": "ATLAS-DEVQ-0002",
   "verdict": "FAIL",
   "verifier_identity": "cowork-iv/session_01PP6xftpvbmtgoiSC2r41vu/ad93ccebd42bdc3ef"
