@@ -26,7 +26,11 @@ from project_atlas.orchestration.sdk.external_observers import (
     load_observer_registry,
     pending_external_count,
 )
-from project_atlas.orchestration.sdk.host import no_window_creationflags, pid_is_alive
+from project_atlas.orchestration.sdk.host import (
+    no_window_creationflags,
+    pid_is_alive,
+    process_start_identity,
+)
 from project_atlas.orchestration.sdk.models import STATE_DIR_RELATIVE
 from project_atlas.orchestration.sdk.nonblocking_scheduler import (
     bounded_sleep_seconds,
@@ -92,23 +96,108 @@ def _append_tick_log(root: Path, row: dict[str, Any]) -> None:
         handle.write(json.dumps(row, sort_keys=True) + "\n")
 
 
+def _lock_names_a_reused_pid(data: dict[str, Any], other: int) -> bool:
+    """True only when this lock's own recorded identity POSITIVELY proves
+    ``other`` is a different process than the one that wrote it -- i.e. the
+    pid was reused, and ``pid_is_alive(other)`` being true is describing an
+    impostor, not the original holder.
+
+    Mirrors ``host._live_foreign_owner``'s exact contract: absence of
+    evidence is not evidence of absence. A record written before this field
+    existed, or a live process this call cannot query (``"unknown"``), is
+    NOT treated as reused -- it falls back to the existing pid-alive check,
+    same as before this function existed. Only a recorded identity that
+    positively disagrees with a freshly-read live identity says "reused".
+    """
+    recorded = data.get("process_start_identity")
+    if not isinstance(recorded, str) or recorded in {"", "unknown"}:
+        return False
+    live = process_start_identity(other)
+    if live in {"", "unknown"}:
+        return False
+    return live != recorded
+
+
+_PRIMARY_LOCK_ACQUIRE_ATTEMPTS: Final[int] = 8
+
+
+def _primary_lock_payload(me: int) -> bytes:
+    return (
+        json.dumps(
+            {
+                "pid": me,
+                "at": time.time(),
+                "process_start_identity": process_start_identity(me),
+            },
+            indent=2,
+        )
+        + "\n"
+    ).encode("utf-8")
+
+
 def acquire_primary_lock(root: Path) -> bool:
-    """Ensure ACTIVE_PRIMARY_GOVERNOR_COUNT <= 1. Returns False if another live primary."""
+    """Ensure ACTIVE_PRIMARY_GOVERNOR_COUNT <= 1. Returns False if another live primary.
+
+    The create itself is atomic (``O_CREAT | O_EXCL``), same primitive
+    ``host.acquire_supervisor_lock`` already relies on. The version this
+    replaced read the file, decided in Python, then wrote -- a plain
+    check-then-write with no OS-level exclusivity guarantee at all, so two
+    independent processes racing to become the primary governor could both
+    observe "no valid holder" and both succeed.
+
+    After the exclusive create the payload is written in a second step.
+    A peer that observes the empty (or otherwise unreadable) file must
+    retry the read, not unlink-and-recreate: unlinking the in-progress
+    create is a second TOCTOU and was independently measured to yield two
+    live holders. ``host.acquire_supervisor_lock`` already treats an
+    unreadable record as "retry / fail closed", never as stale.
+    """
     path = _runtime(root) / LOCK_NAME
     path.parent.mkdir(parents=True, exist_ok=True)
     me = os.getpid()
-    if path.is_file():
+    for _attempt in range(_PRIMARY_LOCK_ACQUIRE_ATTEMPTS):
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            other = int(data.get("pid", 0))
-        except (OSError, json.JSONDecodeError, TypeError, ValueError):
-            other = 0
-        if other > 0 and other != me and pid_is_alive(other):
+            fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            try:
+                raw = path.read_text(encoding="utf-8")
+                data = json.loads(raw)
+                other = int(data.get("pid", 0))
+            except (OSError, json.JSONDecodeError, TypeError, ValueError):
+                # Empty or unreadable is the in-progress O_EXCL→write window
+                # (or leftover corruption). Unlinking here is what lets a
+                # second process win while the first still holds the fd --
+                # measured: two live ACQUIRED outcomes with hold-until-stdin
+                # workers. Retry the read; never treat "no parse" as stale.
+                continue
+            if other == me:
+                # Idempotent re-entry: the same process re-asserting it
+                # still holds its own lock (e.g. a later reconcile tick).
+                # Not a race with itself -- overwrite in place.
+                path.write_text(_primary_lock_payload(me).decode("utf-8"), encoding="utf-8")
+                return True
+            if (
+                other > 0
+                and pid_is_alive(other)
+                and not _lock_names_a_reused_pid(data, other)
+            ):
+                return False
+            # Parsed record that is stale (dead, or a reused pid this
+            # record cannot vouch for): reclaim it and retry the exclusive
+            # create. Unreadable files never reach this branch.
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                return False
+            continue
+        except OSError:
             return False
-    path.write_text(
-        json.dumps({"pid": me, "at": time.time()}, indent=2) + "\n", encoding="utf-8"
-    )
-    return True
+        try:
+            os.write(fd, _primary_lock_payload(me))
+            return True
+        finally:
+            os.close(fd)
+    return False
 
 
 def read_primary_lock_pid(root: Path) -> int:
@@ -121,7 +210,7 @@ def read_primary_lock_pid(root: Path) -> int:
         other = int(data.get("pid", 0))
     except (OSError, json.JSONDecodeError, TypeError, ValueError):
         return 0
-    if other > 0 and pid_is_alive(other):
+    if other > 0 and pid_is_alive(other) and not _lock_names_a_reused_pid(data, other):
         return other
     return 0
 
@@ -459,6 +548,7 @@ def resident_tick(
     if status.process_start_time <= 0:
         status.process_start_time = ts
     status.GOVERNOR_PID = os.getpid()
+    status.GOVERNOR_PROCESS_START_IDENTITY = process_start_identity(status.GOVERNOR_PID)
     status.heartbeat_sequence += 1
     status.scheduler_tick_sequence += 1
     status.DETACHED_SCHEDULER_TICK_COUNT = status.scheduler_tick_sequence
@@ -582,6 +672,7 @@ def run_resident_loop(
     status.STARTED_AT = now
     status.process_start_time = now
     status.GOVERNOR_PID = os.getpid()
+    status.GOVERNOR_PROCESS_START_IDENTITY = process_start_identity(status.GOVERNOR_PID)
     status.SERVICE_INSTANCE_ID = str(uuid.uuid4())
     status.SELF_WAKE_DRIVER = "ACTIVE"
     status.RESIDENT_GOVERNOR = "YES"
