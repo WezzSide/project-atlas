@@ -46,6 +46,10 @@ class Server:
                 self.end_headers()
                 self.wfile.write(body)
 
+            def do_POST(self) -> None:
+                self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                self.do_GET()
+
             def log_message(self, *a: object) -> None:
                 pass
 
@@ -200,3 +204,111 @@ def test_artifact_download_redirect_model_unchanged(monkeypatch):
     assert seen["handlers"] == (dev_github_port._NoRedirect,)
     assert seen["api_auth"] == f"Bearer {TOKEN}"
     assert seen["blob_url"] == loc  # a bare URL string: no Authorization header attached
+
+
+# --- RESOLVE:P1-1 / P1-2: nothing reachable from the AdapterError holds a Location -----------
+
+
+def _chain(exc: BaseException) -> list[BaseException]:
+    out: list[BaseException] = []
+    todo: list[BaseException | None] = [exc]
+    while todo:
+        e = todo.pop()
+        if e is None or any(e is s for s in out):
+            continue
+        out.append(e)
+        todo += [e.__cause__, e.__context__]
+    return out
+
+
+def _assert_detached(exc: AdapterError, message: str, *secrets: str) -> None:
+    assert str(exc) == message
+    assert exc.__cause__ is None and exc.__context__ is None
+    for e in _chain(exc):
+        attrs = [str(e), repr(e), repr(vars(e))]
+        attrs += [str(getattr(e, a, "")) for a in ("headers", "url", "filename", "fp", "reason")]
+        for text in attrs:
+            for secret in (TOKEN, QUERY_SECRET, *secrets):
+                assert secret not in text
+
+
+@pytest.mark.parametrize(
+    ("loc", "message"),
+    [
+        # urllib lets ftp reach the handler, which refuses the other origin
+        (f"ftp://evil.invalid/x?sig={QUERY_SECRET}", "github GET /s refused cross-origin redirect"),
+        # urllib itself rejects file: with an HTTPError naming the Location
+        (f"file:///etc/passwd?sig={QUERY_SECRET}", "github GET /s -> 302"),
+    ],
+)
+def test_non_http_location_scheme_is_refused_detached(servers, loc, message):
+    api, _ = servers
+    api.routes["/repos/o/r/s"] = (302, {"Location": loc}, b"")
+    with pytest.raises(AdapterError) as ei:
+        _port()._request("GET", "/s")
+    _assert_detached(ei.value, message, loc)
+
+
+@pytest.mark.parametrize(
+    "loc",
+    [f"http://[evil.invalid/x?sig={QUERY_SECRET}", f"http://[::1x]/x?sig={QUERY_SECRET}"],
+)
+def test_malformed_bracketed_location_is_refused_detached(servers, loc):
+    api, _ = servers
+    api.routes["/repos/o/r/m"] = (302, {"Location": loc}, b"")
+    with pytest.raises(AdapterError) as ei:
+        _port()._request("GET", "/m")
+    _assert_detached(ei.value, "github GET /m rejected invalid URL", loc)
+
+
+def test_same_origin_redirect_loop_limit_is_detached(servers):
+    api, _ = servers
+    loop = f"/repos/o/r/loop?sig={QUERY_SECRET}"
+    api.routes["/repos/o/r/loop"] = (302, {"Location": loop}, b"")
+    api.routes[loop] = (302, {"Location": loop}, b"")
+    with pytest.raises(AdapterError) as ei:
+        _port()._request("GET", "/loop")
+    _assert_detached(ei.value, "github GET /loop -> 302", loop)
+
+
+@pytest.mark.parametrize("code", (307, 308))
+def test_post_307_308_refusal_is_detached(servers, code):
+    api, other = servers
+    loc = f"/repos/o/r/moved?sig={QUERY_SECRET}"
+    api.routes["/repos/o/r/p"] = (code, {"Location": loc}, b"")
+    with pytest.raises(AdapterError) as ei:
+        _port()._request("POST", "/p", {"a": 1})
+    _assert_detached(ei.value, f"github POST /p -> {code}", loc)
+    assert other.seen == []
+
+
+@pytest.mark.parametrize("final", (403, 500))
+def test_same_origin_redirect_then_error_is_detached(servers, final):
+    api, _ = servers
+    loc = f"/repos/o/r/next?sig={QUERY_SECRET}"
+    api.routes["/repos/o/r/first"] = (302, {"Location": loc}, b"")
+    api.routes[loc] = (final, {}, b"")
+    with pytest.raises(AdapterError) as ei:
+        _port()._request("GET", "/first")
+    _assert_detached(ei.value, f"github GET /first -> {final}", loc)
+
+
+def test_same_origin_redirect_then_404_still_maps(servers):
+    api, _ = servers
+    api.routes["/repos/o/r/gone"] = (302, {"Location": "/repos/o/r/nowhere"}, b"")
+    assert _port()._request("GET", "/gone") == (404, None)
+
+
+def test_plain_http_error_keeps_chained_cause(servers):
+    api, _ = servers
+    api.routes["/repos/o/r/err"] = (502, {}, b"")
+    with pytest.raises(AdapterError, match=r"^github GET /err -> 502$") as ei:
+        _port()._request("GET", "/err")
+    assert isinstance(ei.value.__cause__, urllib.error.HTTPError)
+
+
+def test_json_errors_unchanged(servers):
+    api, _ = servers
+    api.routes["/repos/o/r/bad"] = (200, {}, b"not json")
+    with pytest.raises(json.JSONDecodeError):
+        _port()._request("GET", "/bad")
