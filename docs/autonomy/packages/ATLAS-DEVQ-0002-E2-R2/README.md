@@ -27,16 +27,7 @@ Preparation is not authorization. This branch is storage for exact, hashable evi
 
 ## The finding id is the repair instruction
 
-A repair cannot change the statement, so the only channel that tells the executor what to fix is the `RESOLVE:<finding_id>` contract entry. The finding id therefore states the defect, the required behaviour and the framing for a repair on top of the existing result. It contains no token bytes and no Location data.
-
-The inherited statement still describes the original E2 defect and says "new file" and "sealed base"; that wording is fixed by the parent's sealed `instructions_sha256` and cannot be edited. The RESOLVE entry tells the executor to extend the existing test file and that new tests must fail on `aee2026b`.
-
-## Versions
-
-| Version | package_sha256 | State |
-|---|---|---|
-| v1 (commit `8298beb9`) | `ef1d8bd6accbb10e4d0d5afc3341e588fcfc948ba95a7443afe2d58371d7bc8a` (work seal `97ca15622913f4234e61a4b9aaef3586bdf0d7ad03d82323beb4328393cac098`) | **Superseded, never dispatched.** Independent package review: P0 0 / P1 1 / P2 7. The P1: the RESOLVE text prescribed `from None`, which leaves the Location reachable through `__context__` |
-| **v2 (current)** | **`ef1d8bd6accbb10e4d0d5afc3341e588fcfc948ba95a7443afe2d58371d7bc8a`** (work seal `97ca15622913f4234e61a4b9aaef3586bdf0d7ad03d82323beb4328393cac098`) | Finding text reworded (raise after leaving the except block; extend, do not rewrite, the test file; keep unrelated diagnostics). Review: see `REVIEW.md` |
+A repair cannot change the statement, so the only channel that tells the executor what to fix is the `RESOLVE:<finding_id>` contract entry. The finding id therefore states the defect and the required behaviour in full (`P1-1 redirect failures that urllib rejects before the redirect handler runs …`). It contains no token bytes and no Location data.
 
 ## Dispatch notes (for the owner; an agent does not dispatch)
 
