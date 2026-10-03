@@ -778,3 +778,71 @@ def test_h_invalid_attempt_kind_with_inherited_digest_reports_the_kind(repair: A
     for kind in ("Repair", "repair ", "retry", ""):
         assert _reason({**spec, "attempt_kind": kind}) == "ATTEMPT_KIND_INVALID"
     assert _reason({**spec, "attempt_kind": None}) == "SPEC_TYPE"
+
+
+# -- I. the sealed base revision is carried as a workflow input (repair only) ---------------
+
+
+def _rehash(pkg: dict[str, Any]) -> None:
+    from project_atlas.orchestration.autonomy.dev_fabric_adapter import DispatchPayload
+
+    pkg["workflow_inputs_sha256"] = DispatchPayload(
+        workflow=pkg["workflow"], ref=pkg["workflow_ref"], inputs=pkg["workflow_inputs"]
+    ).sha256()
+
+
+def test_i_repair_package_emits_the_sealed_base_revision_input(repair: Any) -> None:
+    from project_atlas.orchestration.autonomy.dev_fabric_adapter import DispatchPayload
+
+    pkg = build_package(load_spec(json.dumps(repair[2])))
+    inputs = pkg["workflow_inputs"]
+    assert set(inputs) == {"task_prompt", "base_branch", "agent_type", "base_revision"}
+    assert inputs["base_revision"] == pkg["base_revision"] == RESULT_REVISION
+    assert inputs["base_revision"] == pkg["checkout"]["required_revision"]
+    # the recorded digest covers the new input
+    recorded = DispatchPayload(workflow=pkg["workflow"], ref=pkg["workflow_ref"], inputs=inputs)
+    assert pkg["workflow_inputs_sha256"] == recorded.sha256()
+    without = {k: v for k, v in inputs.items() if k != "base_revision"}
+    unbound = DispatchPayload(workflow=pkg["workflow"], ref=pkg["workflow_ref"], inputs=without)
+    assert pkg["workflow_inputs_sha256"] != unbound.sha256()
+    assert "workflow asserts" in pkg["checkout"]["rule"]
+    assert "workflow_inputs.base_revision" in pkg["checkout"]["rule"]
+    assert "workflow_inputs.base_revision" in pkg["abort_conditions"][1]
+    assert verify_checkout_ref(pkg, RESULT_REVISION) is None
+
+
+def test_i_implementation_package_carries_no_base_revision_input() -> None:
+    pkg = build_package(load_spec(json.dumps(PARENT_SPEC)))
+    assert set(pkg["workflow_inputs"]) == {"task_prompt", "base_branch", "agent_type"}
+    assert len(pkg["abort_conditions"]) == 5
+    assert not any("workflow_inputs.base_revision" in c for c in pkg["abort_conditions"])
+    assert verify_checkout_ref(pkg, MAIN_REVISION) is None
+
+
+@pytest.mark.parametrize(
+    "value",
+    [None, OTHER_REVISION, MAIN_REVISION, "", RESULT_REVISION[:12], RESULT_REVISION.upper()],
+    ids=["absent", "other", "main-rev", "empty", "short", "upper"],
+)
+def test_i_repair_without_matching_base_revision_input_is_refused(
+    repair: Any, value: str | None
+) -> None:
+    """Even consistently re-hashed: a repair must carry the sealed revision as an input."""
+    pkg = build_package(load_spec(json.dumps(repair[2])))
+    if value is None:
+        del pkg["workflow_inputs"]["base_revision"]
+    else:
+        pkg["workflow_inputs"]["base_revision"] = value
+    assert _verify_reason(pkg, RESULT_REVISION) == "CHECKOUT_PACKAGE_INVALID"  # stale digest
+    _rehash(pkg)
+    assert _verify_reason(pkg, RESULT_REVISION) == "CHECKOUT_PACKAGE_INVALID"
+
+
+def test_i_implementation_base_revision_input_if_present_must_be_the_sealed_base() -> None:
+    pkg = build_package(load_spec(json.dumps(PARENT_SPEC)))
+    pkg["workflow_inputs"]["base_revision"] = OTHER_REVISION
+    _rehash(pkg)
+    assert _verify_reason(pkg, MAIN_REVISION) == "CHECKOUT_PACKAGE_INVALID"
+    pkg["workflow_inputs"]["base_revision"] = MAIN_REVISION
+    _rehash(pkg)
+    assert verify_checkout_ref(pkg, MAIN_REVISION) is None
