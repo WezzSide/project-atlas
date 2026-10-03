@@ -30,6 +30,11 @@ on:
         required: true
         type: string
         default: "main"
+      base_revision:
+        description: "Optional sealed base revision (40 lowercase hex). When set, the run fails closed unless the checked-out HEAD equals it."
+        required: false
+        type: string
+        default: ""
       agent_type:
         description: "Agent backend."
         required: true
@@ -67,6 +72,36 @@ jobs:
         with:
           ref: ${{ inputs.base_branch }}
           fetch-depth: 0
+
+      # SEALED_BASE_ASSERT: base_branch is a movable name (a branch can be pushed
+      # between the dispatcher's pre-dispatch check and this checkout, and a
+      # same-named tag could shadow it). When the dispatcher supplies the sealed
+      # base revision, the checked-out commit itself must be exactly that
+      # revision, or the run stops here: before the toolchain steps, before the
+      # dedicated agent branch is created and before any agent execution. The
+      # value arrives via env (never interpolated into the script) and is
+      # shape-validated before use. An empty input (packages that do not declare
+      # a sealed revision) skips the assertion; nothing else changes.
+      - name: Assert checked-out HEAD is the sealed base_revision (fail closed)
+        env:
+          BASE_REVISION: ${{ inputs.base_revision }}
+        run: |
+          set -euo pipefail
+          export LC_ALL=C
+          if [ -z "${BASE_REVISION}" ]; then
+            echo "no sealed base_revision supplied; assertion not applicable"
+            exit 0
+          fi
+          case "${BASE_REVISION}" in
+            (*[!0-9a-f]*) echo "invalid base_revision" >&2; exit 2 ;;
+          esac
+          [ "${#BASE_REVISION}" -eq 40 ] || { echo "invalid base_revision" >&2; exit 2; }
+          head="$(git rev-parse HEAD)"
+          if [ "${head}" != "${BASE_REVISION}" ]; then
+            echo "checked-out HEAD ${head} is not the sealed base_revision ${BASE_REVISION}" >&2
+            exit 4
+          fi
+          echo "checked-out HEAD equals the sealed base_revision ${BASE_REVISION}"
 
       # EXECUTOR_PY312_BOOTSTRAP: Python >= 3.12 is a guarantee of the
       # digest-pinned worker image (infra/atlas-runner/Dockerfile), not a
