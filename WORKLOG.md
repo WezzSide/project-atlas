@@ -15526,3 +15526,43 @@ Not done / owner decisions:
 - Whether implementation packages should also emit `base_revision` (changes their bytes).
 - Ordering: the workflow change must be on the dispatch ref (`main`) before any package that
   carries `base_revision` is dispatched (GitHub rejects undeclared inputs).
+
+## 2026-10-03 — ATLAS-DEVQ-0002 (HARDEN-DEVLOOP-001) integrated and closed
+
+Documentation-only closure entry. No source code changed in this work package.
+
+Outcome: `GitHubRestPort._request` redirect hardening (no Authorization or Location data
+reachable from the raised `AdapterError` across redirects, owner "Option B" exposure standard)
+is on `main` at merge commit `341f94ca95ea35f1ce4eb3154155d388bd9273dc` (tree
+`4df673aff46b78a15e63250356c93672ceb4413f`) via integration PR #1059, merged by the owner.
+
+Lineage and attempt accounting (historical record, unchanged):
+- E1 = attempt 1/3; E2 = attempt 2/3 (salvaged candidate `aee2026b…`, PR #1050; independent
+  verification found a P1, so it became the repair base, not a carrier).
+- E2-R2 = attempt 3/3, executor run `37119599227`. The run is and stays RED: model completion
+  used 24 turns against the 20-turn envelope. The candidate was salvaged as
+  `1182d0e40b6e5206af36cde07ed09f88c14ddd48` (evidence PR #1058). No executor attempts remain.
+- The red executor envelope did not itself merge. The salvaged bytes were independently verified
+  (P0 0 / P1 0 / P2 7; P1-1 and P1-2 resolved), adopted by the owner as source patch only,
+  reconciled onto then-current main `4b04621f…` as `8b975e2cbd8bc4120e1c0e26c323367f9971fc4c`,
+  and merged through #1059.
+
+CI evidence (each run proves its own head only):
+- Candidate exact-head CI `37120070769` on `1182d0e4`: PASS.
+- Reconciliation exact-head CI `37128248393` on `8b975e2c`: PASS.
+- Post-merge main CI `37136880047` on `341f94ca` (event `push`): PASS — control-plane,
+  quality (ubuntu-latest, 3.12, full), quality (ubuntu-latest, 3.13, compat),
+  quality (windows-latest, 3.12, windows). No job was re-run.
+
+Closure actions: evidence PRs #1058 and #1050 closed unmerged, branches preserved. Canonical
+record: `docs/autonomy/packages/ATLAS-DEVQ-0002-E2-R2/EXECUTION-RECORD.md` on branch
+`devq/atlas-devq-0002-e2-r2-package` (commit `6ceffd1ae68a9f080d329cb8f76a44d4c6ab5d49`).
+
+Not done / deferred (retained, not repaired under this lineage):
+- Seven P2 notes: broad `except ValueError` mislabels a bad token / non-ASCII path as "rejected
+  invalid URL"; non-redirect errors carrying Content-Location/Link keep their cause (as before);
+  plain-dict header stub is case-sensitive; one test leaves an `HTTPError` unclosed; raw
+  `InvalidURL`/JSON errors still escape `_request` (as before); the redirects test file is slow;
+  `read_json_artifact` exposure is outside the sealed scope.
+- ftp test observation: the ftp parameter fails on the pre-repair base only via
+  `__context__ is None` (non-blocking test-semantics note).
