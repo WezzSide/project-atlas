@@ -5,7 +5,8 @@ Fresh sessions, separate from the preparer; read-only; nothing dispatched. Each 
 | Version | Commit | package_sha256 | Result |
 |---|---|---|---|
 | v1 | `8298beb9` | `ef1d8bd6accbb10e4d0d5afc3341e588fcfc948ba95a7443afe2d58371d7bc8a` | P0 0 / **P1 1** / P2 7. Integrity exact; the RESOLVE text prescribed `from None`, which leaves the Location reachable through `__context__`. **Superseded, never dispatched** |
-| **v2 (current)** | **`8703cf77`** | **`ba388db38537ba1f9b3012131f7bdf14e1be91fd9c261e97835b50081b9ee095`** | **P0 0 / P1 0 / P2 8** |
+| v2 | `8703cf77` | `ba388db38537ba1f9b3012131f7bdf14e1be91fd9c261e97835b50081b9ee095` | P0 0 / P1 0 / P2 8. Superseded by v3, never dispatched |
+| **v3 (current)** | this commit | **`3143db2f7ed71ec641bd6599a51cef3d65d63040f4b68f851b7d7386cf2ed758`** | Mechanical re-render after #1057. Not a new content review: spec, WorkItem (seal `a5c75996…f205`), records and task prompt (sha `5762c6f1…008c`) are byte-identical to v2, so the v2 content review carries to those bytes. The changed bytes (`workflow_inputs.base_revision`, `workflow_inputs_sha256` `123f7ea1f5c2c727ac82d9b36345446f5fd5fe6cf30fafab56a6e1c375cd2d85`, `checkout.rule`, one abort condition) were derived independently by the #1057 verifier (verdict on PR #1057: P0 0 / P1 0 / P2 4), who obtained this same `package_sha256` from the v2 spec with the same builder tree (`a8e1e094`) |
 
 ## v2 evidence (reviewer's own recomputation, builder on `main` `ac08248`)
 - E2 parent rebuilds to seal `ac1cc81f…bfff` and package `b8035f9b…62fe`, byte-identical.
@@ -21,6 +22,6 @@ Fresh sessions, separate from the preparer; read-only; nothing dispatched. Each 
 3. The unbalanced-bracket case has no visible leak on the base; a test fails on the base only if it asserts the error type or the absence of a chain.
 4. The inherited statement is stale relative to the repair base (pinned by the parent's `instructions_sha256`).
 5. Turn budget: about 10 turns minimum against a cap of 20; reviewer estimate 65–75% to finish inside it. Over the cap, the run is red and the candidate is salvage-only, with no attempt left.
-6. The workflow on `main` does not assert the checked-out revision and the source branch is unprotected. PR #1057 adds that assertion; if it merges first this package is re-rendered (work seal unchanged, package hash changes) and re-checked.
+6. Closed for v3 when dispatched exactly as recorded: #1057 is on `main` and v3 carries `base_revision`. The source branch is still unprotected; a moved branch now fails the run before the agent starts instead of running on the wrong revision. The assertion step has never run on a real runner.
 7. The verdict record was authored by the preparing session from the independent verdict on PR #1050; seals give integrity, not authentication.
 8. Commits `fdb177e7` and `40fcf512` carry v1 bytes under misleading messages. Bind review and dispatch to `8703cf77` / `ba388db3…`, never to the branch name.

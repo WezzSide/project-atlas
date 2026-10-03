@@ -13,9 +13,9 @@ Preparation is not authorization. This branch is storage for exact, hashable evi
 | Repair base | `aee2026b1d8bf7a1293a0f758bc43100b9bed720` (TREE `40cb45361fceb77b715d3e5245c48613e4e3d013`): the failed E2 result revision, per `materialize_repair` |
 | Repair source branch | `atlas/agent-37023482722-1`; resolved by `git ls-remote` to the repair base at preparation; `verify_checkout_ref` passed for that sha and refused main's sha, a short sha and an uppercase sha |
 | `work_seal` | `a5c75996bd6276cc3836f96daad6796dcdb3299400bc87b3186e390399f0f205` (= `expected_work_seal` = seal of the materialized repair WorkItem) |
-| `workflow_inputs_sha256` | `fc87f8f8e5126986f6c755f704704fb771d6da3d4817e1d9b69b3b8cb62e370a` |
-| `package_sha256` | `ba388db38537ba1f9b3012131f7bdf14e1be91fd9c261e97835b50081b9ee095` (sha256 of `ATLAS-DEVQ-0002-E2-R2.package.json`) |
-| Builder | `dev_package.py` on `main` `ac08248344a6f3e039513b7c21ca61234806b774` (blob `30669d81967b0604e7f4cb2f691f4bb51440f28d`, with #1055 repair support) |
+| `workflow_inputs_sha256` | `123f7ea1f5c2c727ac82d9b36345446f5fd5fe6cf30fafab56a6e1c375cd2d85` |
+| `package_sha256` | `3143db2f7ed71ec641bd6599a51cef3d65d63040f4b68f851b7d7386cf2ed758` (sha256 of `ATLAS-DEVQ-0002-E2-R2.package.json`) |
+| Builder | `dev_package.py` on `main` `495d5e8f8a69bbe4b31dc318ac3b1236ff014336` (blob `2b1104a412e92de3af43791206ff9e7f12e1b960`, with #1055 repair support and #1057 sealed-base input) |
 | Grant required | `ONE_WORKFLOW_DISPATCH_GRANT` (not issued) |
 
 ## How it was derived (all deterministic; see `MANIFEST.json`)
@@ -37,12 +37,13 @@ The inherited statement still describes the original E2 defect and says "new fil
 |---|---|---|
 | v1 (commit `8298beb9`) | `ef1d8bd6accbb10e4d0d5afc3341e588fcfc948ba95a7443afe2d58371d7bc8a` (work seal `97ca15622913f4234e61a4b9aaef3586bdf0d7ad03d82323beb4328393cac098`) | **Superseded, never dispatched.** Independent package review: P0 0 / P1 1 / P2 7. The P1: the RESOLVE text prescribed `from None`, which leaves the Location reachable through `__context__` |
 | commits `fdb177e7`, `40fcf512` | same bytes as v1 | **Preparation errors, never dispatched.** The re-seal step failed (entry over the 500-character cap) and these commits carried v1 bytes under a v2 label |
-| **v2 (current)** | **`ba388db38537ba1f9b3012131f7bdf14e1be91fd9c261e97835b50081b9ee095`** (work seal `a5c75996bd6276cc3836f96daad6796dcdb3299400bc87b3186e390399f0f205`) | Finding text reworded: raise after leaving the except block; extend, do not rewrite, the test file; keep unrelated diagnostics. Independent review: P0 0 / P1 0 / P2 8, see `REVIEW.md` |
+| v2 (commit `8703cf77`) | `ba388db38537ba1f9b3012131f7bdf14e1be91fd9c261e97835b50081b9ee095` (work seal `a5c75996bd6276cc3836f96daad6796dcdb3299400bc87b3186e390399f0f205`) | Finding text reworded: raise after leaving the except block; extend, do not rewrite, the test file; keep unrelated diagnostics. Independent review: P0 0 / P1 0 / P2 8, see `REVIEW.md`. **Superseded by v3, never dispatched** |
+| **v3 (current)** | **`3143db2f7ed71ec641bd6599a51cef3d65d63040f4b68f851b7d7386cf2ed758`** (work seal unchanged: `a5c75996bd6276cc3836f96daad6796dcdb3299400bc87b3186e390399f0f205`) | Mechanical re-render with the builder on `main` `495d5e8f` after #1057 merged: adds `workflow_inputs.base_revision`, so the execute workflow itself asserts the checked-out HEAD. Spec, WorkItem, records and task prompt are byte-identical to v2. This exact hash was derived independently by the #1057 verifier from the v2 spec |
 
 ## Dispatch notes (for the owner; an agent does not dispatch)
 
 - Use the package's own `workflow_inputs` for `atlas-agent-execute.yml` on `main`. `base_branch` is `atlas/agent-37023482722-1`, not `main`.
-- **Immediately before dispatch** resolve `refs/heads/atlas/agent-37023482722-1` and run `dev_package.verify_checkout_ref(package, resolved_sha)`. The workflow itself does not assert the checked-out revision; if that branch has moved, do not dispatch.
+- **Immediately before dispatch** resolve `refs/heads/atlas/agent-37023482722-1` and run `dev_package.verify_checkout_ref(package, resolved_sha)`; if that branch has moved, do not dispatch. Dispatch `workflow_inputs` exactly as recorded, including `base_revision`: the workflow on `main` then refuses to run the agent unless the checked-out HEAD equals `aee2026b…`. Dropping that input silently disables the assertion.
 - Compare the package `work_seal` with `repair_work_item.json`'s `seal` and with `MANIFEST.json`. The seal binding is integrity, not authentication.
 - Turn budget: the workflow caps the run at 20 turns (E1 used 25, E2 used 21). The repair is smaller than E2, but if the envelope trips again #1043 preserves the candidate and the run stays red; that candidate would then need exact-head CI, independent verification and an owner adoption decision. No further bounded attempt exists.
 - Do not move, rebase or delete `atlas/agent-37023482722-1` or PR #1050.
