@@ -56,6 +56,28 @@ root cause before admitting new work at scale.
   exponential backoff is a candidate follow-up if outage noise becomes real
   (measure first).
 
+## Transport grant expired or invalid (queued jobs stay queued)
+
+Symptom: GitHub jobs stay `queued`, `health` exits 0, no worker starts.
+
+1. `atlas-runner health` — read `checks.transport_admission.code` and
+   `advisories`. `atlas-runner status` shows the same on one line.
+2. `journalctl -u atlas-runner-controller.service | grep transport_admission`
+   — when the state changed and the reason code.
+3. Interpret the code with the table in `docs/OPERATIONS.md` ("Transport
+   admission"). `TRANSPORT_GRANT_REGISTRY_UNAVAILABLE` is a state-database
+   problem, not an authority problem: fix the database access first.
+   `TRANSPORT_GRANT_EXPIRING` is a warning; jobs are still admitted.
+
+The controller stays fail closed in every one of these states, and a refused
+job leaves no task or execution row: once a valid grant is in force the same
+queued job is admitted with no new dispatch. Restoring admission (a grant
+under a new id, the `transport_grant_id` config value, the restart that makes
+the controller read it) is an **owner / operations authority decision**, not a
+recovery step an agent or this runbook may take on its own; there is no
+automatic renewal. Background and open decisions:
+`docs/global/baseline/2026-10-03-RUNNER-AUTHORITY-INCIDENT.md`.
+
 ## Partial release / mixed versions
 
 - Activation is atomic: `deploy-release.sh` swaps the `current` symlink in

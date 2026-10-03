@@ -19,33 +19,69 @@ import threading
 import time
 from pathlib import Path
 
+# Stable, non-secret refusal discriminators (F-RUNNER-1, incident record
+# docs/global/baseline/2026-10-03-RUNNER-AUTHORITY-INCIDENT.md section 4.1). Each
+# GrantError carries one as ``.code``, set at the raise site. Callers must read
+# ``exc.code`` and never parse the exception message: "revoked" and "exhausted"
+# share an exception class and differ only by this discriminator.
+GRANT_MISSING = "GRANT_MISSING"
+GRANT_UNKNOWN = "GRANT_UNKNOWN"
+GRANT_REVOKED = "GRANT_REVOKED"
+GRANT_EXPIRED = "GRANT_EXPIRED"
+GRANT_EXHAUSTED = "GRANT_EXHAUSTED"
+GRANT_SCOPE_MISMATCH = "GRANT_SCOPE_MISMATCH"
+GRANT_CONFLICT = "GRANT_CONFLICT"
+GRANT_INVALID = "GRANT_INVALID"  # unclassified GrantError (defensive default)
+
 
 class GrantError(Exception):
     """Base for all grant validation failures (fail closed)."""
+
+    default_code = GRANT_INVALID
+
+    def __init__(self, *args: object, code: str | None = None):
+        super().__init__(*args)
+        self.code = code or self.default_code
 
 
 class GrantMissingError(GrantError):
     """No grant id was supplied where one is required."""
 
+    default_code = GRANT_MISSING
+
 
 class GrantUnknownError(GrantError):
     """Grant id does not resolve to a registry record."""
+
+    default_code = GRANT_UNKNOWN
 
 
 class GrantExpiredError(GrantError):
     """Grant validity window has passed."""
 
+    default_code = GRANT_EXPIRED
+
 
 class GrantScopeError(GrantError):
     """task/repository/revision/executor mismatch with the grant."""
 
+    default_code = GRANT_SCOPE_MISMATCH
+
 
 class GrantConsumedError(GrantError):
-    """Grant execution budget is exhausted (one-shot semantics by default)."""
+    """Grant execution budget is exhausted (one-shot semantics by default).
+
+    Also raised for a non-active (revoked) status; the two are told apart by
+    ``code`` (GRANT_REVOKED vs GRANT_EXHAUSTED), never by message text.
+    """
+
+    default_code = GRANT_EXHAUSTED
 
 
 class GrantConflictError(GrantError):
     """An immutable grant id was reissued with different content."""
+
+    default_code = GRANT_CONFLICT
 
 
 _SCHEMA = """
@@ -156,7 +192,9 @@ class GrantStore:
         """Fail-closed validation. Returns the grant row on success."""
         now = time.time() if now is None else now
         if not grant_id:
-            raise GrantMissingError("authority_reference is required for Atlas tasks")
+            raise GrantMissingError(
+                "authority_reference is required for Atlas tasks", code=GRANT_MISSING
+            )
         row = self.get(grant_id)
         return self.validate_row(
             row,
@@ -188,16 +226,22 @@ class GrantStore:
         """Validate a locked grant row within the admission transaction."""
         now = time.time() if now is None else now
         if not grant_id:
-            raise GrantMissingError("authority_reference is required for Atlas tasks")
+            raise GrantMissingError(
+                "authority_reference is required for Atlas tasks", code=GRANT_MISSING
+            )
         if row is None:
-            raise GrantUnknownError(f"unknown grant {grant_id!r}")
+            raise GrantUnknownError(f"unknown grant {grant_id!r}", code=GRANT_UNKNOWN)
         row = dict(row)
         if row["status"] != "active":
-            raise GrantConsumedError(f"grant {grant_id!r} status={row['status']}")
+            raise GrantConsumedError(
+                f"grant {grant_id!r} status={row['status']}", code=GRANT_REVOKED
+            )
         if row["expires_at"] is not None and now >= row["expires_at"]:
-            raise GrantExpiredError(f"grant {grant_id!r} expired")
+            raise GrantExpiredError(f"grant {grant_id!r} expired", code=GRANT_EXPIRED)
         if row["consumed"] >= row["budget"]:
-            raise GrantConsumedError(f"grant {grant_id!r} budget exhausted")
+            raise GrantConsumedError(
+                f"grant {grant_id!r} budget exhausted", code=GRANT_EXHAUSTED
+            )
         for column, value in (
             ("repository", repository),
             ("base_revision", base_revision),
@@ -208,7 +252,8 @@ class GrantStore:
             mismatch = bound is not None and bound != value
             if missing_required or mismatch:
                 raise GrantScopeError(
-                    f"grant {grant_id!r} binds {column}={bound!r}, task has {value!r}"
+                    f"grant {grant_id!r} binds {column}={bound!r}, task has {value!r}",
+                    code=GRANT_SCOPE_MISMATCH,
                 )
         scope = json.loads(row["scope_json"])
         scope_task = scope.get("task_id")
@@ -216,7 +261,8 @@ class GrantStore:
             scope_task is not None and scope_task != task_id
         ):
             raise GrantScopeError(
-                f"grant {grant_id!r} scoped to task {scope_task!r}, not {task_id!r}"
+                f"grant {grant_id!r} scoped to task {scope_task!r}, not {task_id!r}",
+                code=GRANT_SCOPE_MISMATCH,
             )
         for field, value in (
             ("action_type", action_type),
@@ -227,7 +273,8 @@ class GrantStore:
                 bound is not None and bound != value
             ):
                 raise GrantScopeError(
-                    f"grant {grant_id!r} scope mismatch for {field}"
+                    f"grant {grant_id!r} scope mismatch for {field}",
+                    code=GRANT_SCOPE_MISMATCH,
                 )
         return row
 
@@ -241,7 +288,9 @@ class GrantStore:
                 (now, grant_id),
             )
             if cur.rowcount == 0:
-                raise GrantConsumedError(f"grant {grant_id!r} budget exhausted")
+                raise GrantConsumedError(
+                    f"grant {grant_id!r} budget exhausted", code=GRANT_EXHAUSTED
+                )
 
     def revoke(self, grant_id: str, *, now: float | None = None) -> None:
         now = time.time() if now is None else now
@@ -250,3 +299,31 @@ class GrantStore:
                 "UPDATE grants SET status = 'revoked', updated_at = ? WHERE grant_id = ?",
                 (now, grant_id),
             )
+
+
+class ReadOnlyGrantReader:
+    """Read-only lens over the grant registry for `health` / `status`.
+
+    Opens the SQLite file with ``mode=ro``: it never creates the database, the
+    table or a row, and never changes the journal mode. It exposes only
+    ``get``, so it can validate (via ``GrantStore.validate_row``) but can never
+    issue, consume or revoke. OBSERVABILITY != AUTHORITY.
+    """
+
+    def __init__(self, db_path: str | Path):
+        from urllib.parse import quote
+
+        self.db_path = Path(db_path)
+        self._conn = sqlite3.connect(
+            f"file:{quote(str(self.db_path))}?mode=ro", uri=True, timeout=5
+        )
+        self._conn.row_factory = sqlite3.Row
+
+    def close(self) -> None:
+        self._conn.close()
+
+    def get(self, grant_id: str) -> dict | None:
+        row = self._conn.execute(
+            "SELECT * FROM grants WHERE grant_id = ?", (grant_id,)
+        ).fetchone()
+        return dict(row) if row else None

@@ -4,6 +4,15 @@ Contract: `health` prints a JSON report {status, checks} and exits
 0 (healthy) / 1 (degraded) / 2 (blocked). HEALTH != VERIFIED: this command
 never executes an agent job; it is an observability lens over host + state +
 docker + GitHub reachability only.
+
+`transport_admission` (F-RUNNER-1 / F-RUNNER-4) is an INFORMATIONAL check: it
+is reported in `checks` and summarised in the top-level `advisories` list, but
+it is excluded from the verdict, so it can never change `status` or the exit
+code. Reason: scripts/deploy-release.sh rolls a release back on ANY non-zero
+health exit, and the trusted deploy workflow fails its post-deploy step the
+same way; an expired transport grant must not be able to roll back or fail a
+deploy that is unrelated to it. Whether transport state should affect the exit
+code is an explicit owner decision (see docs/OPERATIONS.md).
 """
 
 from __future__ import annotations
@@ -15,12 +24,64 @@ from pathlib import Path
 
 from controller import CONFIG_SCHEMA_VERSION, CONTROLLER_VERSION
 from controller.config import ConfigError, ControllerConfig, parse_config
-from controller.controller import free_disk_mb, free_memory_mb
+from controller.controller import (
+    TRANSPORT_GRANT_OK,
+    free_disk_mb,
+    free_memory_mb,
+    transport_admission_state,
+)
 from controller.dockerctl import DockerCtl
 from controller.github import GitHubClient
 from controller.state import StateStore
 
 HEARTBEAT_STALE_SECONDS = 120.0
+
+# Checks reported for the operator but never counted in the verdict/exit code.
+INFORMATIONAL_CHECKS = frozenset({"transport_admission"})
+
+
+def transport_admission_check(state: dict) -> dict:
+    """Render the pure transport state as a health check entry.
+
+    ok: True only for TRANSPORT_GRANT_OK; None when queued transport is
+    disabled by configuration (not an error); False otherwise, including the
+    `unknown` state (registry unreadable), which must never render as OK.
+    """
+    ok: bool | None = (
+        None if state["state"] == "disabled" else state["code"] == TRANSPORT_GRANT_OK
+    )
+    detail = f"state={state['state']} code={state['code']}"
+    if state["grant_id"]:
+        detail += f" grant_id={state['grant_id']}"
+    if state["expires_at"]:
+        detail += f" expires_at={state['expires_at']}"
+    elif state["code"] == TRANSPORT_GRANT_OK:
+        detail += " expires_at=none"
+    if state["warning"]:
+        detail += f" warning={state['warning']} expires_in_seconds={state['expires_in_seconds']}"
+    return {
+        "ok": ok,
+        "informational": True,
+        "detail": detail,
+        "state": state["state"],
+        "code": state["code"],
+        "enabled": state["enabled"],
+        "grant_id": state["grant_id"],
+        "expires_at": state["expires_at"],
+        "expires_in_seconds": state["expires_in_seconds"],
+        "warning": state["warning"],
+    }
+
+
+def transport_advisories(state: dict) -> list[str]:
+    """Non-secret advisory codes for the top-level `advisories` list."""
+    if state["state"] == "disabled":
+        return []
+    if state["code"] != TRANSPORT_GRANT_OK:
+        return [f"transport_admission:{state['code']}"]
+    if state["warning"]:
+        return [f"transport_admission:{state['warning']}"]
+    return []
 
 
 def run_health(
@@ -31,6 +92,7 @@ def run_health(
     github: GitHubClient | None,
     config_text: str | None = None,
     now: float | None = None,
+    grants=None,
 ) -> tuple[dict, int]:
     """Compute the health report. Returns (report, exit_code)."""
     now = time.time() if now is None else now
@@ -143,7 +205,7 @@ def run_health(
             github_ok, github_detail = False, type(exc).__name__
     checks["github_api"] = {"ok": github_ok, "detail": github_detail}
 
-    # -- verdict -----------------------------------------------------------------------
+    # -- verdict (unchanged inputs: informational checks are added afterwards) ---------
     hard_failures = [
         name
         for name, result in checks.items()
@@ -159,11 +221,16 @@ def run_health(
         ]
         status = "degraded" if degraded else "healthy"
         exit_code = 1 if degraded else 0
+    # -- transport admission (informational; computed after the verdict so it
+    #    cannot influence status or exit code by construction) -------------------
+    transport = transport_admission_state(config, grants, now=now)
+    checks["transport_admission"] = transport_admission_check(transport)
     report = {
         "status": status,
         "controller_version": CONTROLLER_VERSION,
         "config_schema_version": CONFIG_SCHEMA_VERSION,
         "checks": checks,
+        "advisories": transport_advisories(transport),
     }
     return report, exit_code
 

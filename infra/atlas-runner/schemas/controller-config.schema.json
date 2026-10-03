@@ -156,6 +156,12 @@
       "type": "boolean",
       "default": false,
       "description": "Explicit production enablement of the GitHub queued transport path. Fail-closed default; requires transport_grant_id to resolve to a valid grant."
+    },
+    "transport_grant_warn_seconds": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 86400,
+      "description": "Observability only (F-RUNNER-4): while the transport grant is valid but expires within this many seconds, health/status and the journal carry a TRANSPORT_GRANT_EXPIRING warning. Never changes admission. 0 disables the warning."
     }
   }
 }
