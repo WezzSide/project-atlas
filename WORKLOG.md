@@ -15422,3 +15422,53 @@ Open follow-ups (not implemented; owner-reviewed surfaces):
   the workflow itself.
 - A chained repair whose verdict repeats an earlier finding id yields a duplicate `RESOLVE:`
   entry, which the builder's `LIST_DUPLICATE` rule refuses.
+
+## 2026-10-03 — DEVQ execute workflow: in-workflow sealed-base assertion (trust surface, owner review)
+
+Branch `feat/devq-workflow-sealed-base-assert`, based on main
+`ac08248344a6f3e039513b7c21ca61234806b774`. Closes the open follow-up recorded above
+("`atlas-agent-execute.yml` does not assert the checked-out sha equals the sealed base
+revision"), confirmed by two independent reviews of #1055. Additive, fail-closed only: no
+existing gate, permission, classifier or validation is changed.
+
+Workflow (`.github/workflows/atlas-agent-execute.yml`):
+- New OPTIONAL `workflow_dispatch` input `base_revision` (string, default empty).
+- New step "Assert checked-out HEAD is the sealed base_revision (fail closed)", immediately
+  after `actions/checkout` and before the toolchain, venv, agent-branch and agent steps. Input
+  arrives via `env:` only. Empty => no-op (behaviour as before). Otherwise it must be exactly 40
+  lowercase hex (`exit 2`) and equal `git rev-parse HEAD` (`exit 4`). `LC_ALL=C` so the bracket
+  range is not locale-collated.
+- `permissions:`, checkout step, turn cap, secrets, jobs and all other steps untouched.
+
+Builder (`src/project_atlas/orchestration/autonomy/dev_package.py` only; no floor module
+edited -- `build_dispatch_payload` is called unchanged and its result is re-wrapped):
+- Repair packages emit `workflow_inputs.base_revision = <sealed base_revision>`; the
+  `checkout.rule` prose and one added `abort_conditions` entry say the workflow asserts it.
+  Repair package bytes therefore change (`workflow_inputs`, `workflow_inputs_sha256`,
+  `checkout.rule`, `abort_conditions`); `work_seal` and `provenance.spec_sha256` do not.
+- Implementation packages are byte-identical (pinned golden hashes in
+  `tests/unit/test_orchestration_dev_package_repair.py` pass unchanged).
+- `verify_checkout_ref` additionally requires, for repair packages, that
+  `workflow_inputs.base_revision` is present and equals the sealed base revision; for any
+  package, the input, if present, must equal it (`CHECKOUT_PACKAGE_INVALID`).
+
+Tests: new `tests/unit/test_executor_sealed_base_assert.py` (workflow contract pins plus the
+step's script executed against a temporary git repository); section I added to
+`tests/unit/test_orchestration_dev_package_repair.py`.
+
+Commands and results:
+- `python -m pytest tests/unit -k "orchestration_dev or dev_package or dev_contracts or
+  dev_first_run or dev_fabric or executor_envelope or agent_execute or workflow" -q --no-cov
+  -o addopts=""`: 713 passed, 5700 deselected.
+- The ten test files that read `atlas-agent-execute.yml`: 508 passed.
+- `ruff check src tests`, `ruff format --check` on changed files, `mypy src`: clean.
+- Workflow parses with `yaml.safe_load`; `actionlint` is not installed here: NOT_RUN.
+- Nothing was dispatched, pushed or run on a runner: the step is NOT live-validated.
+
+Not done / owner decisions:
+- The live dispatcher (`dev_fabric_adapter.FabricAdapter.dispatch`, floor module) builds its
+  own inputs via `build_dispatch_payload` and does not send `base_revision`; runs dispatched
+  through it are not protected by the assertion until that module is changed.
+- Whether implementation packages should also emit `base_revision` (changes their bytes).
+- Ordering: the workflow change must be on the dispatch ref (`main`) before any package that
+  carries `base_revision` is dispatched (GitHub rejects undeclared inputs).

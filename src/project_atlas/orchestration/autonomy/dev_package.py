@@ -16,7 +16,9 @@ Properties:
     match this spec's statement and commands, so a repair can never change what runs). A repair
     never checks out ``main``: it names the previous result branch explicitly, and
     ``verify_checkout_ref`` (pure; the caller supplies the resolved sha) refuses unless that
-    branch resolves to exactly the sealed ``base_revision``.
+    branch resolves to exactly the sealed ``base_revision``. Because a branch can move after
+    that check, a repair package also carries ``workflow_inputs.base_revision``: the execute
+    workflow asserts its checked-out HEAD equals it and fails before the agent runs otherwise.
   * Fail-closed: every rule violation raises ``PackageSpecError`` with a stable ``reason`` code.
   * Acceptance commands must be plain, read-only ``pytest``/``ruff``/``mypy`` checks (the
     executor's tool allowlist matches on the first token; ``python -m``/env prefixes/shell
@@ -79,6 +81,9 @@ __all__ = [
 
 BUILDER_ID = "dev_package/1"
 BASE_BRANCH = "main"
+# Optional atlas-agent-execute.yml input: when non-empty the workflow fails closed unless its
+# checked-out HEAD equals it. Emitted for repair packages only.
+BASE_REVISION_INPUT = "base_revision"
 INSTRUCTIONS_PREFIX = "instructions_sha256="
 
 AUTONOMY_PACKAGE = "src/project_atlas/orchestration/autonomy/"
@@ -840,9 +845,11 @@ def build_package(spec: PackageSpec) -> dict[str, Any]:
     ``provenance`` (both top-level additions; every shared key keeps its shape).
 
     A repair package additionally carries ``lineage_root``, ``parent_task_id``,
-    ``parent_execution_id`` and a ``checkout`` block, and its ``workflow_inputs.base_branch``
-    is the spec's explicit previous-result branch. Implementation packages are byte-identical
-    to what this builder produced before repair support.
+    ``parent_execution_id`` and a ``checkout`` block, its ``workflow_inputs.base_branch`` is
+    the spec's explicit previous-result branch, and ``workflow_inputs.base_revision`` is the
+    sealed base revision (the execute workflow asserts its checked-out HEAD equals it).
+    Implementation packages carry no ``base_revision`` input and are byte-identical to what
+    this builder produced before repair support.
     """
     w = build_work(spec)
     commands = spec.acceptance_commands
@@ -854,8 +861,30 @@ def build_package(spec: PackageSpec) -> dict[str, Any]:
         task_statement=effective_statement(spec),
         acceptance_commands=commands,
     )
+    if repair:
+        # Repair only: implementation inputs (and therefore implementation bytes) are unchanged.
+        payload = DispatchPayload(
+            workflow=payload.workflow,
+            ref=payload.ref,
+            inputs={**payload.inputs, BASE_REVISION_INPUT: w.base_revision},
+        )
     if len(payload.inputs["task_prompt"].encode()) > MAX_PROMPT_BYTES:
         raise _fail("PROMPT_TOO_LONG", f"assembled task_prompt exceeds {MAX_PROMPT_BYTES} bytes")
+    abort_conditions = [
+        f"{base_branch} is not at the sealed base revision before dispatch",
+        "run correlation ambiguous (correlation is serialised: one unbound dispatch at a time; "
+        "no foreign/manual dispatch of atlas-agent-execute during the run)",
+        "result branch moves after ingestion",
+        "result touches forbidden or out-of-scope paths",
+        "verifier verdict REJECTED/UNESTABLISHED repeatedly or attempt ceiling reached",
+    ]
+    if repair:
+        abort_conditions.insert(
+            1,
+            "the execute workflow's checked-out HEAD is not the sealed base revision (asserted "
+            f"in the workflow from workflow_inputs.{BASE_REVISION_INPUT}; the run fails before "
+            "the agent starts)",
+        )
     pkg: dict[str, Any] = {
         "package_version": 1,
         "task_id": w.task_id,
@@ -904,14 +933,7 @@ def build_package(spec: PackageSpec) -> dict[str, Any]:
             "max_attempts": w.max_attempts,
             "repair_base": "previous result branch",
         },
-        "abort_conditions": [
-            f"{base_branch} is not at the sealed base revision before dispatch",
-            "run correlation ambiguous (correlation is serialised: one unbound dispatch at a time; "
-            "no foreign/manual dispatch of atlas-agent-execute during the run)",
-            "result branch moves after ingestion",
-            "result touches forbidden or out-of-scope paths",
-            "verifier verdict REJECTED/UNESTABLISHED repeatedly or attempt ceiling reached",
-        ],
+        "abort_conditions": abort_conditions,
         "rollback": "delete the atlas/agent-* branch and close the draft evidence PR; nothing is "
         "merged and nothing touches main",
         "secrets": {
@@ -931,7 +953,10 @@ def build_package(spec: PackageSpec) -> dict[str, Any]:
             "base_branch": base_branch,
             "required_revision": w.base_revision,
             "rule": "before dispatch, resolve base_branch (e.g. git ls-remote) and pass the sha "
-            "to dev_package.verify_checkout_ref; any mismatch => refuse",
+            "to dev_package.verify_checkout_ref; any mismatch => refuse. Dispatch "
+            "workflow_inputs exactly as recorded: the execute workflow asserts its checked-out "
+            "HEAD equals "
+            f"workflow_inputs.{BASE_REVISION_INPUT} and fails closed before the agent runs",
         }
     return pkg
 
@@ -943,7 +968,11 @@ def verify_checkout_ref(package: Mapping[str, Any], resolved_sha: object) -> Non
     ``package["workflow_inputs"]["base_branch"]`` elsewhere and supplies the sha. A repair
     package must name a previous result branch (never ``main``) and an implementation package
     must name ``main``; the recorded workflow inputs must still hash to
-    ``workflow_inputs_sha256``. Raises ``PackageSpecError`` with a stable reason otherwise.
+    ``workflow_inputs_sha256``. A repair package must also carry
+    ``workflow_inputs.base_revision`` equal to the sealed base revision (the value the execute
+    workflow asserts against its checked-out HEAD); if an implementation package carries that
+    input at all it must likewise equal the sealed base revision. Raises ``PackageSpecError``
+    with a stable reason otherwise.
 
     This checks the package's INTERNAL consistency only. It does not authenticate the package:
     a forged but self-consistent document passes. The trust anchor is the reviewed
@@ -969,6 +998,11 @@ def verify_checkout_ref(package: Mapping[str, Any], resolved_sha: object) -> Non
         raise _fail("CHECKOUT_PACKAGE_INVALID", "workflow_inputs do not match their sha256")
     branch = inputs["base_branch"]
     _check_base_branch(branch)
+    if BASE_REVISION_INPUT in inputs and inputs[BASE_REVISION_INPUT] != required:
+        raise _fail(
+            "CHECKOUT_PACKAGE_INVALID",
+            f"workflow_inputs.{BASE_REVISION_INPUT} is not the sealed base revision",
+        )
     if kind == "repair":
         if branch == BASE_BRANCH:
             raise _fail(
@@ -984,6 +1018,7 @@ def verify_checkout_ref(package: Mapping[str, Any], resolved_sha: object) -> Non
             not isinstance(checkout, dict)
             or checkout.get("base_branch") != branch
             or checkout.get("required_revision") != required
+            or inputs.get(BASE_REVISION_INPUT) != required
             or not package.get("parent_task_id")
             or package.get("expected_work_seal") != package.get("work_seal")
         ):
