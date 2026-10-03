@@ -12,24 +12,15 @@ Owner decision, to be applied consistently when the final repair result is verif
 
 **Not exposure.** A caught urllib `HTTPError` that temporarily contains Location data does not constitute exposure if the final `AdapterError` is raised after that exception has been fully detached and the underlying exception is no longer reachable through the raised error or the traceback chain.
 
-## Open owner decision (not decided here)
+## Owner decision: OPTION B (2026-10-03)
 
-The two paragraphs above are the owner's words. What follows is the preparer's reading of a gap, flagged by the independent v3 package review; it is a question, not a ruling.
+For HARDEN-DEVLOOP-001, Location/token data is exposed when it remains reachable from the publicly raised `AdapterError` through: message; `__cause__`; `__context__`; traceback-visible chaining; **attributes of an exception reachable through `__cause__` / `__context__`**.
 
-On the repair base `aee2026b`, three **same-origin** cases keep an `HTTPError` chained to the raised `AdapterError` (`raise ... from exc`). The Location is not in its `str`, `repr` or formatted traceback, but it is held in attributes of the chained exception:
+These therefore count as exposure even when `str()`, `repr()` or the default rendered traceback does not print them: `AdapterError.__cause__.headers["Location"]`, `AdapterError.__cause__.url`, and equivalent Location-bearing state reachable via `__context__`.
 
-| Case | Where the Location sits |
-|---|---|
-| redirect loop limit (`-> 302`) | `__cause__.headers`, `__cause__.url` |
-| POST 307 (executed; 308 takes the same urllib path, not executed) | `__cause__.headers` |
-| redirect followed, then a 500 (executed; other error statuses not executed) | `__cause__.url` |
+"Keep 4xx/5xx unchanged" means preservation of the public/functional error contract (error class, status mapping, public message / observable API behaviour). It does not require retaining an underlying Location-bearing `HTTPError` object when retaining it violates the sealed redaction requirement. This is an interpretation of the existing sealed acceptance contract, not a new product requirement. The repair WorkItem, work seal, acceptance-contract bytes and package bytes are not changed on account of this decision.
 
-The sealed repair instruction (`RESOLVE:P1-1 …`) covers redirects that urllib rejects **before the handler runs** and says "Keep 4xx/5xx … unchanged". A result that follows it literally leaves these three cases as they are. The instruction cannot be changed without changing the repair WorkItem seal `a5c75996…f205`.
-
-The owner needs to say, before the result is verified, which of these holds:
-
-- **A.** Attribute-only reachability on a chained exception in these same-origin cases is outside final acceptance (exposure means message, repr, and what a rendered traceback shows; the chain itself may remain for 4xx/5xx and same-origin 3xx).
-- **B.** It is in scope. Then a literal-compliance result would fail final verification on these cases, with no bounded attempt left.
+**Attempt accounting (owner).** Attempt 3 is consumed when implementation-bearing model execution actually begins. Sealed-base assertion refusal, deterministic checkout/preflight refusal, runner provisioning failure, setup failure and provider/authentication failure before model invocation do not consume it when exact evidence proves no model request began. If the evidence cannot establish whether model invocation occurred, fail closed: treat attempt 3 as consumed. GitHub "re-run jobs" on a failed execution is not a retry mechanism.
 
 ## Required regressions (owner)
 
