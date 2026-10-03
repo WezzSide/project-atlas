@@ -12,7 +12,8 @@
     "new offline cross-origin redirect tests fail on the sealed base revision and pass on the result",
     "ruff and mypy clean on changed files",
     "instructions_sha256=9b690c132fba6330f8eda12602a401ce18773ef955d2f1043abda30a3ec50228",
-    "RESOLVE:P1-1 REPAIR: change only GitHubRestPort._request and EXTEND (do not rewrite) tests/unit/test_orchestration_dev_github_port_redirects.py. When urllib rejects a redirect before the handler runs (non-http Location scheme; malformed or invalid bracketed-host Location) raise AdapterError AFTER leaving the except block, so message, __cause__ and __context__ hold no Location URL or query. Keep 4xx/5xx, URLError, timeout and JSON errors unchanged. New tests must fail on aee2026b"
+    "RESOLVE:P1-1 REPAIR: change only GitHubRestPort._request and EXTEND (do not rewrite) tests/unit/test_orchestration_dev_github_port_redirects.py. When urllib rejects a redirect before the handler runs (non-http Location scheme; malformed or invalid bracketed-host Location) raise AdapterError AFTER leaving the except block, so message, __cause__ and __context__ hold no Location URL or query. Keep URLError, timeout and JSON errors unchanged. New tests must fail on aee2026b",
+    "RESOLVE:P1-2 DETACH: nothing reachable from the raised AdapterError via __cause__ or __context__ may hold a Location URL or query in any attribute (headers, url, filename, fp). If an HTTPError has a Location header or its url is not the request URL, raise AdapterError with the same '-> <status>' message AFTER leaving the except block, no cause/context: redirect loop limit, POST 307/308, same-origin redirect then 4xx/5xx. Other HTTPErrors keep 'from exc'. Tests walk the chain and fail on aee2026b"
   ],
   "allowed_paths": [
     "src/project_atlas/orchestration/autonomy/dev_github_port.py",
@@ -28,7 +29,7 @@
   "expected_outputs": [
     "dedicated atlas/agent-* branch with exact HEAD/TREE"
   ],
-  "expected_work_seal": "a5c75996bd6276cc3836f96daad6796dcdb3299400bc87b3186e390399f0f205",
+  "expected_work_seal": "04da4ab26b13c2fdda5e0fbeb54ca74987dc4a6114190276115e505720e76b92",
   "forbidden_paths": [
     ".git/",
     ".github/",

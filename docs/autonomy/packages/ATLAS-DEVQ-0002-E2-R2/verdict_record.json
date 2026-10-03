@@ -3,8 +3,17 @@
   "findings": [
     {
       "category": "DEFECT",
-      "finding_id": "P1-1 REPAIR: change only GitHubRestPort._request and EXTEND (do not rewrite) tests/unit/test_orchestration_dev_github_port_redirects.py. When urllib rejects a redirect before the handler runs (non-http Location scheme; malformed or invalid bracketed-host Location) raise AdapterError AFTER leaving the except block, so message, __cause__ and __context__ hold no Location URL or query. Keep 4xx/5xx, URLError, timeout and JSON errors unchanged. New tests must fail on aee2026b",
-      "message": "PR #1050 IV verdict P0=0 P1=1 P2=5 on aee2026b; owner confirmed P1 on 2026-10-03 against the sealed acceptance entry 'errors never expose token bytes, the Location URL or Location query data'.",
+      "finding_id": "P1-1 REPAIR: change only GitHubRestPort._request and EXTEND (do not rewrite) tests/unit/test_orchestration_dev_github_port_redirects.py. When urllib rejects a redirect before the handler runs (non-http Location scheme; malformed or invalid bracketed-host Location) raise AdapterError AFTER leaving the except block, so message, __cause__ and __context__ hold no Location URL or query. Keep URLError, timeout and JSON errors unchanged. New tests must fail on aee2026b",
+      "message": "PR #1050 IV verdict on aee2026b; owner confirmed P1 and Option B (2026-10-03): Location data reachable through attributes of an exception chained via __cause__/__context__ counts as exposure.",
+      "paths": [
+        "src/project_atlas/orchestration/autonomy/dev_github_port.py",
+        "tests/unit/test_orchestration_dev_github_port_redirects.py"
+      ]
+    },
+    {
+      "category": "DEFECT",
+      "finding_id": "P1-2 DETACH: nothing reachable from the raised AdapterError via __cause__ or __context__ may hold a Location URL or query in any attribute (headers, url, filename, fp). If an HTTPError has a Location header or its url is not the request URL, raise AdapterError with the same '-> <status>' message AFTER leaving the except block, no cause/context: redirect loop limit, POST 307/308, same-origin redirect then 4xx/5xx. Other HTTPErrors keep 'from exc'. Tests walk the chain and fail on aee2026b",
+      "message": "PR #1050 IV verdict on aee2026b; owner confirmed P1 and Option B (2026-10-03): Location data reachable through attributes of an exception chained via __cause__/__context__ counts as exposure.",
       "paths": [
         "src/project_atlas/orchestration/autonomy/dev_github_port.py",
         "tests/unit/test_orchestration_dev_github_port_redirects.py"
@@ -14,7 +23,7 @@
   "request_seal": "ec9a2937299135490ee441caba344977b15a4b20f386d0bd9af78df394687894",
   "result_revision": "aee2026b1d8bf7a1293a0f758bc43100b9bed720",
   "result_tree": "40cb45361fceb77b715d3e5245c48613e4e3d013",
-  "seal": "368dab6945cfd86524e6ae6b9b4d80a726f04d35c1718f86a2eb21cb11f56392",
+  "seal": "ffa1e52725df1afb3877ad169c229408cd31bb58516a1a0b3e2c1bfabb72972e",
   "task_id": "ATLAS-DEVQ-0002",
   "verdict": "FAIL",
   "verifier_identity": "cowork-iv/session_01PP6xftpvbmtgoiSC2r41vu/ad93ccebd42bdc3ef"

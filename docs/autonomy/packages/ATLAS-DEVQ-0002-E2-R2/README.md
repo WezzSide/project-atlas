@@ -12,10 +12,10 @@ Preparation is not authorization. This branch is storage for exact, hashable evi
 | Attempt | **3/3**, `attempt_kind=repair`. E1 = 1/3 (result lost), E2 = 2/3 (salvaged, verification FAIL). After this attempt begins no bounded implementation attempt remains |
 | Repair base | `aee2026b1d8bf7a1293a0f758bc43100b9bed720` (TREE `40cb45361fceb77b715d3e5245c48613e4e3d013`): the failed E2 result revision, per `materialize_repair` |
 | Repair source branch | `atlas/agent-37023482722-1`; resolved by `git ls-remote` to the repair base at preparation; `verify_checkout_ref` passed for that sha and refused main's sha, a short sha and an uppercase sha |
-| `work_seal` | `a5c75996bd6276cc3836f96daad6796dcdb3299400bc87b3186e390399f0f205` (= `expected_work_seal` = seal of the materialized repair WorkItem) |
-| `workflow_inputs_sha256` | `123f7ea1f5c2c727ac82d9b36345446f5fd5fe6cf30fafab56a6e1c375cd2d85` |
-| `package_sha256` | `3143db2f7ed71ec641bd6599a51cef3d65d63040f4b68f851b7d7386cf2ed758` (sha256 of `ATLAS-DEVQ-0002-E2-R2.package.json`) |
-| Builder | `dev_package.py` on `main` `495d5e8f8a69bbe4b31dc318ac3b1236ff014336` (blob `2b1104a412e92de3af43791206ff9e7f12e1b960`, with #1055 repair support and #1057 sealed-base input) |
+| `work_seal` | `04da4ab26b13c2fdda5e0fbeb54ca74987dc4a6114190276115e505720e76b92` (= `expected_work_seal` = seal of the materialized repair WorkItem) |
+| `workflow_inputs_sha256` | `1d6c3df20965f5262279103ca88615b2e3fc8942b06fd290200350b242a0ebfd` |
+| `package_sha256` | `b449999a1801456c9e9bcaa49c40410e85965e316b852ee569e8fd56338a6835` (sha256 of `ATLAS-DEVQ-0002-E2-R2.package.json`) |
+| Builder | `dev_package.py` on `main` `4b04621f8a7b081f9ad9efd356339d983eb1c6ce` (blob `2b1104a412e92de3af43791206ff9e7f12e1b960`, with #1055 repair support and #1057 sealed-base input) |
 | Grant required | `ONE_WORKFLOW_DISPATCH_GRANT` (not issued) |
 
 ## How it was derived (all deterministic; see `MANIFEST.json`)
@@ -27,7 +27,7 @@ Preparation is not authorization. This branch is storage for exact, hashable evi
 
 ## The finding id is the repair instruction
 
-A repair cannot change the statement, so the only channel that tells the executor what to fix is the `RESOLVE:<finding_id>` contract entry. The finding id therefore states the defect, the required behaviour and the framing for a repair on top of the existing result. It contains no token bytes and no Location data.
+A repair cannot change the statement, so the only channel that tells the executor what to fix is the `RESOLVE:<finding_id>` contract entries (two in v4). The finding ids therefore state the defect, the required behaviour and the framing for a repair on top of the existing result. It contains no token bytes and no Location data.
 
 The inherited statement still describes the original E2 defect and says "new file" and "sealed base"; that wording is pinned by the parent's sealed `instructions_sha256` and cannot be edited. The RESOLVE entry tells the executor to extend the existing test file and that new tests must fail on `aee2026b`.
 
@@ -38,7 +38,8 @@ The inherited statement still describes the original E2 defect and says "new fil
 | v1 (commit `8298beb9`) | `ef1d8bd6accbb10e4d0d5afc3341e588fcfc948ba95a7443afe2d58371d7bc8a` (work seal `97ca15622913f4234e61a4b9aaef3586bdf0d7ad03d82323beb4328393cac098`) | **Superseded, never dispatched.** Independent package review: P0 0 / P1 1 / P2 7. The P1: the RESOLVE text prescribed `from None`, which leaves the Location reachable through `__context__` |
 | commits `fdb177e7`, `40fcf512` | same bytes as v1 | **Preparation errors, never dispatched.** The re-seal step failed (entry over the 500-character cap) and these commits carried v1 bytes under a v2 label |
 | v2 (commit `8703cf77`) | `ba388db38537ba1f9b3012131f7bdf14e1be91fd9c261e97835b50081b9ee095` (work seal `a5c75996bd6276cc3836f96daad6796dcdb3299400bc87b3186e390399f0f205`) | Finding text reworded: raise after leaving the except block; extend, do not rewrite, the test file; keep unrelated diagnostics. Independent review: P0 0 / P1 0 / P2 8, see `REVIEW.md`. **Superseded by v3, never dispatched** |
-| **v3 (current)** | **`3143db2f7ed71ec641bd6599a51cef3d65d63040f4b68f851b7d7386cf2ed758`** (work seal unchanged: `a5c75996bd6276cc3836f96daad6796dcdb3299400bc87b3186e390399f0f205`) | Mechanical re-render with the builder on `main` `495d5e8f` after #1057 merged: adds `workflow_inputs.base_revision`, so the execute workflow itself asserts the checked-out HEAD. Spec, WorkItem, records and task prompt are byte-identical to v2. This exact hash was derived independently by the #1057 verifier from the v2 spec |
+| v3 (commit `c400675b`) | `3143db2f7ed71ec641bd6599a51cef3d65d63040f4b68f851b7d7386cf2ed758` (work seal unchanged: `a5c75996bd6276cc3836f96daad6796dcdb3299400bc87b3186e390399f0f205`) | Mechanical re-render with the builder on `main` `495d5e8f` after #1057 merged: adds `workflow_inputs.base_revision`, so the execute workflow itself asserts the checked-out HEAD. Spec, WorkItem, records and task prompt are byte-identical to v2. This exact hash was derived independently by the #1057 verifier from the v2 spec |
+| **v4 (current)** | **`b449999a1801456c9e9bcaa49c40410e85965e316b852ee569e8fd56338a6835`** (work seal **`04da4ab26b13c2fdda5e0fbeb54ca74987dc4a6114190276115e505720e76b92`**) | Owner-authorized re-seal (2026-10-03, `AUTHORIZE_ATLAS_DEVQ_0002_E2_R2_RESEAL`). The verdict now carries two findings, so the contract has two `RESOLVE:` entries: P1-1 (redirects urllib rejects before the handler runs; its former "Keep 4xx/5xx" wording is removed) and P1-2 (the Option B detach rule, stated operationally, naming the redirect loop limit, POST 307/308 and same-origin redirect then 4xx/5xx). Parent, result and verification-request records, statement, acceptance commands, scope, authority and base are unchanged. v3 (work seal `a5c75996bd6276cc3836f96daad6796dcdb3299400bc87b3186e390399f0f205`) is superseded and was never dispatched |
 
 ## Dispatch notes (for the owner; an agent does not dispatch)
 
