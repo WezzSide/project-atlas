@@ -1,0 +1,50 @@
+{
+  "acceptance_commands": [
+    "pytest tests/unit/test_orchestration_dev_github_port.py tests/unit/test_orchestration_dev_github_port_redirects.py tests/unit/test_orchestration_dev_fabric_adapter.py -q --no-cov",
+    "ruff check src/project_atlas/orchestration/autonomy/dev_github_port.py tests/unit/test_orchestration_dev_github_port.py tests/unit/test_orchestration_dev_github_port_redirects.py",
+    "ruff format --check src/project_atlas/orchestration/autonomy/dev_github_port.py tests/unit/test_orchestration_dev_github_port.py tests/unit/test_orchestration_dev_github_port_redirects.py",
+    "mypy src/project_atlas/orchestration/autonomy/dev_github_port.py"
+  ],
+  "attempt_kind": "repair",
+  "builder": {
+    "git_blob": "30669d81967b0604e7f4cb2f691f4bb51440f28d",
+    "module": "src/project_atlas/orchestration/autonomy/dev_package.py",
+    "on_main": "ac08248344a6f3e039513b7c21ca61234806b774"
+  },
+  "dispatched": false,
+  "execution_id": "ATLAS-DEVQ-0002-E2-R2",
+  "expected_work_seal": "97ca15622913f4234e61a4b9aaef3586bdf0d7ad03d82323beb4328393cac098",
+  "finding_class": "REPAIRABLE_WITHIN_AUTHORITY",
+  "grant_required": "ONE_WORKFLOW_DISPATCH_GRANT",
+  "implementation_attempt": "3/3",
+  "label": "FINAL_REPAIR_PACKAGE_PREPARED_AWAITING_SINGLE_DISPATCH_GRANT",
+  "lineage_root": "ATLAS-DEVQ-0002",
+  "package_sha256": "ef1d8bd6accbb10e4d0d5afc3341e588fcfc948ba95a7443afe2d58371d7bc8a",
+  "parent_execution_id": "ATLAS-DEVQ-0002-E2",
+  "parent_task_id": "ATLAS-DEVQ-0002",
+  "parent_work_seal": "ac1cc81f985614f84a742f8a7ace4bcbad855748656d61c03c779d1bc3febfff",
+  "record_file_sha256": {
+    "parent_work_item.json": "a5671aed511e42309f4ef6f5a31238aa444c7bb2a90eabe607f2dc25c9b4ad91",
+    "repair_work_item.json": "e67984e3672e8ea978ca0c26c808adc658972d14e0a4a768a30f8948380ce1ed",
+    "result_record.json": "3b1192464714a26541cb1865039e2d26dce854f89b892e46d481302b50a74d58",
+    "verdict_record.json": "e4c57aafed94a29d941ce1e8e2021442d585a0e16fa29071ea6db39a177eb707",
+    "verification_request.json": "c763ee15297f128c91f192f704249c382d9844e83eaf31a7c84494e79e9a2228"
+  },
+  "repair_base": "aee2026b1d8bf7a1293a0f758bc43100b9bed720",
+  "repair_base_tree": "40cb45361fceb77b715d3e5245c48613e4e3d013",
+  "repair_decision": {
+    "action": "REPAIR",
+    "reason": "REPAIRABLE_WITHIN_AUTHORITY"
+  },
+  "repair_source_branch": "atlas/agent-37023482722-1",
+  "repair_source_branch_resolved_at_preparation": "aee2026b1d8bf7a1293a0f758bc43100b9bed720",
+  "result_seal": "a9a37a0d2082918c9b12bc5b468aa6b87f1eb6e8a2b43760bec6e4fd7fc8677f",
+  "spec_file_sha256": "cb8ecec7d7f38c2040c0e6f38cf6033984f1f92741e3a537395766752d84a420",
+  "spec_sha256": "9827549cf6e573423410167051392b6d3785b18935684356c346fc0d1d7e3c2f",
+  "task_id": "ATLAS-DEVQ-0002-R2",
+  "task_prompt_sha256": "ee6cb2a9162f79905c5ac5820b500a8f1aab4db4d52db88a4fc3a8cddb47da1c",
+  "verdict_seal": "03b0b61bd816f3f75451cc166f7f85f5e25e819116a79e84be1af58db40ab721",
+  "verification_request_seal": "ec9a2937299135490ee441caba344977b15a4b20f386d0bd9af78df394687894",
+  "work_seal": "97ca15622913f4234e61a4b9aaef3586bdf0d7ad03d82323beb4328393cac098",
+  "workflow_inputs_sha256": "d659a1a03b965b4c8b23814129904fd6183f59fac840a7e4aa0661ed8d9386a6"
+}

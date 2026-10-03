@@ -1,0 +1,22 @@
+{
+  "artifact_digests": [
+    "atlas-agent-envelope-salvage/11237929982:sha256:b407c17d74c7e740ef74100e2d5d9a55070566d658e58bd880e303c6db7e0b41",
+    "atlas-agent-sdk-diagnostic/11238940632:sha256:c31ae599cbef77b14f6419db44fa20795cf29c6af28e282f963c392f124159fd"
+  ],
+  "base_revision": "64195b71b14cdb072948c08bddc440b5343d28ce",
+  "changed_paths": [
+    "src/project_atlas/orchestration/autonomy/dev_github_port.py",
+    "tests/unit/test_orchestration_dev_github_port_redirects.py"
+  ],
+  "execution_id": "ATLAS-DEVQ-0002-E2",
+  "executor_identity": "atlas-agent-execute/run-37023482722-1",
+  "repository": "WezzSide/project-atlas",
+  "result_revision": "aee2026b1d8bf7a1293a0f758bc43100b9bed720",
+  "result_tree": "40cb45361fceb77b715d3e5245c48613e4e3d013",
+  "seal": "a9a37a0d2082918c9b12bc5b468aa6b87f1eb6e8a2b43760bec6e4fd7fc8677f",
+  "task_id": "ATLAS-DEVQ-0002",
+  "test_evidence_digests": [
+    "ci-run-37034861425:success@aee2026b1d8bf7a1293a0f758bc43100b9bed720"
+  ],
+  "work_seal": "ac1cc81f985614f84a742f8a7ace4bcbad855748656d61c03c779d1bc3febfff"
+}
