@@ -21,8 +21,8 @@ On the repair base `aee2026b`, three **same-origin** cases keep an `HTTPError` c
 | Case | Where the Location sits |
 |---|---|
 | redirect loop limit (`-> 302`) | `__cause__.headers`, `__cause__.url` |
-| POST 307 / 308 (urllib refuses to follow) | `__cause__.headers` |
-| redirect followed, then a 4xx/5xx | `__cause__.url` |
+| POST 307 (executed; 308 takes the same urllib path, not executed) | `__cause__.headers` |
+| redirect followed, then a 500 (executed; other error statuses not executed) | `__cause__.url` |
 
 The sealed repair instruction (`RESOLVE:P1-1 …`) covers redirects that urllib rejects **before the handler runs** and says "Keep 4xx/5xx … unchanged". A result that follows it literally leaves these three cases as they are. The instruction cannot be changed without changing the repair WorkItem seal `a5c75996…f205`.
 
@@ -33,4 +33,4 @@ The owner needs to say, before the result is verified, which of these holds:
 
 ## Required regressions (owner)
 
- Non-http Location scheme; malformed / invalid bracketed-host Location. The previous E2 candidate `aee2026b…` must fail the new tests and the final repair candidate must pass. Existing redirect, 404, URLError, timeout and artifact-download semantics from the inherited acceptance contract are preserved.
+Non-http Location scheme; malformed / invalid bracketed-host Location. The previous E2 candidate `aee2026b…` must fail the new tests and the final repair candidate must pass. Existing redirect, 404, URLError, timeout and artifact-download semantics from the inherited acceptance contract are preserved.
