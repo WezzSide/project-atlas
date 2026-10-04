@@ -201,21 +201,19 @@ class DispatchPayload:
         return hashlib.sha256(blob.encode()).hexdigest()
 
 
-# Name of the execute workflow's optional sealed-base input (atlas-agent-execute.yml). Kept equal
-# to ``dev_package.BASE_REVISION_INPUT`` (that module imports this one, so it cannot be imported
-# here); a test pins the equality.
+# Name of the execute workflow's sealed-base input (atlas-agent-execute.yml). Single definition:
+# ``dev_package`` re-exports this constant.
 BASE_REVISION_INPUT = "base_revision"
 
 
 def build_dispatch_payload(
     work: WorkItem, *, base_branch: str, task_statement: str, acceptance_commands: tuple[str, ...]
 ) -> DispatchPayload:
-    """Deterministic workflow inputs for one sealed work item (no secret values).
+    """Legacy three-input payload (no ``base_revision``), without secret values.
 
-    This builder does not emit ``base_revision``: implementation-package bytes depend on it.
-    ``FabricAdapter.dispatch`` adds the sealed revision to the inputs it actually sends, so a
-    live adapter dispatch differs from an attempt-1 package's ``workflow_inputs`` by exactly
-    that one key.
+    Kept only so the frozen ``dev_first_run`` module keeps reproducing the committed, already
+    executed ATLAS-DEVQ-0001 package byte for byte. Nothing else may dispatch or package this
+    shape: use ``build_sealed_dispatch_payload``.
     """
     work.verify_seal()
     if not re.fullmatch(r"[A-Za-z0-9._/-]+", base_branch) or ".." in base_branch:
@@ -241,6 +239,32 @@ def build_dispatch_payload(
             "base_branch": base_branch,
             "agent_type": "claude",
         },
+    )
+
+
+def build_sealed_dispatch_payload(
+    work: WorkItem, *, base_branch: str, task_statement: str, acceptance_commands: tuple[str, ...]
+) -> DispatchPayload:
+    """The ONE canonical dispatch payload for a sealed work item (no secret values).
+
+    ``dev_package.build_package`` records exactly this as ``workflow_inputs`` and
+    ``FabricAdapter.dispatch`` sends exactly this, so for the same work item, branch, statement
+    and commands a package's ``workflow_inputs_sha256`` equals the ledger ``payload_sha256``.
+
+    The inputs always carry the SEALED ``base_revision`` (from the work item, never from a
+    branch read). ``base_branch`` is a movable name; the execute workflow asserts its
+    checked-out HEAD against this input and fails closed before the agent runs if they differ.
+    """
+    legacy = build_dispatch_payload(
+        work,
+        base_branch=base_branch,
+        task_statement=task_statement,
+        acceptance_commands=acceptance_commands,
+    )
+    return DispatchPayload(
+        workflow=legacy.workflow,
+        ref=legacy.ref,
+        inputs={**legacy.inputs, BASE_REVISION_INPUT: work.base_revision},
     )
 
 
@@ -331,28 +355,24 @@ class FabricAdapter:
         if self.port.branch_head(base_branch) != work.base_revision:
             raise DispatchRefused(f"{base_branch} is not at the sealed base revision")
         statement, commands = self.task_statement(work)
-        built = build_dispatch_payload(
+        # HARDEN-DEVLOOP-002/003: base_branch is a movable name and the branch-head check above
+        # is only a pre-dispatch guard. The canonical payload carries the SEALED revision (from
+        # the work item, never from a branch read), so the execute workflow's sealed-base
+        # assertion fails closed if the branch moves before checkout. This one payload object
+        # is hashed into the ledger and returned; the port receives a copy of its inputs, so a
+        # port cannot alter what the ledger hash describes.
+        payload = build_sealed_dispatch_payload(
             work,
             base_branch=base_branch,
             task_statement=statement,
             acceptance_commands=commands,
-        )
-        # HARDEN-DEVLOOP-002: base_branch is a movable name and the branch-head check above is
-        # only a pre-dispatch guard. The SEALED revision (from the work item, never from a
-        # branch read) travels as a workflow input so the execute workflow's sealed-base
-        # assertion fails closed if the branch moves before checkout. This is the one payload
-        # object: it is hashed into the ledger and its inputs are what is sent.
-        payload = DispatchPayload(
-            workflow=built.workflow,
-            ref=built.ref,
-            inputs={**built.inputs, BASE_REVISION_INPUT: work.base_revision},
         )
         # write-ahead: from here on this work item can never be dispatched again
         self.xw.bind_dispatch(
             work.seal, dispatched_at=self.clock(), payload_sha256=payload.sha256()
         )
         try:
-            self.port.dispatch_workflow(payload.workflow, payload.ref, payload.inputs)
+            self.port.dispatch_workflow(payload.workflow, payload.ref, dict(payload.inputs))
         except AdapterError as exc:  # write-ahead already recorded: never retried, surfaced
             raise RemoteExecutionFailed(f"dispatch failed: {exc}") from exc
         return payload

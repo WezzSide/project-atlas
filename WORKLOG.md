@@ -15613,3 +15613,61 @@ Not done:
 - Not live-validated: no workflow run was dispatched through the adapter.
 - `FabricAdapter` is still constructed only in tests; nothing in `src/` wires it live.
 - Implementation packages still do not emit `base_revision` (Option B, not authorized).
+
+## 2026-10-04 — ATLAS-DEVQ-0004 (HARDEN-DEVLOOP-003): one canonical dispatch payload identity (trust surface, owner review)
+
+Mission: `ATLAS-GLOBAL-MISSION-AUTONOMOUS-DELIVERY-MATURATION` (canonical execution identity ->
+deterministic dispatch). Direct change to floor modules; no model executor was dispatched; no
+workflow, contract (`dev_contracts.py`) or `dev_first_run.py` change.
+
+Problem: after DEVQ-0003 a live `FabricAdapter` dispatch and a reviewed attempt-1 package
+described different payloads (the adapter added `base_revision`, the package did not), so the
+ledger `payload_sha256` could never equal the package's `workflow_inputs_sha256`. A dispatch
+authority that binds a reviewed package to a live dispatch (F2 design) could not be built on
+that. Repair packages and the adapter each re-wrapped the payload separately.
+
+Change:
+- `dev_fabric_adapter.build_sealed_dispatch_payload` is the single canonical payload builder:
+  legacy inputs plus `base_revision = work.base_revision` (sealed value, never a branch read).
+- `FabricAdapter.dispatch` and `dev_package.build_package` both use it. For the same work item,
+  branch, statement and commands: package `workflow_inputs_sha256` == ledger `payload_sha256`.
+- `FabricAdapter.dispatch` passes the port a copy of the inputs, so a port that mutates its
+  argument cannot make the returned payload drift from the ledger hash (closes DEVQ-0003 P2-1).
+- `build_dispatch_payload` (legacy three inputs) is unchanged and kept only for the frozen
+  `dev_first_run` module, so the committed, already executed `ATLAS-DEVQ-0001.package.json`
+  still reproduces byte for byte and the `dev_first_run.py` blob pin holds.
+- `dev_package`: every package now carries `workflow_inputs.base_revision` and the matching
+  abort condition; `verify_checkout_ref` requires the input for every package kind (previously
+  repair only). `BASE_REVISION_INPUT` has one definition (adapter), re-exported by `dev_package`.
+
+Identity effects (measured, not assumed):
+- Repair package bytes: UNCHANGED. Synthetic repair fixture pinned from main `593fa1a3`; the
+  real reviewed ATLAS-DEVQ-0002-E2-R2 v4 package rebuilds from its stored spec to
+  `b449999a1801456c9e9bcaa49c40410e85965e316b852ee569e8fd56338a6835`, identical to the stored copy.
+- Implementation packages: `package_sha256` and `workflow_inputs_sha256` CHANGED (the new input
+  and one abort condition). `work_seal` and `spec_sha256` did not change. The golden pins were
+  re-pinned deliberately; the previous values are kept in the test as `LEGACY_GOLDEN`, and a
+  test proves that dropping the one input reproduces the legacy inputs digest exactly.
+- `BUILDER_ID` stays `dev_package/1` (precedent: #1055 and #1057 changed repair bytes without a
+  bump; bumping would change repair bytes). Owner may prefer a bump: open question below.
+- Implementation packages rendered before this change (three inputs) are now refused by
+  `verify_checkout_ref` (`CHECKOUT_PACKAGE_INVALID`). They are historical evidence of executed
+  work; a new dispatch needs a re-rendered package.
+
+Commands and results:
+- `pytest` on the fabric-adapter, package, package-repair, first-run, sealed-base-assert and
+  crosswalk test files: 542 passed.
+- `pytest tests/unit -k "orchestration_dev or dev_package or executor or agent_execute or
+  workflow or autonomy or global_foundation"`: 1299 passed before the last added pin test.
+- `ruff check`, `ruff format --check`, `mypy` on the two changed modules: clean.
+
+Not done / open:
+- Not live-validated: nothing was dispatched. `FabricAdapter` is still constructed only in tests.
+- Owner question: bump `BUILDER_ID` to `dev_package/2` (truthful builder versioning, at the
+  cost of changing repair package bytes) or keep the precedent.
+- The F2 dispatch authority itself is not built; this removes the identity mismatch it would hit.
+
+Closure notes for earlier work packages (no separate PR): ATLAS-DEVQ-0003 merged as
+`15f27693734325514e7993544362f8997b441e77` (PR #1061); global contract v2 / OC-L and directive
+template v2 merged as `593fa1a3ae1b04a6fdf65dcb99e5afe0f8d022ee` (PR #1062); post-merge CI run
+`37191807277` on `593fa1a3` passed.

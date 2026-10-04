@@ -828,3 +828,11 @@ Historical roadmaps are classified as inputs and are not erased._
 
 - [x] ATLAS-DEVQ-0002 integrated and closed (2026-10-03) at merge commit `341f94ca95ea35f1ce4eb3154155d388bd9273dc` via PR #1059 (reconciliation head `8b975e2c…`, tree `4df673af…`). Source: repair execution ATLAS-DEVQ-0002-E2-R2, executor run `37119599227` (attempt 3/3 consumed; the run remains red on the 20-turn envelope and did not itself merge — salvaged candidate `1182d0e4…` was independently verified, reconciled, exact-head CI'd and owner-merged). P1-1 and P1-2 resolved. CI: candidate `37120070769`, reconciliation `37128248393`, post-merge main `37136880047` — all PASS. Evidence PRs #1058 and #1050 closed unmerged.
 - [ ] ATLAS-DEVQ-0002 residual P2 notes (seven) and the ftp test-semantics observation — deferred, not repaired under this lineage; see `WORKLOG.md` entry of 2026-10-03 and the E2-R2 `EXECUTION-RECORD.md`. Requires a new owner-authorized work item.
+
+## ATLAS-DEVQ-0003 / ATLAS-DEVQ-0004 — sealed base revision and canonical dispatch identity
+
+- [x] ATLAS-DEVQ-0003 (HARDEN-DEVLOOP-002): `FabricAdapter.dispatch` carries the sealed `base_revision`. Merged 2026-10-04 as `15f27693734325514e7993544362f8997b441e77` (PR #1061); independent verification P0 0 / P1 0; post-merge CI `37191807277` PASS on `593fa1a3`.
+- [x] ATLAS-DEVQ-0004 (HARDEN-DEVLOOP-003): one canonical dispatch payload (`build_sealed_dispatch_payload`) shared by packages and the live adapter, so package `workflow_inputs_sha256` equals ledger `payload_sha256`; defensive inputs copy. Lands with the PR that carries this entry. Repair package bytes unchanged; implementation package digests re-pinned (legacy values retained in the test).
+- [ ] Live validation of the sealed-base assertion through a real adapter dispatch (requires an owner dispatch grant).
+- [ ] F2 dispatch authority binding a reviewed package to a live dispatch (design in `docs/global/baseline/2026-10-02-AUTONOMY-FRONTIER.md`; not built).
+- [ ] `FabricAdapter` live wiring: the adapter is constructed only in tests.
