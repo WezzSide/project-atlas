@@ -846,7 +846,12 @@ def test_binder_refuses_a_work_item_that_seals_no_instructions_digest() -> None:
     with pytest.raises(PackageSpecError) as ei:
         bind_package_to_work(text, expected_package_sha256=sha, work=plain)
     assert ei.value.reason == "BINDING_INSTRUCTIONS_MISMATCH"
-    # and two sealed digest entries are as unusable as none
+    # and two sealed digest entries are as unusable as none: build a package that is otherwise
+    # fully correct for such a work item (canonical prompt, matching digests, matching contract)
+    from project_atlas.orchestration.autonomy.dev_fabric_adapter import (
+        build_sealed_dispatch_payload,
+    )
+
     digest = next(c for c in build_work(spec).acceptance_contract if c.startswith("instructions_"))
     twice = make_work(
         task_id=spec.task_id,
@@ -858,16 +863,26 @@ def test_binder_refuses_a_work_item_that_seals_no_instructions_digest() -> None:
         allowed_paths=spec.allowed_paths,
         forbidden_paths=spec.forbidden_paths,
         expected_outputs=spec.expected_outputs,
-        acceptance_contract=(*spec.acceptance_contract, digest, digest + "0"),
+        acceptance_contract=(*spec.acceptance_contract, digest, digest),
         attempt=spec.attempt,
         max_attempts=spec.max_attempts,
     )
+    canonical = build_sealed_dispatch_payload(
+        twice,
+        base_branch="main",
+        task_statement=spec.statement,
+        acceptance_commands=spec.acceptance_commands,
+    )
+    pkg = build_package(spec)
     pkg["work_seal"] = twice.seal
     pkg["acceptance"]["contract"] = list(twice.acceptance_contract)
+    pkg["workflow_inputs"] = dict(canonical.inputs)
+    pkg["workflow_inputs_sha256"] = canonical.sha256()
     text, sha = _rerender(pkg)
     with pytest.raises(PackageSpecError) as ei:
         bind_package_to_work(text, expected_package_sha256=sha, work=twice)
     assert ei.value.reason == "BINDING_INSTRUCTIONS_MISMATCH"
+    assert "exactly one" in ei.value.detail
     # anything that is not a sealed WorkItem is refused with a binding reason, not a crash
     for bogus in (None, {"seal": plain.seal}, "work"):
         with pytest.raises(PackageSpecError) as ei:
@@ -985,3 +1000,13 @@ def test_verify_checkout_ref_reasons_and_order_are_unchanged_by_the_extraction()
         with pytest.raises(PackageSpecError) as bi:  # the binder shares the consistency checks
             bind_package_to_work(text, expected_package_sha256=package_sha256(text), work=work)
         assert bi.value.reason == reason
+
+
+def test_binder_key_sets_are_exactly_what_the_builder_renders() -> None:
+    from project_atlas.orchestration.autonomy import dev_package
+
+    impl = build_package(load_spec(_spec_text()))
+    repair = build_package(load_spec(_spec_text(**_repair_over())))
+    assert set(impl) == dev_package._PACKAGE_KEYS
+    assert set(repair) == dev_package._PACKAGE_KEYS | dev_package._REPAIR_PACKAGE_KEYS
+    assert not dev_package._PACKAGE_KEYS & dev_package._REPAIR_PACKAGE_KEYS

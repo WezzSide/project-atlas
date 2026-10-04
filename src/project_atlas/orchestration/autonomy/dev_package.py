@@ -34,7 +34,7 @@ Properties:
 
 Nothing here dispatches, ingests, merges or reads any secret; it only produces a document.
 
-``bind_package_to_work`` (ATLAS-DEVQ-0005) is the pure half of binding a reviewed package to a
+``bind_package_to_work`` (ATLAS-DEVQ-0005) is the pure half of binding a rendered package to a
 dispatch: it proves that a rendered document is the one with the expected ``package_sha256``,
 that its identity, scope, contract and dispatch payload are those of one sealed work item, and
 it returns the payload REBUILT from that work item. Binding is not a grant: it neither issues,
@@ -1031,6 +1031,7 @@ def _check_package_consistency(package: Mapping[str, Any]) -> tuple[str, str]:
         or not isinstance(ref, str)
         or not isinstance(required, str)
         or not _SHA.fullmatch(required)
+        or not isinstance(kind, str)
         or kind not in ATTEMPT_KINDS
         or "base_branch" not in inputs
     ):
@@ -1082,14 +1083,14 @@ def package_sha256(rendered: str) -> str:
     return hashlib.sha256(rendered.encode()).hexdigest()
 
 
-# -- binding a reviewed package to its sealed work item (ATLAS-DEVQ-0005) -------------------
+# -- binding a rendered package to its sealed work item (ATLAS-DEVQ-0005) -------------------
 
 
 @dataclass(frozen=True)
 class PackageBinding:
     """What ``bind_package_to_work`` established. A statement of identity, NOT a grant.
 
-    ``package_sha256`` is the reviewed hash the rendered document was checked against;
+    ``package_sha256`` is the caller's expected hash the rendered document was checked against;
     ``payload`` was rebuilt from the sealed work item (never copied from the package) and was
     required to equal the package's recorded workflow, ref and inputs exactly. Holding a
     ``PackageBinding`` permits nothing: it neither issues, consumes nor verifies an owner
@@ -1102,6 +1103,41 @@ class PackageBinding:
     base_branch: str
     payload: DispatchPayload
 
+
+# Exactly the top-level keys ``build_package`` renders (a test pins both sets against it). A
+# bound package may carry no other key and may not lack one: an unknown key could tell a reader
+# something the sealed work item does not say.
+_PACKAGE_KEYS = frozenset(
+    {
+        "package_version",
+        "task_id",
+        "execution_id",
+        "work_seal",
+        "repository",
+        "base_revision",
+        "allowed_paths",
+        "forbidden_paths",
+        "authority_reference",
+        "workflow",
+        "workflow_ref",
+        "workflow_inputs",
+        "workflow_inputs_sha256",
+        "expected_agent_branch_pattern",
+        "acceptance",
+        "result_discovery_contract",
+        "verification_profile",
+        "failure_ceiling",
+        "abort_conditions",
+        "rollback",
+        "secrets",
+        "grant_required",
+        "attempt_kind",
+        "provenance",
+    }
+)
+_REPAIR_PACKAGE_KEYS = frozenset(
+    {"lineage_root", "parent_task_id", "parent_execution_id", "expected_work_seal", "checkout"}
+)
 
 # A statement placeholder that differs from the first character of the prompt's fixed tail
 # (a newline), used only to locate where the statement sits in the assembled prompt.
@@ -1171,11 +1207,13 @@ def bind_package_to_work(
     The returned payload is the REBUILT one. The expected hash is supplied by the caller: this
     function cannot know whether anyone reviewed that document.
 
-    Not covered: fields that are not derived from the work item (for example the verification
-    profile, the result discovery contract, ``provenance.spec_sha256``) are not compared; only
-    the expected hash covers them. For a repair, any well-formed result-branch name passes
-    here: whether that branch is the one the ledger knows for the sealed base revision, and
-    whether it resolves to that revision, is checked by the caller
+    The package must have exactly the top-level keys the builder renders for its kind (no
+    extra, none missing). Not covered: the VALUES of fields that are not derived from the work
+    item (for example the verification profile, the result discovery contract,
+    ``provenance.spec_sha256``, a repair's ``parent_execution_id``) and keys nested inside
+    them are not compared; only the expected hash covers them. For a repair, any well-formed
+    result-branch name passes here: whether that branch is the one the ledger knows for the
+    sealed base revision, and whether it resolves to that revision, is checked by the caller
     (``FabricAdapter.dispatch_package``, ``verify_checkout_ref``).
 
     Binding is not a grant. It neither issues, consumes nor verifies an owner dispatch grant;
@@ -1230,6 +1268,13 @@ def bind_package_to_work(
         raise _fail(
             "BINDING_KIND_MISMATCH",
             "a repair package requires a work item with a parent, and only such a work item",
+        )
+    expected_keys = _PACKAGE_KEYS | (_REPAIR_PACKAGE_KEYS if kind == "repair" else frozenset())
+    if set(package) != expected_keys:
+        odd = sorted(set(package) ^ expected_keys)
+        raise _fail(
+            "BINDING_DESCRIPTION_MISMATCH",
+            f"package top-level keys differ from what the builder renders: {odd}",
         )
     # What a reader of the package is told about the work must be what the seal says: scope,
     # authority reference, contract, attempt ceiling and (repair) lineage are all derived from

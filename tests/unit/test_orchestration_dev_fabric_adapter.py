@@ -1279,7 +1279,7 @@ def _binding_reason(tmp_path, work, rendered, sha):
     return ei.value.reason
 
 
-def test_bound_dispatch_sends_exactly_the_reviewed_package(tmp_path):
+def test_bound_dispatch_sends_exactly_the_bound_package(tmp_path):
     work, pkg, rendered, sha = _bound(_pkg_spec())
     gh = FakeGitHub()
     xw, ad = _pkg_adapter(tmp_path, gh)
@@ -1360,7 +1360,7 @@ def test_package_source_binding_refusal_is_terminal_in_tick_not_retried(tmp_path
     _nothing_written_or_sent(xw, gh, work)
 
 
-def test_rehashed_tampered_package_is_refused_by_the_reviewed_hash(tmp_path):
+def test_rehashed_tampered_package_is_refused_by_the_expected_hash(tmp_path):
     work, pkg, _rendered, sha = _bound(_pkg_spec())
 
     def other_statement(p):
@@ -1773,3 +1773,65 @@ def test_package_dispatch_defers_behind_an_unbound_dispatch(tmp_path):
     with pytest.raises(DispatchDeferred):
         ad.dispatch_package(second, rendered2, expected_package_sha256=sha2)
     assert len(gh.dispatches) == 1 and xw.hop(second.seal, "DISPATCH") is None
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda p: p.update(lineage_root="OTHER-ROOT"),
+        lambda p: p.update(parent_task_id="OTHER-PARENT"),
+        lambda p: p.pop("parent_execution_id"),
+        lambda p: p.update(note="reviewed and approved"),
+    ],
+    ids=["lineage", "parent", "missing-key", "extra-key"],
+)
+def test_repair_package_that_misdescribes_its_lineage_is_refused(tmp_path, mutate):
+    _gh, _xw, _ad, repair, pkg, _text, _sha, _branch = _repair_scenario(tmp_path)
+    assert pkg["attempt_kind"] == "repair" and pkg["lineage_root"] == repair.lineage_root
+    forged, forged_sha = _forge(pkg, mutate)
+    reason = _binding_reason(tmp_path / "fresh", repair, forged, forged_sha)
+    assert reason == "BINDING_DESCRIPTION_MISMATCH"
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda p: p.update(lineage_root="OTHER-ROOT"),
+        lambda p: p.update(parent_task_id=None),
+        lambda p: p.update(attempt=9),
+        lambda p: p.update(expected_outputs=["anything"]),
+        lambda p: p.update(checkout={"base_branch": "main"}),
+        lambda p: p.pop("rollback"),
+        lambda p: p.pop("secrets"),
+    ],
+    ids=["lineage", "parent-null", "attempt", "outputs", "checkout", "no-rollback", "no-secrets"],
+)
+def test_implementation_package_with_extra_or_missing_keys_is_refused(tmp_path, mutate):
+    work, pkg, _rendered, _sha = _bound(_pkg_spec())
+    forged, forged_sha = _forge(pkg, mutate)
+    assert _binding_reason(tmp_path, work, forged, forged_sha) == "BINDING_DESCRIPTION_MISMATCH"
+
+
+@pytest.mark.parametrize(
+    "value", [3.0, True, "3", None, [3]], ids=["float", "bool", "str", "null", "list"]
+)
+def test_description_comparison_is_type_strict(tmp_path, value):
+    """3.0 == 3 and True == 1 in Python; a package must state the sealed integer itself."""
+    work, pkg, _rendered, _sha = _bound(_pkg_spec(max_attempts=3))
+    assert work.max_attempts == 3
+    forged, forged_sha = _forge(pkg, lambda p: p["failure_ceiling"].update(max_attempts=value))
+    assert _binding_reason(tmp_path, work, forged, forged_sha) == "BINDING_DESCRIPTION_MISMATCH"
+    one, pkg1, _r, _s = _bound(_pkg_spec(max_attempts=1))
+    forged, forged_sha = _forge(pkg1, lambda p: p["failure_ceiling"].update(max_attempts=True))
+    reason = _binding_reason(tmp_path / "one", one, forged, forged_sha)
+    assert reason == "BINDING_DESCRIPTION_MISMATCH"
+
+
+@pytest.mark.parametrize(
+    "value", [["implementation"], {}, 1, None], ids=["list", "dict", "int", "null"]
+)
+def test_unhashable_or_non_string_attempt_kind_is_a_clean_refusal(tmp_path, value):
+    """Not a TypeError: a refusal with a stable reason, terminal for the work item."""
+    work, pkg, _rendered, _sha = _bound(_pkg_spec())
+    forged, forged_sha = _forge(pkg, lambda p: p.update(attempt_kind=value))
+    assert _binding_reason(tmp_path, work, forged, forged_sha) == "CHECKOUT_PACKAGE_INVALID"
