@@ -218,6 +218,12 @@ def test_unhashable_task_id_raises_queue_error_not_type_error():
 # ---- ATLAS-DEVQ-0006: in-flight exclusion ------------------------------------------------------
 
 
+@pytest.mark.parametrize("bad", ["AB", b"AB", [["A"]], [1], {None}])
+def test_in_flight_must_be_a_collection_of_string_task_ids(bad):
+    with pytest.raises(QueueError):
+        select_next([item("A"), item("AB")], in_flight=bad)
+
+
 def test_in_flight_task_is_skipped_and_next_ranked_is_selected():
     from project_atlas.orchestration.autonomy.dev_queue import inadmissible_reason
 
