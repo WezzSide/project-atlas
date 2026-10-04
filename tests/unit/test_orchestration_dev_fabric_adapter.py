@@ -1717,3 +1717,59 @@ def test_binding_identifiers_never_name_an_authority():
         FabricAdapter.dispatch_package.__doc__,
     ):
         assert "not a grant" in " ".join(doc.split()).lower()
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda p: p.update(allowed_paths=["/"]),
+        lambda p: p["allowed_paths"].append("infra/"),
+        lambda p: p.update(forbidden_paths=[]),
+        lambda p: p["forbidden_paths"].pop(),
+        lambda p: p.update(authority_reference="AUTH-OTHER"),
+        lambda p: p["acceptance"].update(contract=[]),
+        lambda p: p["acceptance"]["contract"].append("anything goes"),
+        lambda p: p["failure_ceiling"].update(max_attempts=99),
+        lambda p: p["failure_ceiling"].update(max_attempts="3"),
+        lambda p: p.pop("failure_ceiling"),
+        lambda p: p.update(grant_required="NONE"),
+        lambda p: p.pop("grant_required"),
+        lambda p: p.update(allowed_paths=None),
+    ],
+    ids=[
+        "scope-root",
+        "scope-added",
+        "forbidden-emptied",
+        "forbidden-dropped",
+        "authority",
+        "contract-emptied",
+        "contract-added",
+        "ceiling-raised",
+        "ceiling-type",
+        "ceiling-missing",
+        "grant-none",
+        "grant-missing",
+        "scope-null",
+    ],
+)
+def test_package_that_misdescribes_the_sealed_work_is_refused_even_when_rehashed(tmp_path, mutate):
+    """The payload would still be canonical, but a reader of the package would be told another
+    scope, contract, ceiling or grant requirement than the work item seals."""
+    work, pkg, _rendered, _sha = _bound(_pkg_spec())
+    forged, forged_sha = _forge(pkg, mutate)
+    assert _binding_reason(tmp_path, work, forged, forged_sha) == "BINDING_DESCRIPTION_MISMATCH"
+
+
+def test_package_dispatch_defers_behind_an_unbound_dispatch(tmp_path):
+    from project_atlas.orchestration.autonomy.dev_fabric_adapter import DispatchDeferred
+
+    first, _p1, rendered1, sha1 = _bound(_pkg_spec())
+    second, _p2, rendered2, sha2 = _bound(
+        _pkg_spec(task_id="DEVQ-BIND-2", lineage_root="DEVQ-BIND-2")
+    )
+    gh = FakeGitHub()
+    xw, ad = _pkg_adapter(tmp_path, gh)
+    ad.dispatch_package(first, rendered1, expected_package_sha256=sha1)
+    with pytest.raises(DispatchDeferred):
+        ad.dispatch_package(second, rendered2, expected_package_sha256=sha2)
+    assert len(gh.dispatches) == 1 and xw.hop(second.seal, "DISPATCH") is None

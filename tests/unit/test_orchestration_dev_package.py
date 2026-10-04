@@ -838,7 +838,41 @@ def test_binder_refuses_a_work_item_that_seals_no_instructions_digest() -> None:
     text, sha = _rerender(pkg)
     with pytest.raises(PackageSpecError) as ei:
         bind_package_to_work(text, expected_package_sha256=sha, work=plain)
+    # the package still states the builder's contract (with the digest entry); the work's differs
+    assert ei.value.reason == "BINDING_DESCRIPTION_MISMATCH"
+    # even a package that states exactly the work's contract cannot bind: nothing is sealed
+    pkg["acceptance"]["contract"] = list(plain.acceptance_contract)
+    text, sha = _rerender(pkg)
+    with pytest.raises(PackageSpecError) as ei:
+        bind_package_to_work(text, expected_package_sha256=sha, work=plain)
     assert ei.value.reason == "BINDING_INSTRUCTIONS_MISMATCH"
+    # and two sealed digest entries are as unusable as none
+    digest = next(c for c in build_work(spec).acceptance_contract if c.startswith("instructions_"))
+    twice = make_work(
+        task_id=spec.task_id,
+        execution_id=spec.execution_id,
+        lineage_root=spec.lineage_root,
+        repository=spec.repository,
+        base_revision=spec.base_revision,
+        authority_ref=spec.authority_ref,
+        allowed_paths=spec.allowed_paths,
+        forbidden_paths=spec.forbidden_paths,
+        expected_outputs=spec.expected_outputs,
+        acceptance_contract=(*spec.acceptance_contract, digest, digest + "0"),
+        attempt=spec.attempt,
+        max_attempts=spec.max_attempts,
+    )
+    pkg["work_seal"] = twice.seal
+    pkg["acceptance"]["contract"] = list(twice.acceptance_contract)
+    text, sha = _rerender(pkg)
+    with pytest.raises(PackageSpecError) as ei:
+        bind_package_to_work(text, expected_package_sha256=sha, work=twice)
+    assert ei.value.reason == "BINDING_INSTRUCTIONS_MISMATCH"
+    # anything that is not a sealed WorkItem is refused with a binding reason, not a crash
+    for bogus in (None, {"seal": plain.seal}, "work"):
+        with pytest.raises(PackageSpecError) as ei:
+            bind_package_to_work(text, expected_package_sha256=sha, work=bogus)  # type: ignore[arg-type]
+        assert ei.value.reason == "BINDING_WORK_INVALID"
 
 
 def test_binder_refuses_a_work_item_whose_seal_does_not_verify() -> None:
@@ -864,6 +898,17 @@ def test_repair_statement_binding_requires_exactly_the_repair_suffix() -> None:
     assert REPAIR_SUFFIX in pkg["workflow_inputs"]["task_prompt"]
     pkg["workflow_inputs"]["task_prompt"] = pkg["workflow_inputs"]["task_prompt"].replace(
         REPAIR_SUFFIX, ""
+    )
+    text, sha = _rerender(pkg)
+    with pytest.raises(PackageSpecError) as ei:
+        bind_package_to_work(text, expected_package_sha256=sha, work=work)
+    assert ei.value.reason == "BINDING_INSTRUCTIONS_MISMATCH"
+    # a tail of the same LENGTH as the suffix but different text must not be stripped as if it
+    # were the suffix (that would bind a statement the seal never covered)
+    pkg = build_package(spec)
+    assert pkg["workflow_inputs"]["task_prompt"].count(REPAIR_SUFFIX) == 1
+    pkg["workflow_inputs"]["task_prompt"] = pkg["workflow_inputs"]["task_prompt"].replace(
+        REPAIR_SUFFIX, "x" * len(REPAIR_SUFFIX)
     )
     text, sha = _rerender(pkg)
     with pytest.raises(PackageSpecError) as ei:

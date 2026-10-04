@@ -35,11 +35,11 @@ Properties:
 Nothing here dispatches, ingests, merges or reads any secret; it only produces a document.
 
 ``bind_package_to_work`` (ATLAS-DEVQ-0005) is the pure half of binding a reviewed package to a
-dispatch: it proves that a rendered document is the reviewed one (by its ``package_sha256``) and
-that it describes exactly one sealed work item, and it returns the payload REBUILT from that
-work item. Binding is not a grant: it neither issues, consumes nor verifies an owner dispatch
-grant, ``grant_required`` stays as rendered, and a successful binding never permits a dispatch
-and never overrides a classifier or platform denial.
+dispatch: it proves that a rendered document is the one with the expected ``package_sha256``,
+that its identity, scope, contract and dispatch payload are those of one sealed work item, and
+it returns the payload REBUILT from that work item. Binding is not a grant: it neither issues,
+consumes nor verifies an owner dispatch grant, ``grant_required`` stays as rendered, and a
+successful binding never permits a dispatch and never overrides a classifier or platform denial.
 """
 
 from __future__ import annotations
@@ -104,6 +104,9 @@ __all__ = [
 #                  this id, a /2 repair package is identical to the last /1 repair shape.
 BUILDER_ID = "dev_package/2"
 BASE_BRANCH = "main"
+# What every package states about dispatch authority. Rendering or binding a package never
+# satisfies it.
+GRANT_REQUIRED = "ONE_WORKFLOW_DISPATCH_GRANT"
 # ``BASE_REVISION_INPUT`` (imported from ``dev_fabric_adapter``, re-exported here) names the
 # atlas-agent-execute.yml input the workflow asserts its checked-out HEAD against. The canonical
 # payload builder (``build_sealed_dispatch_payload``) emits it for every package.
@@ -958,7 +961,7 @@ def build_package(spec: PackageSpec) -> dict[str, Any]:
             "ANTHROPIC_API_KEY": "NOT_ASSERTED (builder never inspects secrets; presence is an "
             "owner statement)"
         },
-        "grant_required": "ONE_WORKFLOW_DISPATCH_GRANT",
+        "grant_required": GRANT_REQUIRED,
         "attempt_kind": spec.attempt_kind,
         "provenance": {"builder": BUILDER_ID, "spec_sha256": spec_sha256(spec)},
     }
@@ -1156,14 +1159,24 @@ def bind_package_to_work(
       6. ``BINDING_WORK_SEAL_MISMATCH``   the package names another work seal;
       7. ``BINDING_IDENTITY_MISMATCH``    task, execution, repository or base revision differ;
       8. ``BINDING_KIND_MISMATCH``        the package is a repair iff the work has a parent;
+         then ``BINDING_DESCRIPTION_MISMATCH`` if the scope, authority reference, acceptance
+         contract, attempt ceiling, ``grant_required`` or (repair) lineage the package states
+         differ from the work item;
       9. ``BINDING_INSTRUCTIONS_MISMATCH`` the statement recovered from the recorded prompt,
          with the recorded acceptance commands, does not reproduce the instructions digest
          sealed in the work item's acceptance contract;
       10. ``BINDING_PAYLOAD_MISMATCH``    the payload rebuilt from the sealed work item is not
          exactly the package's workflow, ref and inputs (and their recorded digest).
 
-    The returned payload is the REBUILT one. The reviewed hash is supplied by the caller: this
+    The returned payload is the REBUILT one. The expected hash is supplied by the caller: this
     function cannot know whether anyone reviewed that document.
+
+    Not covered: fields that are not derived from the work item (for example the verification
+    profile, the result discovery contract, ``provenance.spec_sha256``) are not compared; only
+    the expected hash covers them. For a repair, any well-formed result-branch name passes
+    here: whether that branch is the one the ledger knows for the sealed base revision, and
+    whether it resolves to that revision, is checked by the caller
+    (``FabricAdapter.dispatch_package``, ``verify_checkout_ref``).
 
     Binding is not a grant. It neither issues, consumes nor verifies an owner dispatch grant;
     ``grant_required`` stays exactly as rendered; a successful binding never permits a dispatch
@@ -1194,6 +1207,8 @@ def bind_package_to_work(
     if not isinstance(package, dict):
         raise _fail("BINDING_PACKAGE_UNPARSEABLE", "package must be a JSON object")
     branch, required = _check_package_consistency(package)
+    if not isinstance(work, WorkItem):
+        raise _fail("BINDING_WORK_INVALID", "work must be a sealed WorkItem")
     try:
         work.verify_seal()
     except ContractError as exc:
@@ -1216,7 +1231,37 @@ def bind_package_to_work(
             "BINDING_KIND_MISMATCH",
             "a repair package requires a work item with a parent, and only such a work item",
         )
+    # What a reader of the package is told about the work must be what the seal says: scope,
+    # authority reference, contract, attempt ceiling and (repair) lineage are all derived from
+    # the work item by ``build_package``, so they are compared, not trusted.
     acceptance = package.get("acceptance")
+    ceiling = package.get("failure_ceiling")
+    described: list[tuple[str, object, object]] = [
+        ("allowed_paths", package.get("allowed_paths"), list(work.allowed_paths)),
+        ("forbidden_paths", package.get("forbidden_paths"), list(work.forbidden_paths)),
+        ("authority_reference", package.get("authority_reference"), work.authority_ref),
+        (
+            "acceptance.contract",
+            acceptance.get("contract") if isinstance(acceptance, dict) else None,
+            list(work.acceptance_contract),
+        ),
+        (
+            "failure_ceiling.max_attempts",
+            ceiling.get("max_attempts") if isinstance(ceiling, dict) else None,
+            work.max_attempts,
+        ),
+        ("grant_required", package.get("grant_required"), GRANT_REQUIRED),
+    ]
+    if kind == "repair":
+        described += [
+            ("lineage_root", package.get("lineage_root"), work.lineage_root),
+            ("parent_task_id", package.get("parent_task_id"), work.parent_task_id),
+        ]
+    for field_name, stated, sealed_value in described:
+        if type(stated) is not type(sealed_value) or stated != sealed_value:
+            raise _fail(
+                "BINDING_DESCRIPTION_MISMATCH", f"package {field_name} differs from the work item"
+            )
     raw_commands = acceptance.get("commands") if isinstance(acceptance, dict) else None
     if not isinstance(raw_commands, list) or not all(isinstance(c, str) for c in raw_commands):
         raise _fail(

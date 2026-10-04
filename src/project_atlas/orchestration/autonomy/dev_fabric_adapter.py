@@ -17,10 +17,11 @@ through the injected ``GitHubPort`` (a fake in tests, ``GitHubRestPort`` live).
 Package binding (ATLAS-DEVQ-0005): ``dispatch_package`` (and ``dispatch`` when the adapter is
 constructed with ``package_source``) sends only the payload rebuilt from the sealed work item
 after ``dev_package.bind_package_to_work`` proved that the rendered package has the expected
-``package_sha256`` and describes exactly that work item; the ledger DISPATCH record then also
-carries ``package_sha256``. Binding is not a grant: it neither issues, consumes nor verifies an
-owner dispatch grant, never overrides a classifier or platform denial, and the recorded
-``package_sha256`` states what was bound, not that anyone approved it.
+``package_sha256`` and that its identity, scope, contract and payload are that work item's;
+the ledger DISPATCH record then also carries ``package_sha256``. Binding is not a grant: it
+neither issues, consumes nor verifies an owner dispatch grant, never overrides a classifier or
+platform denial, and the recorded ``package_sha256`` states what was bound, not that anyone
+approved it.
 
 Crash safety: DISPATCH is written ahead to the Crosswalk ledger, so a work item is dispatched at
 most once; run discovery is fail-closed on ambiguity.

@@ -15749,7 +15749,8 @@ Change per module (no new module file):
   (strict JSON: duplicate keys and NaN/Infinity refused), the internal-consistency checks shared
   with `verify_checkout_ref` (unchanged reasons, e.g. `PACKAGE_BUILDER_UNSUPPORTED`,
   `CHECKOUT_PACKAGE_INVALID`), `BINDING_WORK_INVALID`, `BINDING_WORK_SEAL_MISMATCH`,
-  `BINDING_IDENTITY_MISMATCH`, `BINDING_KIND_MISMATCH`, `BINDING_INSTRUCTIONS_MISMATCH`,
+  `BINDING_IDENTITY_MISMATCH`, `BINDING_KIND_MISMATCH`, `BINDING_DESCRIPTION_MISMATCH`,
+  `BINDING_INSTRUCTIONS_MISMATCH`,
   `BINDING_PAYLOAD_MISMATCH`. The returned payload is rebuilt from the sealed work item with
   `build_sealed_dispatch_payload`, never copied from the package.
   Instructions binding: the statement is recovered from `workflow_inputs.task_prompt` as the
@@ -15786,13 +15787,32 @@ equal on base `e40b28ad` and on this change for the implementation goldens
 `FORBIDDEN_FLOOR`, `AUTONOMY_FLOOR_MODULES`, `build_package` and `render_package` are untouched.
 Existing test bodies are untouched (test files: additions only).
 
+Tightened after independent verification of the first candidate (`81db0aa3`, P0 0 / P1 0):
+- New check `BINDING_DESCRIPTION_MISMATCH` (after the kind check): the scope
+  (`allowed_paths`, `forbidden_paths`), `authority_reference`, `acceptance.contract`,
+  `failure_ceiling.max_attempts`, `grant_required` and, for a repair, `lineage_root` and
+  `parent_task_id` that the package states must equal what the work item seals. Before this, a
+  package with a recomputed hash could bind while telling a reader another scope or grant
+  requirement (the dispatched payload was canonical either way).
+- A `work` argument that is not a `WorkItem` is refused with `BINDING_WORK_INVALID` instead of
+  raising `AttributeError`.
+- Docstrings no longer say the package "describes exactly" the work item; they name what is
+  compared and what is not (fields not derived from the work item are covered only by the
+  expected hash; a repair's branch is pinned to the ledger by the adapter, not by the pure
+  binder).
+- Tests added for: the description check (13 cases), a repair tail of the suffix's length that
+  is not the suffix, two sealed digest entries, non-WorkItem input, and the deferral branch of
+  `dispatch_package`.
+- `GRANT_REQUIRED` is now a module constant used by `build_package`; the rendered value is the
+  same string, and the golden package hashes are unchanged.
+
 Commands and results (measured, `PYTHONPATH=src`, `--no-cov -o addopts=""`):
 - `pytest` on the fabric-adapter, package, package-repair, first-run, sealed-base-assert and
-  crosswalk test files: 608 passed (546 before; 62 new test cases).
+  crosswalk test files: 622 passed (546 before; 76 new test cases).
 - `pytest tests/unit -k "orchestration_dev or dev_package or executor or agent_execute or
-  workflow or autonomy or global_foundation or github_port"`: 1365 passed, 5152 deselected.
+  workflow or autonomy or global_foundation or github_port"`: 1379 passed, 5152 deselected.
 - New tests against the base versions of the three source modules (adapter, package and
-  crosswalk test files): 61 failed, 390 passed. The one new case that passes on base is the
+  crosswalk test files): 75 failed, 390 passed. The one new case that passes on base is the
   regression guard that a callback-mode dispatch still writes the three-key record.
 - `ruff check .`, `ruff format --check` on the six changed Python files, `mypy src`: clean.
 
