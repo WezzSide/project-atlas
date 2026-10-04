@@ -533,11 +533,10 @@ def test_another_coordinators_dispatch_is_never_mistaken_for_lost_history(tmp_pa
         hook = None
 
         def published(self, channel):
-            out = super().published(channel)
             if self.hook:
                 hook, self.hook = self.hook, None
-                hook()  # a peer commits and publishes right after this listing
-            return out
+                hook()  # a peer commits and publishes after this coordinator's last replay
+            return super().published(channel)  # ... and the listing already shows that work
 
     t3 = Interleaved(tmp_path / "spool")
     c3 = Coordinator(
@@ -551,6 +550,8 @@ def test_another_coordinators_dispatch_is_never_mistaken_for_lost_history(tmp_pa
     )
     c1.tick([cand("B", "src/b")])  # after c3's last replay
     t3.hook = lambda: c1.tick([cand("C", "src/c")])
+    # listing-then-replay: C is listed and the replay that follows learns it. With the order
+    # reversed (replay, then list) C would be listed but unknown: JOURNAL_BEHIND_TRANSPORT.
     st = c3.tick([cand("D", "src/d")])
     assert st["state"] == "OK" and st["admitted"] == ["D"]
     assert [r["lineage_root"] for r in st["lineages"]] == ["A", "B", "C", "D"]
@@ -569,7 +570,7 @@ def test_a_running_coordinator_notices_a_lost_event_below_its_head_before_prepar
         before = tree(tmp_path)
         with pytest.raises(JournalCorrupt, match=why):
             c.tick([cand("D", "src/d")])
-        assert tree(tmp_path) == before  # D was not appended, acknowledged or published
+        assert tree(tmp_path) == before  # D was not appended or published; nothing else changed
         status = json.loads((tmp_path / "status" / "status.json").read_text())
         assert status["state"] == "HALTED" and why in status["reason"]
         lost.write_bytes(saved)
@@ -665,30 +666,141 @@ def test_the_coordinator_admits_nothing_over_the_scope_of_a_terminal_lineage(tmp
     assert c.planner.dispatch(item, **fields).task_id == "X"
 
 
+def test_blocked_and_caller_released_scopes_stay_closed_to_the_coordinator(tmp_path):
+    store(tmp_path)
+    c = coordinator(tmp_path, max_live=4)
+    c.tick([cand("A", "src/a"), cand("B", "src/b")])
+    # A: another caller reports its execution failed -> BLOCKED. A report is not a fence.
+    other = Planner(
+        SpoolTransport(tmp_path / "spool"),
+        identity="operator",
+        verifier_identities=(VER,),
+        journal=store(tmp_path, create=False),
+    )
+    other.fail_execution("A", "runner lost")
+    # B: runs to INTEGRATION_READY, then a caller releases it on a revision it merely asserts
+    spool = SpoolTransport(tmp_path / "spool")
+    for _ in range(2):
+        w = spool.claim(Channel.WORK, role=Role.IMPLEMENTER, identity=IMPL)
+        if w.task_id == "B":
+            spool.publish(
+                make_result(w, executor_identity=IMPL, result_revision=REV1, result_tree=TREE1)
+            )
+    c.tick()
+    verify(tmp_path)
+    c.tick()
+    st = c.tick([cand("XB", "src/b/x")])
+    assert st["deferred"] == [["XB", "SCOPE_COLLISION:B:src/b/x|src/b"]]  # still a holder
+    other.release_scope("B", merged_revision="d" * 40)
+    st = c.tick([cand("XA", "src/a/x"), cand("XB", "src/b/x"), cand("Y", "src/y")])
+    phases = {r["lineage_root"]: (r["phase"], r["holds_scope"]) for r in st["lineages"]}
+    assert phases["A"] == ("BLOCKED", False) and phases["B"] == ("INTEGRATION_READY", False)
+    assert sorted(st["deferred"]) == [
+        ["XA", "SCOPE_RETAINED:A:src/a/x|src/a"],
+        ["XB", "SCOPE_RETAINED:B:src/b/x|src/b"],
+    ]
+    assert st["admitted"] == ["Y"]
+    # a second coordinator and a restart reach the same decision from the journal
+    st2 = coordinator(tmp_path, identity="coord-2", max_live=4).tick([cand("XB", "src/b/x")])
+    assert st2["deferred"] == [["XB", "SCOPE_RETAINED:B:src/b/x|src/b"]]
+
+
+def test_a_lost_head_acknowledgement_is_restored_before_anything_is_prepared(tmp_path):
+    j = store(tmp_path)
+    c = coordinator(tmp_path, max_live=8)
+    c.tick([cand("A", "src/a"), cand("B", "src/b")])
+    (j.anchor / "000000000002.ack").unlink()  # only the head's acknowledgement file
+    st = c.tick([cand("Z", "src/z")])
+    assert st["state"] == "OK" and st["admitted"] == ["Z"]
+    assert sorted(a.name for a in j.anchor.iterdir() if a.suffix == ".ack") == [
+        "000000000001.ack",
+        "000000000002.ack",
+        "000000000003.ack",
+    ]
+    assert coordinator(tmp_path, identity="coord-2").tick()["journal"]["seq"] == 3
+
+
+def test_a_continuity_failure_in_the_constructor_also_leaves_a_halted_status(tmp_path):
+    j = store(tmp_path)
+    coordinator(tmp_path).tick([cand("A", "src/a")])
+    (j.root / "000000000001.json").unlink()
+    with pytest.raises(JournalCorrupt, match="JOURNAL_TRUNCATED"):
+        coordinator(tmp_path, identity="coord-2")
+    status = json.loads((tmp_path / "status" / "status.json").read_text())
+    assert status["state"] == "HALTED" and status["reason"].startswith("JOURNAL_TRUNCATED")
+
+    class NoStatus(Coordinator):
+        def _write_status(self, status):
+            raise OSError("status disk full")
+
+    with pytest.raises(JournalCorrupt, match="JOURNAL_TRUNCATED"):  # not masked by the OSError
+        NoStatus(
+            store(tmp_path, create=False),
+            SpoolTransport(tmp_path / "spool"),
+            identity="coord-3",
+            verifier_identities=(VER,),
+            status_path=tmp_path / "status" / "status.json",
+            accept_same_filesystem=True,
+        )
+    (tmp_path / "adir").mkdir()
+    with pytest.raises(PlannerError, match=r"STATUS_PATH:.* is a directory"):
+        Coordinator(
+            store(tmp_path, create=False),
+            SpoolTransport(tmp_path / "spool"),
+            identity="coord-4",
+            verifier_identities=(VER,),
+            status_path=tmp_path / "adir",
+            accept_same_filesystem=True,
+        )
+
+
 # ---- candidates and status ------------------------------------------------------------------
 
 
 def test_a_malformed_candidate_list_raises_before_anything_is_read_or_written(tmp_path):
-    store(tmp_path)
+    j = store(tmp_path)
     c = coordinator(tmp_path)
+    c.tick([cand("A", "src/a")])
+    implement(tmp_path)  # a RESULT is pending: a pump would journal it and publish a request
     before = tree(tmp_path)
-    item, fields = cand("A", "src/a")
+    item, fields = cand("Z", "src/z")
+    pair = "a candidate is a .QueueItem, work fields. pair"
     bad_lists = [
-        [item],
-        [(item,)],
-        [("A", fields)],
-        [(item, None)],
-        [(item, {1: "x"})],
-        [(item, {**fields, "live_limit": 99})],
-        [(item, {**fields, "retain_terminal_scopes": False})],
-        [(item, {**fields, "execution_ordinal": 5})],
-        [(item, fields), (item, fields)],
-        [cand("A", "src/a", severity=9)],
+        ([item], pair),
+        ([(item,)], pair),
+        ([("Z", fields)], pair),
+        ([(item, None)], pair),
+        ([(item, {1: "x"})], "work field names must be strings"),
+        ([(item, {**fields, "live_limit": 99})], "work fields may not set"),
+        ([(item, {**fields, "retain_terminal_scopes": False})], "work fields may not set"),
+        ([(item, {**fields, "execution_ordinal": 5})], "work fields may not set"),
+        ([(item, {**fields, "item": 1})], "work fields may not set"),
+        ([(item, fields), (item, fields)], "duplicate task_id"),
+        ([cand("Z", "src/z", severity=9)], "severity out of range"),
+        (
+            [
+                (
+                    QueueItem(
+                        task_id="Z", title="Z", category=Category.RELIABILITY, depends_on=("Q",)
+                    ),
+                    fields,
+                )
+            ],
+            "unknown dependency",
+        ),
     ]
-    for bad in bad_lists:
-        with pytest.raises((PlannerError, ValueError)):
+    for bad, why in bad_lists:
+        with pytest.raises((PlannerError, ValueError), match=why):
             c.tick(bad)
-    assert tree(tmp_path) == before and not (tmp_path / "status" / "status.json").exists()
+    assert tree(tmp_path) == before  # the pending result was not pumped: nothing was written
+    assert c.planner.lineages["A"].phase is Phase.DISPATCHED
+    # ... and nothing was read either: on a journal that no longer replays, the candidate
+    # error is what surfaces, not the continuity failure
+    (j.root / "000000000001.json").write_bytes(b"{}")
+    with pytest.raises(PlannerError, match=pair):
+        c.tick([item])
+    with pytest.raises(JournalCorrupt):
+        c.tick([(item, fields)])
 
 
 def test_a_candidate_that_dispatch_refuses_is_reported_and_the_tick_goes_on(tmp_path):

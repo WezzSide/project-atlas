@@ -1049,9 +1049,11 @@ class Planner:
         stays usable for a later dispatch. A holder whose seal no longer verifies is an error.
         ``live_limit`` (optional) refuses with ``LIVE_LIMIT`` when that many lineages are
         already executing or being verified. ``retain_terminal_scopes`` (optional) also
-        refuses, with ``SCOPE_RETAINED``, a work item that overlaps the last work of a BLOCKED
-        or OWNER_REQUIRED lineage: those phases end the lineage for this planner, but they
-        are not evidence that its executor stopped writing or that its result branch is gone.
+        refuses, with ``SCOPE_RETAINED``, a work item that overlaps the last work of ANY
+        lineage that no longer holds its scope: BLOCKED, OWNER_REQUIRED, or INTEGRATION_READY
+        and released with ``release_scope``. Those end the lineage or record a caller's
+        assertion; none is evidence that an executor stopped writing, that a result branch is
+        gone or that a candidate was merged.
         The decision is taken against the journal and committed as its next event, so it also
         holds against other planners on the same journal. The DISPATCH event is written before
         the work is published; if publishing fails the lineage is DISPATCHED and ``recover``
@@ -1102,7 +1104,7 @@ class Planner:
                     )
             if retain_terminal_scopes:
                 for root, st in sorted(self.lineages.items()):
-                    if st.phase in (Phase.BLOCKED, Phase.OWNER_REQUIRED):
+                    if not holds_scope(st):  # BLOCKED, OWNER_REQUIRED, or released
                         pairs = works_collide(work, st.work)
                         if pairs:
                             raise PlannerError(
@@ -1331,7 +1333,8 @@ class Coordinator:
     whole journal against the anchor; (2) finishes what a crash left (``Planner.recover``);
     (3) consumes results and verdicts (``pump``); (4) PREPARES further lineages: it dispatches,
     into the transport, the next admissible candidates whose scope is compatible with every
-    scope holder and with every terminal lineage, while fewer than ``max_live`` lineages are
+    scope holder and with every other lineage the journal has ever recorded, while fewer than
+    ``max_live`` lineages are
     executing or being verified in the store; (5) writes a status file derived from the
     journal. Several coordinators may tick on one store: scope admission and the ``max_live``
     bound are decided in the journal commit, not by this object (coordinators configured with
@@ -1348,11 +1351,14 @@ class Coordinator:
         the adapter's own ledger (the crosswalk), which refuses a seal it already dispatched:
         that protection lasts exactly as long as that ledger does;
       * it never hands a scope over: it does not call ``fail_execution`` or ``release_scope``,
-        and it admits nothing that overlaps the last work of a BLOCKED or OWNER_REQUIRED
-        lineage (``SCOPE_RETAINED``). ``pump`` does move lineages into those phases, on a
-        verdict or a missing independent verifier; that ends the lineage, it is not evidence
-        that its executor stopped writing or that its result branch is gone. Until a verified
-        release exists, such a scope stays closed to this coordinator;
+        and it admits nothing that overlaps the last work of a lineage that gave up its scope
+        (``SCOPE_RETAINED``): BLOCKED or OWNER_REQUIRED, which ``pump`` or another caller's
+        ``fail_execution`` produces, and INTEGRATION_READY released by another caller's
+        ``release_scope`` on a revision it merely asserts. None of these is evidence that an
+        executor stopped writing, that a result branch is gone or that a merge happened.
+        Until a verified release exists, a path any lineage of this journal has claimed stays
+        closed to this coordinator. A planner used directly, without this option, still
+        admits over such a scope;
       * it does not fall back: it refuses a journal without store identity (``MemoryJournal``,
         a plain ``DirJournal``) and a transport that does not keep its records, and it refuses
         a store whose journal and anchor share a filesystem unless the caller explicitly
@@ -1372,11 +1378,15 @@ class Coordinator:
         history lost after the continuity step is noticed by the next operation or tick, not
         necessarily before this tick's remaining dispatches;
       * candidates are supplied by the caller (no mission decomposition) and are validated
-        before anything else happens. ``depends_on`` is accepted by that validation but
-        ``Planner.dispatch`` validates an item on its own, so a candidate with dependencies
-        is reported as refused;
-      * a halted status (``state: HALTED``) is written when continuity fails during a tick;
-        a failure of any other kind leaves the previous status in place;
+        before anything else happens. A dependency must be in the same list (otherwise the
+        list is invalid and the tick raises); a candidate with ``depends_on`` is not selected
+        until its dependency is completed and is then reported as refused, because
+        ``Planner.dispatch`` validates an item on its own: dependencies are not supported;
+      * a halted status (``state: HALTED``) is written, best effort, when continuity fails
+        in the constructor or during a tick; a failure of any other kind leaves the previous
+        status in place;
+      * a continuity check may itself acknowledge events it replays (the newest event, or
+        the head's acknowledgement when only that file was lost);
       * no leases and no executor assignment.
     """
 
@@ -1422,10 +1432,19 @@ class Coordinator:
             )
         self.journal = journal
         self.max_live = max_live
-        self.planner = Planner(
-            transport, identity=identity, verifier_identities=verifier_identities, journal=journal
-        )
-        self._continuity()
+        if self.status_path.is_dir():
+            raise PlannerError(f"STATUS_PATH:{self.status_path} is a directory")
+        try:
+            self.planner = Planner(
+                transport,
+                identity=identity,
+                verifier_identities=verifier_identities,
+                journal=journal,
+            )
+            self._continuity()
+        except JournalCorrupt as exc:
+            self._halted(exc)
+            raise
 
     def _continuity(self) -> None:
         """Replay, witness the transport, and re-read the whole journal against the anchor.
@@ -1439,6 +1458,10 @@ class Coordinator:
         """
         published = self.planner.transport.published(Channel.WORK)  # type: ignore[attr-defined]
         self.planner.sync()
+        if self.planner.state.seq:
+            # a planner's own replay checks its head's bytes but not its acknowledgement; put
+            # it (back) before anything is appended after it, as any other replayer would
+            self.journal.acknowledge(self.planner.state.seq, self.planner.state.head)
         known = {w.seal for w in self.planner.state.works.values()}
         unknown = sorted(r.seal for r in published if r.seal not in known)
         if unknown:
@@ -1463,9 +1486,10 @@ class Coordinator:
         own invalidity is reported under ``deferred`` and may be proposed again.
 
         Raises ``JournalCorrupt`` when continuity cannot be established or is lost during the
-        tick; a ``HALTED`` status naming the reason is written first. Continuity is checked
-        before recover, pump and the first dispatch; if it fails there, nothing was appended
-        or published by this tick.
+        tick; a ``HALTED`` status naming the reason is written first if the status file can be
+        written. Continuity is checked before recover, pump and the first dispatch; if it
+        fails there, no event was appended and nothing was published by this tick. An
+        ``OSError`` from the store, the transport or the status file is raised as it is.
         """
         items = [self._candidate(c) for c in candidates]
         validate(item for item, _ in items)  # duplicate ids, cycles, malformed items
@@ -1507,7 +1531,7 @@ class Coordinator:
                 admitted.append(item.task_id)
             rows = fleet_status(self.journal)
         except JournalCorrupt as exc:
-            self._write_status(self._header("HALTED") | {"reason": str(exc)})
+            self._halted(exc)
             raise
         status = self._header("OK") | {
             "journal": {"seq": p.state.seq, "head": p.state.head},
@@ -1524,7 +1548,13 @@ class Coordinator:
         self._write_status(status)
         return status
 
-    _RESERVED_WORK_KEYS = frozenset({"live_limit", "retain_terminal_scopes", "execution_ordinal"})
+    _RESERVED_WORK_KEYS = frozenset(
+        {"self", "item", "live_limit", "retain_terminal_scopes", "execution_ordinal"}
+    )
+
+    def _halted(self, exc: JournalCorrupt) -> None:
+        with contextlib.suppress(OSError):  # the continuity failure is what must surface
+            self._write_status(self._header("HALTED") | {"reason": str(exc)})
 
     def _candidate(self, c: object) -> tuple[QueueItem, dict[str, Any]]:
         if not isinstance(c, tuple) or len(c) != 2:

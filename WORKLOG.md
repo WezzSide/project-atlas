@@ -16241,29 +16241,34 @@ test changed):
   store id into each; `attach(root, anchor)` creates nothing and requires both markers to
   exist and agree. The identity is re-checked on every `read` (every replay), before every
   append and before every acknowledgement, so a missing, re-created or foreign anchor or
-  journal directory raises `JournalCorrupt` (`STORE_IDENTITY`) for a running planner as well
-  as a new one, at any journal length. Checked at the replay that starts an operation,
-  nothing is appended; lost between a commit's append and its acknowledgement, the event
+  journal directory raises `JournalCorrupt` for a running planner as well as a new one, at
+  any journal length (`STORE_IDENTITY`; a running planner that already holds events and loses
+  the journal directory gets `JOURNAL_DIVERGED` from its head check first). Checked at the
+  replay that starts an operation, no event is appended; lost between a commit's append and its acknowledgement, the event
   stays linked, unacknowledged and unpublished. `boundary` reports `SAME_FILESYSTEM` or
   `SEPARATE_FILESYSTEM` from `st_dev`.
 - `SpoolTransport.published(channel)`: read-only list of the decodable records the spool
   directory holds now, pending or claimed.
 - `Planner.dispatch(..., live_limit=n, retain_terminal_scopes=bool)`: two optional refusals
   decided inside the journal commit. `LIVE_LIMIT` when `n` lineages are DISPATCHED, VERIFYING
-  or REPAIR_DISPATCHED. `SCOPE_RETAINED` when the work overlaps the last work of a BLOCKED or
-  OWNER_REQUIRED lineage. Defaults leave the existing behaviour unchanged.
+  or REPAIR_DISPATCHED. `SCOPE_RETAINED` when the work overlaps the last work of any lineage
+  that no longer holds its scope: BLOCKED, OWNER_REQUIRED, or INTEGRATION_READY released with
+  `release_scope`. Defaults leave the existing behaviour unchanged.
 - `Coordinator(journal, transport, identity=, verifier_identities=, status_path=, max_live=,
   accept_same_filesystem=)` and `Coordinator.tick(candidates)`:
   1. candidates are validated (shape, reserved keys, duplicate ids, queue validation) before
      anything is read or written;
-  2. continuity: list the transport's WORK records, replay, require every listed record to be
-     a work the journal knows (`JOURNAL_BEHIND_TRANSPORT`), then re-read the whole journal
-     against the anchor (so a lost event below the coordinator's head is noticed too);
+  2. continuity: list the transport's WORK records, replay, put the head's acknowledgement
+     back if only that file is missing, require every listed record to be a work the journal
+     knows (`JOURNAL_BEHIND_TRANSPORT`), then re-read the whole journal against the anchor
+     (so a lost event below the coordinator's head is noticed too);
   3. `recover()`; 4. `pump()`;
   5. dispatch of the next admissible candidates into the transport, with `live_limit` and
      `retain_terminal_scopes`, reporting scope collisions, retained scopes, contention and
      refused candidates under `deferred`;
-  6. atomic status file: `state` (`OK`, or `HALTED` with the reason when continuity failed),
+  6. atomic status file: `state` (`OK`, or `HALTED` with the reason when continuity failed
+     in the constructor or a tick; best effort, a status that cannot be written does not mask
+     the continuity failure),
      store id, `continuity_boundary`, `live_conflicting_work_boundary: NOT_ESTABLISHED`,
      journal seq and head, live, admitted, deferred, recovered, record counts, `fleet_status`
      rows; no wall-clock value.
@@ -16283,16 +16288,20 @@ Activation boundaries, as implemented:
   already had the dispatch. With that ledger lost as well, the adapter dispatched the same
   payload a second time (pinned by the same test): the protection is the adapter's ledger.
 - No scope handover: the coordinator does not call `fail_execution` or `release_scope`, and
-  with `retain_terminal_scopes` it admits nothing over the scope of a BLOCKED or
-  OWNER_REQUIRED lineage. `pump` does move lineages into those phases on a verdict or a
-  missing independent verifier; that is not treated as a release. Nothing can re-open such a
-  scope for the coordinator yet. The planner's own default (those phases release scope) is
-  unchanged for direct callers.
+  with `retain_terminal_scopes` it admits nothing over the scope of a lineage that gave its
+  scope up: BLOCKED or OWNER_REQUIRED (which `pump` produces on a verdict or a missing
+  independent verifier, and another caller's `fail_execution` produces on a report), and
+  INTEGRATION_READY released by another caller's `release_scope` on a revision it asserts.
+  None of these is treated as a release. Nothing can re-open such a scope for the coordinator
+  yet: a path any lineage of the journal has claimed stays closed to it. The planner's own
+  default is unchanged for direct callers, who can still admit over such a scope.
 
 Limits:
 - No entrypoint constructs a `Coordinator`; candidates are supplied by the caller.
-  A candidate with `depends_on` is refused, because `Planner.dispatch` validates an item on
-  its own.
+  Dependencies are not supported: a dependency outside the candidate list makes the list
+  invalid (the tick raises before doing anything); inside the list, the dependent candidate
+  is not selected until its dependency is completed and is then reported as refused, because
+  `Planner.dispatch` validates an item on its own.
 - The witness covers WORK records the spool still holds: it detects a journal that no longer
   knows a published work (lost DISPATCH or REPAIR event, including journal and anchor rolled
   back together with the spool intact). It does not detect a lost later event of a lineage
@@ -16305,8 +16314,11 @@ Limits:
   attached nor re-created.
 - One tick is not atomic: a crash between steps is finished by the next tick, and history
   lost after the continuity step is noticed by the next operation or tick.
-- A `HALTED` status is written only for a continuity failure during a tick; another failure
-  leaves the previous status in place.
+- A `HALTED` status is written only for a continuity failure; another failure leaves the
+  previous status in place. A continuity check may itself write acknowledgements (for the
+  newest event, or the head's lost acknowledgement).
+- The status path guard covers the journal, the anchor and a transport that exposes `root`;
+  the path is resolved once at construction.
 - `max_live` is enforced per commit against the journal; coordinators configured with
   different limits each enforce their own.
 - No leases, executor assignment, verified release or fencing; no mission decomposition.
@@ -16315,18 +16327,20 @@ Limits:
   skipped where there is none.
 
 Commands and results (`PYTHONPATH=<worktree>/src`, `--no-cov -o addopts=""`):
-- `pytest tests/unit/test_orchestration_dev_coordinator.py` (new): 24 passed; 300
-  consecutive runs, 24 passed each (on this host `/dev/shm` is a second filesystem, so the
-  boundary test ran). The first version of this file (14 tests) failed once in an independent
-  verifier's 571 runs: the witness listed the transport after its replay and took a peer's
-  fresh dispatch for lost history. The order was reversed and a test pins it.
+- `pytest tests/unit/test_orchestration_dev_coordinator.py` (new): 27 passed; 120
+  consecutive runs under a hang detector, 27 passed each (on this host `/dev/shm` is a second
+  filesystem, so the boundary test ran). The first version of this file (14 tests) failed
+  once in an independent verifier's 571 runs: the witness listed the transport after its
+  replay and took a peer's fresh dispatch for lost history. The order was reversed;
+  `test_another_coordinators_dispatch_is_never_mistaken_for_lost_history` fails when it is
+  reversed back (checked on a scratch copy: 1 failed, 26 passed).
 - The same file against main's `dev_planner.py` and `dev_spool_transport.py`: 1 error during
   collection (the imported names do not exist there).
 - `test_orchestration_dev_loop_contracts.py`, `_dev_queue.py`, `_dev_fabric_adapter.py`,
   `_dev_package.py`, `_dev_package_repair.py`, `_dev_crosswalk.py`, `_dev_spool_transport.py`,
-  `_dev_planner_journal.py`, `_dev_coordinator.py`: 835 passed.
+  `_dev_planner_journal.py`, `_dev_coordinator.py`: 838 passed.
 - `pytest tests/unit -k "orchestration_dev or dev_package or executor or agent_execute or
-  workflow or autonomy or global_foundation or github_port"`: 1533 passed, 5152 deselected.
+  workflow or autonomy or global_foundation or github_port"`: 1536 passed, 5152 deselected.
 - `ruff check .`: clean. `ruff format --check` on the three changed code files: clean.
   `mypy src`: no issues in 415 source files.
 - The full test suite was not run locally.
