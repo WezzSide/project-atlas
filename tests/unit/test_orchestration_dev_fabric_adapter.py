@@ -12,6 +12,7 @@ from project_atlas.orchestration.autonomy.dev_fabric_adapter import (
     AdapterError,
     CheckRun,
     CompareInfo,
+    DispatchPayload,
     FabricAdapter,
     RunInfo,
     build_dispatch_payload,
@@ -936,3 +937,139 @@ def test_invalid_utf8_in_pending_files_is_parked_not_fatal(tmp_path, prefix):
     )
     ad2.tick()
     assert list(ad.pending.glob(f"{prefix}{'0' * 64}.rejected"))
+
+
+# -- HARDEN-DEVLOOP-002 (ATLAS-DEVQ-0003): the sealed base revision is a dispatched input --------
+
+
+def _ledger_payload_sha(xw, seal):
+    hop = xw.hop(seal, "DISPATCH")
+    assert hop is not None
+    return hop["payload_sha256"]
+
+
+def test_attempt_one_dispatch_carries_the_sealed_base_revision(tmp_path):
+    gh = FakeGitHub()
+    _spool, _xw, ad, _pl = build(tmp_path, gh)
+    ad.tick()
+    (work,) = ad.works.values()
+    assert work.attempt == 1
+    _wf, ref, inputs = gh.dispatches[-1]
+    assert ref == "main" and inputs["base_branch"] == "main"
+    assert set(inputs) == {"task_prompt", "base_branch", "agent_type", "base_revision"}
+    sent = inputs["base_revision"]
+    assert sent == work.base_revision == BASE
+    assert len(sent) == 40 and all(c in "0123456789abcdef" for c in sent)
+
+
+def test_ledger_payload_hash_binds_the_exact_inputs_sent_including_base_revision(tmp_path):
+    gh = FakeGitHub()
+    _spool, xw, ad, _pl = build(tmp_path, gh)
+    ad.tick()
+    (work,) = ad.works.values()
+    workflow, ref, inputs = gh.dispatches[-1]
+    recorded = _ledger_payload_sha(xw, work.seal)
+    assert recorded == DispatchPayload(workflow=workflow, ref=ref, inputs=inputs).sha256()
+    # a hash taken before the input was added (or of a payload without it) is not what is bound
+    without = {k: v for k, v in inputs.items() if k != "base_revision"}
+    assert recorded != DispatchPayload(workflow=workflow, ref=ref, inputs=without).sha256()
+    # and the bound hash depends on the revision value itself
+    moved = {**inputs, "base_revision": R1}
+    assert recorded != DispatchPayload(workflow=workflow, ref=ref, inputs=moved).sha256()
+
+
+def test_dispatch_returns_the_payload_that_was_hashed_and_sent(tmp_path):
+    gh = FakeGitHub()
+    spool = SpoolTransport(tmp_path / "spool")
+    xw = Crosswalk(tmp_path / "xw.jsonl")
+    ad = FabricAdapter(
+        gh,
+        spool,
+        xw,
+        pending_dir=tmp_path / "pending",
+        clock=lambda: "2026-09-30T15:59:00Z",
+        task_statement=statement,
+        required_checks=frozenset({"quality"}),
+    )
+    work = make_work(task_id="T", execution_id="T-E1", lineage_root="T", **FIELDS)
+    payload = ad.dispatch(work)
+    workflow, ref, inputs = gh.dispatches[-1]
+    assert (payload.workflow, payload.ref, payload.inputs) == (workflow, ref, inputs)
+    assert payload.inputs["base_revision"] == work.base_revision
+    assert _ledger_payload_sha(xw, work.seal) == payload.sha256()
+
+
+def test_repair_dispatch_carries_the_repair_works_sealed_base_revision(tmp_path):
+    gh = FakeGitHub()
+    _spool, xw, ad, pl = build(tmp_path, gh)
+    ad.tick()
+    rid = gh.executor_finishes(R1, T1)
+    ad.tick()
+    pl.pump()
+    ad.tick()
+    gh.verifier_runs(rid, "VERIFIED")
+    gh.checks[R1] = {"quality": ("completed", "failure")}
+    ad.tick()
+    pl.pump()
+    repair = pl.lineages["DEVQ-1"].work
+    assert repair.attempt == 2 and repair.base_revision == R1
+    assert "ACCEPTED:DEVQ-1-R1" in ad.tick()
+    assert len(gh.dispatches) == 2
+    workflow, ref, inputs = gh.dispatches[-1]
+    assert inputs["base_branch"] == f"atlas/agent-{rid}-1"  # branch selection unchanged
+    assert inputs["base_revision"] == repair.base_revision == R1
+    assert inputs["base_revision"] != gh.dispatches[0][2]["base_revision"]
+    assert (
+        _ledger_payload_sha(xw, repair.seal)
+        == DispatchPayload(workflow=workflow, ref=ref, inputs=inputs).sha256()
+    )
+
+
+def test_sealed_revision_is_sent_even_if_the_branch_moves_after_the_pre_dispatch_check(tmp_path):
+    """TOCTOU: the branch-head check passes, then the branch moves before the runner checks out.
+
+    The dispatched contract still carries the immutable sealed revision (never a branch read),
+    which is the value the execute workflow's sealed-base assertion compares against.
+    """
+    moved = "9" * 40
+
+    class MovingGitHub(FakeGitHub):
+        def branch_head(self, branch):
+            head = super().branch_head(branch)
+            if branch == "main":
+                self.branches["main"] = moved  # the branch moves right after the guard read
+            return head
+
+    gh = MovingGitHub()
+    _spool, _xw, ad, _pl = build(tmp_path, gh)
+    ad.tick()
+    (work,) = ad.works.values()
+    assert gh.branches["main"] == moved  # the guard ran and the branch has since moved
+    inputs = gh.dispatches[-1][2]
+    assert inputs["base_revision"] == work.base_revision == BASE != moved
+
+
+def test_live_dispatch_differs_from_the_builder_payload_by_exactly_base_revision(tmp_path):
+    """Explicit, not silent: package/builder inputs and live adapter inputs are NOT identical."""
+    from pathlib import Path
+
+    from project_atlas.orchestration.autonomy import dev_fabric_adapter, dev_package
+
+    gh = FakeGitHub()
+    _spool, xw, ad, _pl = build(tmp_path, gh)
+    ad.tick()
+    (work,) = ad.works.values()
+    text, commands = statement(work)
+    built = build_dispatch_payload(
+        work, base_branch="main", task_statement=text, acceptance_commands=commands
+    )
+    assert "base_revision" not in built.inputs  # builder (and so implementation packages) unchanged
+    workflow, ref, inputs = gh.dispatches[-1]
+    assert (workflow, ref) == (built.workflow, built.ref)
+    assert inputs == {**built.inputs, "base_revision": work.base_revision}
+    assert _ledger_payload_sha(xw, work.seal) != built.sha256()
+    assert dev_fabric_adapter.BASE_REVISION_INPUT == dev_package.BASE_REVISION_INPUT
+    wf = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "atlas-agent-execute.yml"
+    declared = wf.read_text(encoding="utf-8")
+    assert f"      {dev_fabric_adapter.BASE_REVISION_INPUT}:\n" in declared
+    assert "BASE_REVISION: ${{ inputs.base_revision }}" in declared

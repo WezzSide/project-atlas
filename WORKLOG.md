@@ -15566,3 +15566,50 @@ Not done / deferred (retained, not repaired under this lineage):
   `read_json_artifact` exposure is outside the sealed scope.
 - ftp test observation: the ftp parameter fails on the pre-repair base only via
   `__context__ is None` (non-blocking test-semantics note).
+
+## 2026-10-04 — ATLAS-DEVQ-0003 (HARDEN-DEVLOOP-002): adapter dispatch carries the sealed base_revision (trust surface, owner review)
+
+Owner-authorized direct change to the floor module `dev_fabric_adapter.py` (Option A). No model
+executor was dispatched; no workflow, `dev_package.py`, contract or golden-hash change.
+
+Gap: `FabricAdapter.dispatch` sent `task_prompt`, `base_branch`, `agent_type` only, so the execute
+workflow's sealed-base assertion (#1057) saw an empty `base_revision` and skipped itself for
+adapter-originated runs. The adapter's `branch_head` check is a pre-dispatch guard only; a branch
+moving between that check and the runner checkout was not caught (TOCTOU).
+
+Change (`FabricAdapter.dispatch` only; `build_dispatch_payload` body untouched, docstring
+clarified):
+- After building the payload, one final `DispatchPayload` is formed with
+  `inputs[base_revision] = work.base_revision` (the sealed WorkItem value, never a branch read).
+- That same object is hashed into the DISPATCH ledger hop (`payload_sha256`), sent to
+  `dispatch_workflow`, and returned. No hash-before-mutation.
+- New module constant `BASE_REVISION_INPUT` (equal to `dev_package.BASE_REVISION_INPUT`, which
+  cannot be imported here because that module imports this one; a test pins the equality).
+
+Package / live-payload semantics (explicit): the builder still emits no `base_revision`, so
+implementation-package bytes and pinned golden hashes are unchanged. A live adapter dispatch
+therefore differs from an attempt-1 package's `workflow_inputs` by exactly that one key, and its
+ledger `payload_sha256` differs from the package's `workflow_inputs_sha256`. No code on main
+compares the two (checked: `payload_sha256` is written by `Crosswalk.bind_dispatch` and consumed
+nowhere else; `workflow_inputs_sha256` is checked only inside `dev_package.verify_checkout_ref`
+against the package's own inputs).
+
+Tests (six new, in `tests/unit/test_orchestration_dev_fabric_adapter.py`): attempt-1 input present
+and equal to the sealed value (40 lowercase hex); ledger hash binds the exact inputs sent and
+differs from the hash without the key or with another revision; returned payload is the one
+hashed and sent; repair dispatch carries the repair work's sealed revision with branch selection
+unchanged; branch moving after the guard read still sends the sealed revision; live inputs equal
+builder inputs plus exactly `base_revision`, and the workflow declares that input.
+
+Commands and results:
+- The six new tests against base source `c06e3aee`: 6 failed. Against this change: 6 passed.
+- `pytest tests/unit/test_orchestration_dev_fabric_adapter.py test_orchestration_dev_package.py
+  test_orchestration_dev_package_repair.py test_orchestration_dev_first_run.py
+  test_executor_sealed_base_assert.py test_orchestration_dev_crosswalk.py -q --no-cov`: 538
+  passed; no golden value re-pinned.
+- `ruff check`, `ruff format --check` on the two changed code files, `mypy` on the adapter: clean.
+
+Not done:
+- Not live-validated: no workflow run was dispatched through the adapter.
+- `FabricAdapter` is still constructed only in tests; nothing in `src/` wires it live.
+- Implementation packages still do not emit `base_revision` (Option B, not authorized).
