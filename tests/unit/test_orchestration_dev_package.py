@@ -747,3 +747,266 @@ def test_dev_first_run_package_unchanged_and_module_untouched() -> None:
     assert "CONFIRMED_PRESENT" in rendered  # DEVQ-0001 keeps its owner-statement wording
     data = Path(dev_first_run.__file__).read_bytes()
     assert _git_blob_sha(data) == DEV_FIRST_RUN_BLOB_SHA, "dev_first_run.py changed: update pin"
+
+
+# -- ATLAS-DEVQ-0005: binding a rendered package to its sealed work item -------------------
+
+
+def _rerender(pkg: dict[str, Any]) -> tuple[str, str]:
+    from project_atlas.orchestration.autonomy.dev_fabric_adapter import DispatchPayload
+
+    pkg["workflow_inputs_sha256"] = DispatchPayload(
+        workflow=pkg["workflow"], ref=pkg["workflow_ref"], inputs=pkg["workflow_inputs"]
+    ).sha256()
+    text = render_package(pkg)
+    return text, package_sha256(text)
+
+
+@pytest.mark.parametrize("over", [{}, {"attempt": 2, "execution_ordinal": 2}, "repair", "multi"])
+def test_binder_is_pure_and_returns_the_rebuilt_canonical_payload(
+    over: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import builtins
+    import socket
+    import subprocess
+
+    from project_atlas.orchestration.autonomy.dev_fabric_adapter import (
+        build_sealed_dispatch_payload,
+    )
+    from project_atlas.orchestration.autonomy.dev_package import (
+        PackageBinding,
+        bind_package_to_work,
+    )
+
+    if over == "repair":
+        over = _repair_over()
+    elif over == "multi":
+        over = {"statement": "First line.\n\nONLY the second line matters.\nrun it twice\n"}
+    spec = load_spec(_spec_text(**over))
+    work = build_work(spec)
+    pkg = build_package(spec)
+    rendered = render_package(pkg)
+
+    def forbidden(*_a: object, **_k: object) -> None:
+        raise AssertionError("the binder must not touch files, sockets or subprocesses")
+
+    monkeypatch.setattr(builtins, "open", forbidden)
+    monkeypatch.setattr(socket, "socket", forbidden)
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+    binding = bind_package_to_work(
+        rendered, expected_package_sha256=package_sha256(rendered), work=work
+    )
+    monkeypatch.undo()
+    assert isinstance(binding, PackageBinding)
+    branch = pkg["workflow_inputs"]["base_branch"]
+    canonical = build_sealed_dispatch_payload(
+        work,
+        base_branch=branch,
+        task_statement=effective_statement(spec),
+        acceptance_commands=spec.acceptance_commands,
+    )
+    assert binding.payload == canonical
+    assert binding.payload.inputs is not pkg["workflow_inputs"]
+    assert binding.payload.sha256() == pkg["workflow_inputs_sha256"]
+    assert (binding.package_sha256, binding.work_seal) == (package_sha256(rendered), work.seal)
+    assert (binding.attempt_kind, binding.base_branch) == (spec.attempt_kind, branch)
+    assert render_package(build_package(spec)) == rendered  # binding changed nothing
+
+
+def test_binder_refuses_a_work_item_that_seals_no_instructions_digest() -> None:
+    """A work item not produced by this builder has nothing to bind the statement to."""
+    from project_atlas.orchestration.autonomy.dev_contracts import make_work
+    from project_atlas.orchestration.autonomy.dev_package import bind_package_to_work
+
+    spec = load_spec(_spec_text())
+    plain = make_work(
+        task_id=spec.task_id,
+        execution_id=spec.execution_id,
+        lineage_root=spec.lineage_root,
+        repository=spec.repository,
+        base_revision=spec.base_revision,
+        authority_ref=spec.authority_ref,
+        allowed_paths=spec.allowed_paths,
+        forbidden_paths=spec.forbidden_paths,
+        expected_outputs=spec.expected_outputs,
+        acceptance_contract=spec.acceptance_contract,
+        attempt=spec.attempt,
+        max_attempts=spec.max_attempts,
+    )
+    pkg = build_package(spec)
+    pkg["work_seal"] = plain.seal
+    text, sha = _rerender(pkg)
+    with pytest.raises(PackageSpecError) as ei:
+        bind_package_to_work(text, expected_package_sha256=sha, work=plain)
+    # the package still states the builder's contract (with the digest entry); the work's differs
+    assert ei.value.reason == "BINDING_DESCRIPTION_MISMATCH"
+    # even a package that states exactly the work's contract cannot bind: nothing is sealed
+    pkg["acceptance"]["contract"] = list(plain.acceptance_contract)
+    text, sha = _rerender(pkg)
+    with pytest.raises(PackageSpecError) as ei:
+        bind_package_to_work(text, expected_package_sha256=sha, work=plain)
+    assert ei.value.reason == "BINDING_INSTRUCTIONS_MISMATCH"
+    # and two sealed digest entries are as unusable as none: build a package that is otherwise
+    # fully correct for such a work item (canonical prompt, matching digests, matching contract)
+    from project_atlas.orchestration.autonomy.dev_fabric_adapter import (
+        build_sealed_dispatch_payload,
+    )
+
+    digest = next(c for c in build_work(spec).acceptance_contract if c.startswith("instructions_"))
+    twice = make_work(
+        task_id=spec.task_id,
+        execution_id=spec.execution_id,
+        lineage_root=spec.lineage_root,
+        repository=spec.repository,
+        base_revision=spec.base_revision,
+        authority_ref=spec.authority_ref,
+        allowed_paths=spec.allowed_paths,
+        forbidden_paths=spec.forbidden_paths,
+        expected_outputs=spec.expected_outputs,
+        acceptance_contract=(*spec.acceptance_contract, digest, digest),
+        attempt=spec.attempt,
+        max_attempts=spec.max_attempts,
+    )
+    canonical = build_sealed_dispatch_payload(
+        twice,
+        base_branch="main",
+        task_statement=spec.statement,
+        acceptance_commands=spec.acceptance_commands,
+    )
+    pkg = build_package(spec)
+    pkg["work_seal"] = twice.seal
+    pkg["acceptance"]["contract"] = list(twice.acceptance_contract)
+    pkg["workflow_inputs"] = dict(canonical.inputs)
+    pkg["workflow_inputs_sha256"] = canonical.sha256()
+    text, sha = _rerender(pkg)
+    with pytest.raises(PackageSpecError) as ei:
+        bind_package_to_work(text, expected_package_sha256=sha, work=twice)
+    assert ei.value.reason == "BINDING_INSTRUCTIONS_MISMATCH"
+    assert "exactly one" in ei.value.detail
+    # anything that is not a sealed WorkItem is refused with a binding reason, not a crash
+    for bogus in (None, {"seal": plain.seal}, "work"):
+        with pytest.raises(PackageSpecError) as ei:
+            bind_package_to_work(text, expected_package_sha256=sha, work=bogus)  # type: ignore[arg-type]
+        assert ei.value.reason == "BINDING_WORK_INVALID"
+
+
+def test_binder_refuses_a_work_item_whose_seal_does_not_verify() -> None:
+    from project_atlas.orchestration.autonomy.dev_package import bind_package_to_work
+
+    spec = load_spec(_spec_text())
+    rendered = render_package(build_package(spec))
+    broken = build_work(spec).model_copy(update={"authority_ref": "OTHER-AUTHORITY"})
+    with pytest.raises(PackageSpecError) as ei:
+        bind_package_to_work(
+            rendered, expected_package_sha256=package_sha256(rendered), work=broken
+        )
+    assert ei.value.reason == "BINDING_WORK_INVALID"
+
+
+def test_repair_statement_binding_requires_exactly_the_repair_suffix() -> None:
+    """A repair prompt without the fixed suffix does not reproduce the sealed instructions."""
+    from project_atlas.orchestration.autonomy.dev_package import bind_package_to_work
+
+    spec = load_spec(_spec_text(**_repair_over()))
+    work = build_work(spec)
+    pkg = build_package(spec)
+    assert REPAIR_SUFFIX in pkg["workflow_inputs"]["task_prompt"]
+    pkg["workflow_inputs"]["task_prompt"] = pkg["workflow_inputs"]["task_prompt"].replace(
+        REPAIR_SUFFIX, ""
+    )
+    text, sha = _rerender(pkg)
+    with pytest.raises(PackageSpecError) as ei:
+        bind_package_to_work(text, expected_package_sha256=sha, work=work)
+    assert ei.value.reason == "BINDING_INSTRUCTIONS_MISMATCH"
+    # a tail of the same LENGTH as the suffix but different text must not be stripped as if it
+    # were the suffix (that would bind a statement the seal never covered)
+    pkg = build_package(spec)
+    assert pkg["workflow_inputs"]["task_prompt"].count(REPAIR_SUFFIX) == 1
+    pkg["workflow_inputs"]["task_prompt"] = pkg["workflow_inputs"]["task_prompt"].replace(
+        REPAIR_SUFFIX, "x" * len(REPAIR_SUFFIX)
+    )
+    text, sha = _rerender(pkg)
+    with pytest.raises(PackageSpecError) as ei:
+        bind_package_to_work(text, expected_package_sha256=sha, work=work)
+    assert ei.value.reason == "BINDING_INSTRUCTIONS_MISMATCH"
+
+
+def test_verify_checkout_ref_reasons_and_order_are_unchanged_by_the_extraction() -> None:
+    """Same reasons, same precedence, for a representative tamper matrix."""
+    import copy
+
+    from project_atlas.orchestration.autonomy.dev_package import (
+        bind_package_to_work,
+        verify_checkout_ref,
+    )
+
+    spec = load_spec(_spec_text())
+    work = build_work(spec)
+    good = build_package(spec)
+    base = spec.base_revision
+    other = "f" * 40
+    verify_checkout_ref(good, base)
+
+    def stale(p: dict[str, Any]) -> None:
+        p["provenance"]["builder"] = "dev_package/1"
+
+    def bad_digest(p: dict[str, Any]) -> None:
+        p["workflow_inputs_sha256"] = "0" * 64
+
+    def stale_and_bad_digest(p: dict[str, Any]) -> None:
+        stale(p)
+        bad_digest(p)
+
+    def no_inputs_and_stale(p: dict[str, Any]) -> None:
+        stale(p)
+        del p["workflow_inputs"]
+
+    def unsafe_branch(p: dict[str, Any]) -> None:
+        p["workflow_inputs"]["base_branch"] = "a..b"
+
+    def other_branch(p: dict[str, Any]) -> None:
+        p["workflow_inputs"]["base_branch"] = "dev"
+
+    def moved_input(p: dict[str, Any]) -> None:
+        p["workflow_inputs"]["base_revision"] = other
+
+    # (mutation, re-hash the inputs digest, resolved sha, expected reason)
+    matrix: list[tuple[Any, bool, object, str]] = [
+        (lambda p: None, False, "nope", "CHECKOUT_SHA_INVALID"),
+        (lambda p: None, False, None, "CHECKOUT_SHA_INVALID"),
+        (lambda p: None, False, other, "CHECKOUT_REF_MISMATCH"),
+        (stale, False, base, "PACKAGE_BUILDER_UNSUPPORTED"),
+        (stale, False, "nope", "PACKAGE_BUILDER_UNSUPPORTED"),  # consistency before the sha
+        (stale_and_bad_digest, False, base, "PACKAGE_BUILDER_UNSUPPORTED"),  # builder first
+        (no_inputs_and_stale, False, base, "CHECKOUT_PACKAGE_INVALID"),  # shape before builder
+        (bad_digest, False, "nope", "CHECKOUT_PACKAGE_INVALID"),
+        (unsafe_branch, False, base, "CHECKOUT_PACKAGE_INVALID"),  # digest before branch shape
+        (unsafe_branch, True, base, "BASE_BRANCH_INVALID"),
+        (other_branch, True, base, "CHECKOUT_PACKAGE_INVALID"),
+        (moved_input, True, other, "CHECKOUT_PACKAGE_INVALID"),
+        (lambda p: p.pop("provenance"), False, base, "PACKAGE_BUILDER_UNSUPPORTED"),
+    ]
+    for mutate, rehash, sha, reason in matrix:
+        pkg = copy.deepcopy(good)
+        mutate(pkg)
+        if rehash:
+            _rerender(pkg)
+        with pytest.raises(PackageSpecError) as ei:
+            verify_checkout_ref(pkg, sha)
+        assert ei.value.reason == reason
+        if reason.startswith("CHECKOUT_SHA") or reason == "CHECKOUT_REF_MISMATCH":
+            continue  # resolved-sha checks are verify_checkout_ref's alone
+        text = render_package(pkg)
+        with pytest.raises(PackageSpecError) as bi:  # the binder shares the consistency checks
+            bind_package_to_work(text, expected_package_sha256=package_sha256(text), work=work)
+        assert bi.value.reason == reason
+
+
+def test_binder_key_sets_are_exactly_what_the_builder_renders() -> None:
+    from project_atlas.orchestration.autonomy import dev_package
+
+    impl = build_package(load_spec(_spec_text()))
+    repair = build_package(load_spec(_spec_text(**_repair_over())))
+    assert set(impl) == dev_package._PACKAGE_KEYS
+    assert set(repair) == dev_package._PACKAGE_KEYS | dev_package._REPAIR_PACKAGE_KEYS
+    assert not dev_package._PACKAGE_KEYS & dev_package._REPAIR_PACKAGE_KEYS
