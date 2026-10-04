@@ -49,6 +49,15 @@ FIELDS = dict(
 )
 
 
+@pytest.fixture(autouse=True)
+def _short_adoption_wait(monkeypatch):
+    """Adoption waits 2 s for a live writer in production; tests use a dead or absent one."""
+    from project_atlas.orchestration.autonomy import dev_planner
+
+    monkeypatch.setattr(dev_planner, "ADOPT_GRACE_TRIES", 3)
+    monkeypatch.setattr(dev_planner, "ADOPT_GRACE_STEP", 0.001)
+
+
 def fields(*paths):
     return {**FIELDS, "allowed_paths": tuple(paths)}
 
@@ -1516,8 +1525,9 @@ def test_a_planner_one_event_behind_a_lost_tail_stops_without_appending(tmp_path
     assert set(stale.lineages) == {"A"}
 
 
-def test_limit_a_failed_commit_leaves_an_event_that_the_next_replay_adopts(tmp_path):
-    """Pinned: an unacknowledged stored event is adopted by any replay, published by recover."""
+def test_limit_a_failed_commit_leaves_an_event_that_the_next_commit_attempt_adopts(tmp_path):
+    """Pinned: an unacknowledged stored event is applied by any replay, adopted (with a
+    record) by the next commit attempt or recover, and published by recover."""
 
     class Replaced(DirJournal):
         armed = False
@@ -1594,3 +1604,132 @@ def test_limit_partial_anchor_loss_lets_a_stale_running_planner_admit_over_a_los
     assert len(_published(tmp_path)) == 4  # A, B, E and the colliding C
     with pytest.raises(JournalCorrupt):
         p1.select([qi("Z")])  # the planner whose head was lost stops
+
+
+def test_adoption_records_before_it_acknowledges_and_waits_for_a_live_writer(tmp_path):
+    from project_atlas.orchestration.autonomy import dev_planner
+
+    class Orphan(DirJournal):
+        die = False
+        late_ack = None
+
+        def acknowledge(self, seq, digest):
+            if self.die:
+                raise KeyboardInterrupt
+            super().acknowledge(seq, digest)
+
+        looks = 0
+
+        def acknowledged(self, seq):
+            out = super().acknowledged(seq)
+            if self.late_ack:
+                self.looks += 1
+                if self.looks == 2:  # after the first look found nothing: during the wait
+                    late, self.late_ack = self.late_ack, None
+                    late()
+            return out
+
+    t = SpoolTransport(tmp_path / "spool")
+    j = Orphan(tmp_path / "j")
+    p = planner(t, j, "plan-1")
+    p.dispatch(qi("A"), **FIELDS)
+    j.die = True
+    with pytest.raises(KeyboardInterrupt):
+        p.dispatch(qi("B"), **fields("src/y"))  # event 2 linked, never acknowledged
+    ack2 = tmp_path / "j.ack" / "000000000002.ack"
+    digest = hashlib.sha256((tmp_path / "j" / "000000000002.json").read_bytes()).hexdigest()
+
+    # (1) the adopter dies between its record and its acknowledgement: record without ack
+    q = planner(t, j, "plan-2")
+    with pytest.raises(KeyboardInterrupt):
+        q.recover()
+    assert [(r["seq"], r["kind"], r["by"]) for r in j.repairs()] == [(2, "ADOPTED", "plan-2")]
+    assert not ack2.exists() and len(_published(tmp_path)) == 1
+    # (2) the next adopter finishes; the FIRST record stands, it is not overwritten
+    j.die = False
+    r = planner(t, j, "plan-3")
+    assert r.recover() == ["REPUBLISHED:B:WORK"] and ack2.read_text() == digest
+    assert [(x["seq"], x["by"]) for x in j.repairs()] == [(2, "plan-2")]
+
+    # (3) a writer that is merely slow is waited for: its own acknowledgement, no record
+    t2 = SpoolTransport(tmp_path / "spool2")
+    j2 = Orphan(tmp_path / "j2")
+    w = planner(t2, j2, "plan-1")
+    w.dispatch(qi("A"), **FIELDS)
+    j2.die = True
+    with pytest.raises(KeyboardInterrupt):
+        w.dispatch(qi("B"), **fields("src/y"))
+    j2.die = False
+    d2 = hashlib.sha256((tmp_path / "j2" / "000000000002.json").read_bytes()).hexdigest()
+    slow = planner(t2, j2, "plan-2")
+    j2.late_ack = lambda: DirJournal.acknowledge(j2, 2, d2)
+    assert slow.recover() == ["REPUBLISHED:B:WORK"] and j2.repairs() == ()
+    assert j2.looks >= 2 and j2.late_ack is None  # it looked again instead of adopting at once
+    assert dev_planner.ADOPT_GRACE_TRIES * dev_planner.ADOPT_GRACE_STEP < 0.1  # the fixture
+
+    # (4) an acknowledgement for another digest is never adopted over
+    t3 = SpoolTransport(tmp_path / "spool3")
+    j3 = Orphan(tmp_path / "j3")
+    x = planner(t3, j3, "plan-1")
+    x.dispatch(qi("A"), **FIELDS)
+    j3.die = True
+    with pytest.raises(KeyboardInterrupt):
+        x.dispatch(qi("B"), **fields("src/y"))
+    j3.die = False
+    y = planner(t3, j3, "plan-2")
+    (tmp_path / "j3.ack" / "000000000002.ack").write_text("0" * 64, encoding="ascii")
+    with pytest.raises(JournalCorrupt, match="JOURNAL_DIVERGED:event 2 is acknowledged as a diff"):
+        y.recover()
+    assert j3.repairs() == () and len(list((tmp_path / "spool3" / "WORK").glob("*.json"))) == 1
+
+
+def test_the_production_adoption_wait_is_far_above_a_live_writers_gap():
+    import ast
+    import inspect
+
+    from project_atlas.orchestration.autonomy import dev_planner
+
+    # the module's own values as written in its source, not the ones the test fixture sets
+    values = {
+        node.targets[0].id: ast.literal_eval(node.value)
+        for node in ast.parse(inspect.getsource(dev_planner)).body
+        if isinstance(node, ast.Assign)
+        and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id.startswith("ADOPT_GRACE_")
+    }
+    assert values["ADOPT_GRACE_TRIES"] * values["ADOPT_GRACE_STEP"] >= 2.0
+
+
+def test_a_head_acknowledgement_lost_between_replay_and_append_is_restored_with_a_record(
+    tmp_path,
+):
+    class LosesAckAfterSync(DirJournal):
+        armed = False
+
+        def acknowledged(self, seq):
+            out = super().acknowledged(seq)
+            if self.armed and out is not None:  # the replay saw it; then it disappears
+                self.armed = False
+                self._ack(seq).unlink()
+            return out
+
+    t = SpoolTransport(tmp_path / "spool")
+    j = LosesAckAfterSync(tmp_path / "j")
+    p = planner(t, j, "plan-1")
+    p.dispatch(qi("A"), **FIELDS)
+    j.armed = True
+    p.dispatch(qi("B"), **fields("src/y"))  # the check right before the append reads the file
+    assert [(r["seq"], r["kind"]) for r in j.repairs()] == [(1, "RESTORED")]
+    assert sorted(a.name for a in (tmp_path / "j.ack").iterdir() if a.suffix == ".ack") == [
+        "000000000001.ack",
+        "000000000002.ack",
+    ]
+    assert planner(t, DirJournal(tmp_path / "j"), "plan-2").state.seq == 2  # still opens
+
+
+def test_repair_records_do_not_count_as_acknowledgements(tmp_path):
+    t, _p1 = _two_holders(tmp_path)
+    j = DirJournal(tmp_path / "j")
+    j.record_repair(9, "0" * 64, "ADOPTED", "someone")  # a record far beyond the journal
+    assert j.high_water(2, full=True) == 2  # not an acknowledged event: no truncation alarm
+    assert planner(t, DirJournal(tmp_path / "j"), "plan-2").state.seq == 2

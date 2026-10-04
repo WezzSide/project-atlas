@@ -45,6 +45,15 @@ REV1, TREE1 = "b" * 40, "c" * 40
 IMPL, VER = "vps1-impl", "vps2-ver"
 
 
+@pytest.fixture(autouse=True)
+def _short_adoption_wait(monkeypatch):
+    """Adoption waits 2 s for a live writer in production; tests use a dead or absent one."""
+    from project_atlas.orchestration.autonomy import dev_planner
+
+    monkeypatch.setattr(dev_planner, "ADOPT_GRACE_TRIES", 3)
+    monkeypatch.setattr(dev_planner, "ADOPT_GRACE_STEP", 0.001)
+
+
 def cand(task, *paths, **kw):
     item = QueueItem(task_id=task, title=task, category=Category.RELIABILITY, **kw)
     return item, dict(
@@ -932,7 +941,7 @@ def test_a_continuity_failure_during_preparation_halts_instead_of_being_reported
     c.tick([cand("A", "src/a")])
     j.armed = True
     with pytest.raises(JournalCorrupt, match="JOURNAL_DIVERGED:event 1"):
-        c.tick([cand("B", "src/b"), cand("C", "src/c")])
+        c.tick([cand("B", "src/b")])  # one candidate: no later step that would raise instead
     status = json.loads((tmp_path / "status" / "status.json").read_text())
     assert status["state"] == "HALTED" and len(works(tmp_path)) == 1  # B was not published
 
@@ -958,8 +967,49 @@ def test_published_lists_only_records_that_belong_to_the_channel(tmp_path):
     work_dir = tmp_path / "spool" / "WORK"
     real = next((work_dir / "claimed").glob("[0-9a-f]*[0-9a-f].json"))
     (work_dir / ("0" * 64 + ".json")).write_bytes(real.read_bytes())  # name is not its seal
+    # a sealed work the journal never saw, stored under a name that is not its seal: not a
+    # record of this channel as far as a claim is concerned, so not a witness either
+    from project_atlas.orchestration.autonomy.dev_contracts import make_work
+    from project_atlas.orchestration.autonomy.dev_transport import encode
+
+    foreign = make_work(
+        task_id="F",
+        execution_id="F-E1",
+        lineage_root="F",
+        acceptance_contract=("ok",),
+        **cand("F", "src/f")[1],
+    )
+    (work_dir / ("1" * 64 + ".json")).write_text(encode(foreign))
     (work_dir / "junk.json").write_text("{not json")
     request = next((tmp_path / "spool" / "VERIFICATION").glob("*.json"))
     (work_dir / request.name).write_bytes(request.read_bytes())  # a record of another channel
     assert [r.task_id for r in spool.published(Channel.WORK)] == ["A"]
     assert c.tick()["state"] == "OK"  # none of these is a published work unknown to the journal
+
+
+def test_unreadable_repair_evidence_stops_the_tick_before_it_acts(tmp_path):
+    j = store(tmp_path)
+    c = coordinator(tmp_path, max_live=8)
+    c.tick([cand("A", "src/a")])
+    (j.anchor / "000000000001.repair").write_text("garbage")
+    before = tree(tmp_path)
+    with pytest.raises(JournalCorrupt, match=r"repair record 000000000001\.repair"):
+        c.tick([cand("N", "src/n")])
+    assert tree(tmp_path) == before  # N was not appended or published
+    status = json.loads((tmp_path / "status" / "status.json").read_text())
+    assert status["state"] == "HALTED" and "repairs" not in status  # they could not be read
+    with pytest.raises(JournalCorrupt, match="repair record"):
+        coordinator(tmp_path, identity="coord-2")  # and no new coordinator starts on it
+
+
+def test_unreadable_store_directories_at_construction_leave_a_halted_status(tmp_path):
+    j = store(tmp_path)
+    coordinator(tmp_path).tick([cand("A", "src/a")])
+    attached = store(tmp_path, create=False)
+    for f in j.anchor.iterdir():
+        f.unlink()
+    j.anchor.rmdir()
+    with pytest.raises(JournalCorrupt, match="STORE_IDENTITY:store directories are not readable"):
+        coordinator(tmp_path, attached, identity="coord-2")
+    status = json.loads((tmp_path / "status" / "status.json").read_text())
+    assert status["state"] == "HALTED" and status["continuity_boundary"] == "UNKNOWN"

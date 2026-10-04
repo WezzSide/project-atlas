@@ -96,10 +96,12 @@ Limits (what this is NOT):
     new planner would refuse (a running planner probes only the next acknowledgement, a full
     open lists the anchor). The default anchor is a sibling directory, so a rollback of the
     common parent is such a case. Also outside: the anchor alone lost under a running planner
-    on a plain ``DirJournal`` (a planner at the head continues against its complete replica;
-    one event behind it adopts and re-anchors that event; two or more behind it fails closed;
-    new planners refuse a journal of two or more events; an anchor that cannot be written
-    raises ``OSError`` after the event was linked, with nothing published); a writer who
+    on a plain ``DirJournal`` (a planner at the head continues against its complete replica
+    and restores its head's acknowledgement with a ``RESTORED`` record; one event behind it
+    adopts that event with an ``ADOPTED`` record; two or more behind it fails closed; new
+    planners refuse a journal of two or more events; an anchor that cannot be written raises
+    ``OSError`` with nothing published, before the append when it is the repair record that
+    cannot be written, after it when it is the new event's acknowledgement); a writer who
     rewrites journal and anchor. A ``StoreJournal`` (below) turns a missing, re-created or
     foreign anchor into a refusal for every planner, running or new, at any journal length;
   * loss of acknowledged continuity stays observable. The one repair done here is of the
@@ -133,7 +135,7 @@ Store identity and coordinator (ATLAS-DEVQ-0008): ``StoreJournal`` is a ``DirJou
 journal and anchor directories are created once, carry one store id, and are afterwards only
 attached, never created. ``Coordinator`` runs recover, pump and the preparation of further
 compatible lineages as one ``tick`` on such a store and writes a journal-derived status file.
-It refuses a journal without store identity and a transport that does not keep its records,
+It refuses a journal without store identity and a transport without the record-listing methods,
 checks that every published WORK record is known to the journal (a witness that does not
 depend on the anchor), and never dispatches an executor or hands a scope over. See both
 classes for what they do not establish: in particular, no continuity boundary adequate for
@@ -247,8 +249,10 @@ _REPAIR_FILE = re.compile(r"[0-9]{12}\.repair")
 RESTORED = "RESTORED"  # this planner had seen the acknowledgement; it was gone: a definite loss
 ADOPTED = "ADOPTED"  # no acknowledgement appeared for the newest event: its writer died between
 #                      append and acknowledgement, or the acknowledgement was lost (not knowable)
-ADOPT_GRACE_TRIES = 5  # how long a live writer gets to acknowledge its own event before
-ADOPT_GRACE_STEP = 0.01  # another planner adopts it (seconds per try)
+ADOPT_GRACE_TRIES = 40  # how long a live writer gets to acknowledge its own event before
+ADOPT_GRACE_STEP = 0.05  # another planner adopts it: tries x seconds, 2 s. Far above the
+#                          append-to-acknowledgement gap of a live writer under load, so an
+#                          ADOPTED record means a writer that did not finish, not a slow one
 _DIGEST = re.compile(r"[0-9a-f]{64}")
 _REVISION = re.compile(r"[0-9a-f]{40}")
 _EXECUTING = frozenset({Phase.DISPATCHED, Phase.REPAIR_DISPATCHED})
@@ -382,8 +386,8 @@ class DirJournal:
     directory. On a full open (a new planner, ``fleet_status``) a journal of two or more
     events with an empty or foreign anchor does not replay (``JOURNAL_UNANCHORED``); with at
     most one event it is indistinguishable from "nothing acknowledged yet". A planner that is
-    already at the head does not notice an emptied anchor. IO errors on the anchor surface as
-    ``OSError``.
+    already at the head notices only that its head's acknowledgement is gone, and restores
+    it with a repair record. IO errors on the anchor surface as ``OSError``.
     """
 
     def __init__(self, root: Path, *, anchor: Path | None = None) -> None:
@@ -885,8 +889,8 @@ def replay(journal: Journal, state: FleetState) -> int:
       * the event ``state`` already holds as its HEAD must still be stored with the same digest
         (events below the head are not re-read by a planner that already applied them);
       * every event applied must match its acknowledgement where one exists, and every applied
-        event that has a successor must HAVE one (a writer acknowledges all it replayed before
-        it appends, so only the newest event can be unacknowledged; a journal whose anchor is
+        event that has a successor must HAVE one (a writer makes sure its head is acknowledged
+        before it appends, so only the newest event can be unacknowledged; a journal whose anchor is
         missing, empty or someone else's stops at the first event that has a successor);
       * the journal may not end below an acknowledged sequence number: the highest one on a
         full open (a listing of the anchor), the next one otherwise.
@@ -1035,9 +1039,14 @@ class Planner:
         which did not come from the event's own commit never looks like one that did.
         """
         st = self.state
-        if not st.seq or st.acked >= st.seq:
+        if not st.seq:
             return
-        known = self.journal.acknowledged(st.seq)
+        known = self.journal.acknowledged(st.seq)  # the file, not this replica's memory
+        if known is None and st.acked >= st.seq:
+            # it had been acknowledged and is gone again since the replay: a definite loss
+            self.journal.record_repair(st.seq, st.head, RESTORED, self.identity)
+            self.journal.acknowledge(st.seq, st.head)
+            return
         for _ in range(ADOPT_GRACE_TRIES):
             if known is not None:
                 break
@@ -1486,7 +1495,8 @@ class Coordinator:
         different one). A planner used directly, without this option, still admits over such
         a scope;
       * it does not fall back: it refuses a journal without store identity (``MemoryJournal``,
-        a plain ``DirJournal``) and a transport that does not keep its records, and it refuses
+        a plain ``DirJournal``) and a transport that lacks ``claimed_records`` and
+        ``published`` (a check of two method names, not of durability), and it refuses
         a store whose journal and anchor share a filesystem unless the caller explicitly
         accepts that. Either way the status file says that an adequate continuity boundary
         for live conflicting work is NOT established: a different filesystem is one ``st_dev``
@@ -1508,8 +1518,8 @@ class Coordinator:
         list is invalid and the tick raises); a candidate with ``depends_on`` is not selected
         until its dependency is completed and is then reported as refused, because
         ``Planner.dispatch`` validates an item on its own: dependencies are not supported;
-      * status ``state`` is ``OK``, ``DEGRADED`` (the anchor holds repair records: some
-        acknowledgement was restored or adopted; the tick still ran) or ``HALTED`` (continuity
+      * status ``state`` is ``OK``, ``DEGRADED`` (the anchor holds repair records; the tick
+        still ran) or ``HALTED`` (continuity
         failed in the constructor or during a tick; written best effort). A failure of any
         other kind leaves the previous status in place;
       * the status file is last-writer-wins and names no coordinator: one that fails to start
@@ -1590,6 +1600,7 @@ class Coordinator:
         which a planner's own replay does not look at.
         """
         published = self.planner.transport.published(Channel.WORK)  # type: ignore[attr-defined]
+        self.journal.repairs()  # unreadable repair evidence stops the tick before it acts
         self.planner.sync()  # restores a lost head acknowledgement, with a repair record
         known = {w.seal for w in self.planner.state.works.values()}
         unknown = sorted(r.seal for r in published if r.seal not in known)
@@ -1619,8 +1630,8 @@ class Coordinator:
         written. Continuity is checked before recover, pump and the first dispatch; if it
         fails there, no event was appended and nothing was published by this tick (an
         acknowledgement repair, with its record, may have been written). An ``OSError`` from
-        the journal, the anchor, a publish or the status file is raised as it is; one from the
-        transport's ``claim`` is quarantined by ``pump``.
+        the journal, the anchor, the transport listing, a publish or the status file is raised
+        as it is; one from the transport's ``claim`` is quarantined by ``pump``.
         """
         items = [self._candidate(c) for c in candidates]
         validate(item for item, _ in items)  # duplicate ids, cycles, malformed items
