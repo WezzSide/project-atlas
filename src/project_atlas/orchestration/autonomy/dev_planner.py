@@ -23,18 +23,29 @@ second record of it. Properties:
   * linearisable admission: event ``n`` exists only by EXCLUSIVE CREATION of its name
     (``os.link``, the primitive the spool uses); a writer first replays everything up to
     ``n - 1``, decides against that state, and loses with no effect if another writer created
-    ``n`` first, after which it replays and decides again. Two planner processes sharing the
-    journal directory therefore cannot both admit colliding scopes;
+    ``n`` first, after which it replays and decides again (a bounded number of times, then
+    ``JOURNAL_CONTENDED``: under contention a compatible dispatch can be refused that way and
+    must be retried by its caller). Planners sharing the journal directory therefore cannot
+    both admit colliding scopes;
   * reconstructable: a new ``Planner`` on the same journal replays to the same lineages, scope
     holders, issued requests, completed and blocked sets; ``fleet_status`` derives the fleet
     view from the journal alone, without a planner object;
   * tamper-evident, fail-closed: events are hash-chained (``prev``) and carry the sealed records
-    they refer to; a gap, a broken chain, a bad seal or an event that is not a legal transition
-    makes replay raise, and the planner then does nothing.
+    they refer to; a gap, a broken chain, a bad seal or an event that ``_transition`` does not
+    accept makes replay raise, and the planner then does nothing. Replay re-checks what follows
+    from the journal itself (record bindings, phases, scope, the materialised repair); it does
+    not know a planner's verifier list, and, like every seal here, the chain is unkeyed: it
+    detects corruption and accidents, it does not authenticate a writer. Whoever can write the
+    journal directory can write a well-formed history.
 Limits (what this is NOT):
   * the default ``MemoryJournal`` is per-process and volatile; durability and cross-process
     admission exist only with a ``DirJournal`` on a directory that offers atomic ``link``;
   * a deleted TAIL of the journal is undetectable from the journal alone (no external anchor);
+    if it is deleted under a running planner, that planner and a later one can hold different
+    histories and admit colliding scopes before the next replay fails;
+  * ``recover`` must be called by whoever restarts a planner; nothing in ``src`` does that yet;
+  * a full open lists the journal directory and reads every event; the directory fsync after
+    an append is best effort (not available on Windows);
   * path overlap only: no semantic conflict detection (a generated file two lineages both
     rewrite, a whole-suite acceptance command);
   * the planner cannot observe a merge: an INTEGRATION_READY lineage holds its scope until
@@ -123,6 +134,10 @@ class PlannerError(ContractError):
     code = "DEV_PLANNER_REFUSED"
 
 
+class JournalContended(PlannerError):
+    """A commit lost the race for its sequence number too often; nothing was written."""
+
+
 MAX_QUARANTINE = 1000  # bounded evidence: a flooding publisher cannot grow memory without limit
 MAX_RAISES_PER_PASS = 64  # a transport that keeps raising without consuming must not loop forever
 _REPAIR_SUFFIX = re.compile(r"-R[0-9]+$")  # reserved for planner-materialised repair tasks
@@ -131,7 +146,7 @@ _REPAIR_SUFFIX = re.compile(r"-R[0-9]+$")  # reserved for planner-materialised r
 JOURNAL_VERSION = 1
 MAX_COMMIT_RETRIES = 16  # lost exclusive-create races before a commit gives up (never spins)
 _EVENT_FILE = re.compile(r"^[0-9]{12}\.json$")
-_REVISION = re.compile(r"^[0-9a-f]{40}$")
+_REVISION = re.compile(r"[0-9a-f]{40}")
 _EXECUTING = frozenset({Phase.DISPATCHED, Phase.REPAIR_DISPATCHED})
 
 
@@ -175,20 +190,26 @@ class DirJournal:
         return self.root / f"{seq:012d}.json"
 
     def read(self, after: int) -> list[bytes]:
-        if after == 0:  # full open: the directory must hold exactly events 1..k
+        last = 0
+        if after == 0:  # full open: nothing but event files, and (below) no gap before the last
             names = sorted(p.name for p in self.root.iterdir() if not p.name.startswith(".tmp-"))
-            expected = [f"{n:012d}.json" for n in range(1, len(names) + 1)]
-            if names != expected:
-                odd = sorted(set(names) ^ set(expected))[:3]
-                raise PlannerError(f"JOURNAL_CORRUPT:directory is not events 1..k: {odd}")
+            odd = [n for n in names if not _EVENT_FILE.match(n)]
+            if odd:
+                raise PlannerError(f"JOURNAL_CORRUPT:directory is not events 1..k: {odd[:3]}")
+            last = max((int(n[:12]) for n in names), default=0)
         out: list[bytes] = []
         seq = after + 1
         while True:
             try:
                 out.append(self._path(seq).read_bytes())
             except FileNotFoundError:
-                return out
+                break
             seq += 1
+        # events are never removed, so every event below one the listing saw must be readable;
+        # checking it this way stays correct while other writers append during the listing
+        if seq <= last:
+            raise PlannerError(f"JOURNAL_CORRUPT:directory is not events 1..k: missing {seq}")
+        return out
 
     def append(self, seq: int, data: bytes) -> bool:
         final = self._path(seq)
@@ -250,7 +271,7 @@ def _transition(state: FleetState, ev: dict[str, Any], raw: bytes) -> Callable[[
     """
     if ev.get("v") != JOURNAL_VERSION:
         raise PlannerError(f"unsupported journal version {ev.get('v')!r}")
-    if ev.get("seq") != state.seq + 1 or ev.get("prev") != state.head:
+    if type(ev.get("seq")) is not int or ev["seq"] != state.seq + 1 or ev.get("prev") != state.head:
         raise PlannerError("journal sequence or hash chain is broken")
     kind, root, planner = ev["event"], ev["root"], ev["planner"]
     if not isinstance(root, str) or not isinstance(planner, str):
@@ -270,6 +291,8 @@ def _transition(state: FleetState, ev: dict[str, Any], raw: bytes) -> Callable[[
             raise PlannerError("DISPATCH work is not the root work of its lineage")
         if root in state.lineages or root in state.by_task:
             raise PlannerError("lineage/task id already in use")
+        if _REPAIR_SUFFIX.search(root):
+            raise PlannerError("task id suffix -R<n> is reserved for repair tasks")
         for other in sorted(state.lineages):
             holder = state.lineages[other]
             if holds_scope(holder):
@@ -297,10 +320,20 @@ def _transition(state: FleetState, ev: dict[str, Any], raw: bytes) -> Callable[[
     elif kind == "RESULT":
         res = _record(ev, "result", ResultRecord)
         req = _record(ev, "request", VerificationRequest)
-        if st.phase not in _EXECUTING or res.work_seal != st.work.seal:
+        w = st.work
+        if st.phase not in _EXECUTING or res.work_seal != w.seal:
             raise PlannerError("RESULT does not answer the lineage's dispatched work")
+        if (res.task_id, res.execution_id, res.repository, res.base_revision) != (
+            w.task_id,
+            w.execution_id,
+            w.repository,
+            w.base_revision,
+        ):
+            raise PlannerError("RESULT identity/repository/base does not match the work")
         if req.result_seal != res.seal or req.task_id != res.task_id:
             raise PlannerError("RESULT request does not cover the journalled result")
+        if same_identity(req.verifier_identity, res.executor_identity):
+            raise PlannerError("RESULT request assigns the executor as its own verifier")
 
         def do_result() -> None:
             state.issued[res.task_id] = req
@@ -313,8 +346,22 @@ def _transition(state: FleetState, ev: dict[str, Any], raw: bytes) -> Callable[[
     elif kind in ("READY", "REPAIR"):
         ver = _record(ev, "verdict", VerdictRecord)
         issued = state.issued.get(ver.task_id)
-        if st.phase is not Phase.VERIFYING or issued is None or ver.request_seal != issued.seal:
+        held = st.result
+        if (
+            st.phase is not Phase.VERIFYING
+            or held is None
+            or issued is None
+            or ver.task_id != st.work.task_id
+            or ver.request_seal != issued.seal
+        ):
             raise PlannerError(f"{kind} without the outstanding verification it answers")
+        if (ver.verifier_identity, ver.execution_id, ver.result_revision, ver.result_tree) != (
+            issued.verifier_identity,
+            issued.execution_id,
+            held.result_revision,
+            held.result_tree,
+        ):
+            raise PlannerError(f"{kind} verdict is not the assigned verifier's on this artifact")
         if kind == "READY":
             if ver.verdict is not Verdict.PASS:
                 raise PlannerError("READY needs a PASS verdict")
@@ -332,6 +379,11 @@ def _transition(state: FleetState, ev: dict[str, Any], raw: bytes) -> Callable[[
                 raise PlannerError("REPAIR work is foreign or its task id is already in use")
             if (rw.repository, rw.allowed_paths) != (st.work.repository, st.work.allowed_paths):
                 raise PlannerError("REPAIR work may not change the lineage's repository or scope")
+            if ver.verdict is Verdict.PASS:
+                raise PlannerError("REPAIR needs a non-PASS verdict")
+            expected = materialize_repair(st.work, ver, result=held).repair_work
+            if expected is None or expected.seal != rw.seal:
+                raise PlannerError("REPAIR work is not the repair this verdict materialises")
 
             def do_repair() -> None:
                 state.seals.add(ver.seal)
@@ -362,7 +414,7 @@ def _transition(state: FleetState, ev: dict[str, Any], raw: bytes) -> Callable[[
         revision = ev["evidence"]
         if st.phase is not Phase.INTEGRATION_READY or st.scope_released:
             raise PlannerError("only an unreleased INTEGRATION_READY lineage can release scope")
-        if not isinstance(revision, str) or not _REVISION.match(revision):
+        if not isinstance(revision, str) or not _REVISION.fullmatch(revision):
             raise PlannerError("RELEASE needs the 40-hex merge revision as evidence")
 
         def do_release() -> None:
@@ -463,6 +515,9 @@ class Planner:
         self.blocked = self.state.blocked
         self.issued = self.state.issued  # task_id -> the request issued for it
         self.quarantined: list[tuple[str, str, str]] = []  # (channel, seal, reason)
+        # records already claimed from the transport whose commit could not be written
+        # (contention, journal IO error): retried by the next pump, never quarantined for that
+        self.deferred: list[tuple[Channel, Any]] = []
         self.sync()  # a restarted planner starts from what the journal says, or not at all
 
     # -- journal ---------------------------------------------------------------------------
@@ -491,7 +546,7 @@ class Planner:
             if self.journal.append(ev["seq"], raw):
                 apply()
                 return ev
-        raise PlannerError("JOURNAL_CONTENDED: could not append after bounded retries")
+        raise JournalContended("JOURNAL_CONTENDED: could not append after bounded retries")
 
     def fleet_status(self) -> tuple[dict[str, Any], ...]:
         """``fleet_status`` of this planner's journal (derived from the journal, not from self)."""
@@ -625,10 +680,16 @@ class Planner:
         """
         self.sync()
         n = 0
-        for channel, handler in (
-            (Channel.RESULT, self._on_result),
-            (Channel.VERDICT, self._on_verdict),
-        ):
+        handlers: dict[Channel, Callable[[Any], None]] = {
+            Channel.RESULT: self._on_result,
+            Channel.VERDICT: self._on_verdict,
+        }
+        retry, self.deferred = self.deferred, []
+        for channel, rec in retry:  # claimed earlier, not journalled then: decide them first
+            if rec.seal not in self.state.seals:
+                self._guarded(channel.value, rec.seal, handlers[channel], rec)
+                n += 1
+        for channel, handler in handlers.items():
             raises = 0  # per channel: a flooded RESULT channel must not starve VERDICT
             while True:
                 try:
@@ -647,11 +708,22 @@ class Planner:
         return n
 
     def _guarded(self, channel: str, seal: str, fn: Callable[[Any], None], rec: Any) -> None:
-        """One bad record is quarantined; it never aborts the pass or blocks other lineages."""
+        """One bad record is quarantined; it never aborts the pass or blocks other lineages.
+
+        A record whose event could not be WRITTEN (lost the append race too often, or the
+        journal raised an IO error) was not judged at all: it is kept in ``deferred`` for the
+        next pump instead of being quarantined. An IO error is re-raised after that.
+        """
         try:
             fn(rec)
+        except JournalContended:
+            self.deferred.append((Channel(channel), rec))
         except ContractError as exc:
             self._quarantine(channel, seal, str(exc))
+        except OSError:
+            if seal not in self.state.seals:  # not journalled: the record is still undecided
+                self.deferred.append((Channel(channel), rec))
+            raise
 
     def _quarantine(self, channel: str, seal: str, reason: str) -> None:
         self.quarantined.append((channel, seal, reason))

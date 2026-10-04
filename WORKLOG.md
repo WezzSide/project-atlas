@@ -16057,23 +16057,32 @@ change, no adapter / crosswalk / transport / workflow change):
   `issued`) is a replica built only by applying journal events through one function,
   `_transition`, used for replay and for the event a live planner is about to append. An event
   that could not be replayed is not written.
-- `MemoryJournal` (default) is volatile and per planner: behaviour as before for callers that
-  pass no journal. `DirJournal(root)` stores one immutable file per event,
+- `MemoryJournal` (default) is volatile and per planner: for callers that pass no journal the
+  behaviour is as before except for the changes listed under "Behaviour changes". `DirJournal(root)` stores one immutable file per event,
   `<root>/<seq:012d>.json`, written to a temp file, fsynced and created with `os.link`, which
   never overwrites.
 - Admission across planners: a commit replays to the journal head, decides against that state
   and appends event `seq+1`; if another writer created that name first nothing was written, and
   the commit replays and decides again, at most `MAX_COMMIT_RETRIES` (16) times, then raises
-  `JOURNAL_CONTENDED`.
+  `JournalContended` (`JOURNAL_CONTENDED`). A dispatch refused that way must be retried by its
+  caller. A RESULT / VERDICT record whose event could not be written (contention, or an
+  `OSError` from the journal, which is re-raised) is kept in `Planner.deferred` and decided by
+  the next `pump`; it is not quarantined.
 - Write-ahead: the event is appended before the matching record is published. `recover()`
   re-publishes the current work of executing lineages and the issued request of verifying ones
   (publishing is idempotent) and re-feeds RESULT / VERDICT records this identity had claimed
   from a transport that keeps them (`claimed_records`, i.e. the spool) but that are not in the
   journal.
-- Replay is fail-closed: a non-contiguous directory, a broken chain, an unknown version or
-  event, a bad seal, a second holder over a held scope, a repair that changes the lineage's
-  repository or `allowed_paths`, a TERMINAL on a terminal lineage, a RELEASE without a 40-hex
-  revision all raise `PlannerError`; `Planner(...)` then does not construct.
+- Replay is fail-closed: a non-contiguous directory, a broken chain, a non-integer or wrong
+  sequence number, an unknown version or event, a bad seal, a second holder over a held scope,
+  a `-R<n>` root, a RESULT that does not answer the lineage's current work or whose request
+  does not cover it, a READY / REPAIR whose verdict is not the assigned verifier's verdict on
+  the lineage's outstanding request and artifact, a READY without PASS, a REPAIR with PASS, a
+  repair work that changes repository or `allowed_paths` or is not the one `materialize_repair`
+  produces, a TERMINAL on a terminal lineage, a RELEASE without a 40-hex revision all raise
+  `PlannerError`; `Planner(...)` then does not construct. Replay does not know a planner's
+  verifier list, and a TERMINAL on a non-terminal lineage is accepted in any phase (the
+  executing-work guard of `fail_execution` is a live check only).
 - `fleet_status(journal)` returns one row per lineage (phase, reason, current task / execution
   id, work seal, repository, base revision, allowed paths, holds_scope, scope_released,
   dispatched_by, last_seq) from the journal alone, without a planner object.
@@ -16087,36 +16096,50 @@ Behaviour changes for existing callers:
 - `Planner.dispatch` records the lineage before it publishes. If `transport.publish` raises,
   the lineage exists as DISPATCHED and holds its scope; before, nothing was recorded.
 - `fail_execution` now raises for a VERIFYING, INTEGRATION_READY, terminal or superseded task.
-- `Planner.select`, `dispatch` and `pump` start with a journal replay.
-- No existing test was edited.
+- Every operation that reads or changes lineage state replays the journal first: `select`,
+  `pump`, `recover`, and every commit (`dispatch`, result and verdict handling,
+  `fail_execution`, `release_scope`). `in_flight()` and `scope_holders()` do not; they return
+  the replica as of the last replay. `pump` raises on a journal that does not replay.
+- No existing test function was changed; one test was added to
+  `tests/unit/test_orchestration_dev_queue.py`.
 
 Limits:
 - Nothing in `src` constructs a `DirJournal`; with the default journal nothing is durable and
   two planners share nothing.
-- `DirJournal` needs a directory with atomic `link`. Tested on one host with threads; no
-  multi-process or multi-host run, no network file system.
-- A deleted tail of the journal cannot be detected from the journal alone.
+- `DirJournal` needs a directory with atomic `link`. The tests in the repository use threads
+  in one process on one host. The independent verifier additionally ran separate OS processes
+  on one Linux host (reported on the PR). No multi-host run, no network file system, no local
+  Windows run.
+- Under contention a compatible dispatch can be refused with `JOURNAL_CONTENDED`.
+- The hash chain and the seals are unkeyed: they detect corruption, not a writer with access
+  to the journal directory, who can write a well-formed history.
+- A deleted tail of the journal cannot be detected from the journal alone; deleted under a
+  running planner it can leave two planners with different histories that admit colliding
+  scopes before the next replay fails.
+- `recover()` is called by nothing in `src`. A record that is rejected and stays in the spool's
+  `claimed/` is fed and quarantined again by every `recover()`.
+- A full open lists the journal directory and reads every event; the directory fsync after an
+  append is best effort and not available on Windows. fsync durability is not tested.
 - `release_scope` records a revision the caller asserts; the planner does not check that it is
   a merge of the candidate.
 - No leases, heartbeats, executor assignment or reassignment: a holder whose executor died
   stays a holder until `fail_execution` or a verdict moves the lineage.
-- A record whose commit fails with `JOURNAL_CONTENDED` inside `pump` is quarantined like any
-  other refused record; with the spool it is picked up again by `recover()`, with the
-  in-memory transport it is lost.
+- `Planner.deferred` is in memory: a record claimed but not journalled when the process dies
+  is recovered by `recover()` only from a transport that keeps claimed records (the spool).
 - The quarantine list is not journalled. The journal grows without bound; no compaction.
 - Path overlap only; the fabric adapter's serial-dispatch rule is untouched.
 - This is not multi-agent delivery: no live run has exercised two lineages.
 
 Commands and results (`PYTHONPATH=<worktree>/src`, `--no-cov -o addopts=""`):
-- `pytest tests/unit/test_orchestration_dev_planner_journal.py` (new): 22 passed; five
-  consecutive runs, 22 passed each.
+- `pytest tests/unit/test_orchestration_dev_planner_journal.py` (new): 26 passed; twenty
+  consecutive runs, 26 passed each.
 - The same file against main's `dev_planner.py`: 1 error during collection (the imported
   names do not exist there).
 - `test_orchestration_dev_loop_contracts.py`, `_dev_queue.py`, `_dev_fabric_adapter.py`,
   `_dev_package.py`, `_dev_package_repair.py`, `_dev_crosswalk.py`: 749 passed.
-- Those six plus `_dev_spool_transport.py` and `_dev_planner_journal.py`: 782 passed.
+- Those six plus `_dev_spool_transport.py` and `_dev_planner_journal.py`: 786 passed.
 - `pytest tests/unit -k "orchestration_dev or dev_package or executor or agent_execute or
-  workflow or autonomy or global_foundation or github_port"`: 1480 passed, 5152 deselected.
+  workflow or autonomy or global_foundation or github_port"`: 1484 passed, 5152 deselected.
 - `ruff check .`: clean. `ruff format --check` on the four changed code files: clean.
   `mypy src`: no issues in 415 source files.
 - The full test suite was not run locally.

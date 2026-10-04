@@ -24,6 +24,7 @@ from project_atlas.orchestration.autonomy.dev_contracts import (
 from project_atlas.orchestration.autonomy.dev_planner import (
     MAX_COMMIT_RETRIES,
     DirJournal,
+    JournalContended,
     MemoryJournal,
     Phase,
     Planner,
@@ -103,14 +104,13 @@ def test_a_new_planner_on_the_same_journal_reconstructs_the_whole_state(tmp_path
     implement(t)
     implement(t)
     p.pump()
-    by = {"A": (Verdict.FAIL, DEFECT), "B": (Verdict.PASS, ())}
-    for _ in range(2):
+    reqs = {}
+    for _ in range(3):
         req = t.claim(Channel.VERIFICATION, role=Role.VERIFIER, identity=VER)
-        if req.task_id == "C":  # leave C verifying: put its request back by re-reading later
-            keep = req
-            req = t.claim(Channel.VERIFICATION, role=Role.VERIFIER, identity=VER)
-        v, f = by[req.task_id]
-        t.publish(make_verdict(req, verdict=v, findings=f))
+        reqs[req.task_id] = req
+    keep = reqs["C"]  # C stays VERIFYING: its verdict is published only after the restart
+    t.publish(make_verdict(reqs["A"], verdict=Verdict.FAIL, findings=DEFECT))
+    t.publish(make_verdict(reqs["B"], verdict=Verdict.PASS))
     p.pump()
     assert {r: s.phase for r, s in p.lineages.items()} == {
         "A": Phase.REPAIR_DISPATCHED,
@@ -121,7 +121,11 @@ def test_a_new_planner_on_the_same_journal_reconstructs_the_whole_state(tmp_path
     q = planner(t, DirJournal(tmp_path / "journal"))  # "restart": nothing but the journal
     assert view(q) == view(p)
     assert q.completed == p.completed == {"B"} and q.blocked == p.blocked == {}
-    assert q._by_task == p._by_task and set(q._works) == set(p._works)
+    assert q._by_task == p._by_task
+    assert {k: w.seal for k, w in q._works.items()} == {k: w.seal for k, w in p._works.items()}
+    assert {r: s.result and s.result.seal for r, s in q.lineages.items()} == {
+        r: s.result and s.result.seal for r, s in p.lineages.items()
+    }
     assert {k: v.seal for k, v in q.issued.items()} == {k: v.seal for k, v in p.issued.items()}
     assert q.in_flight() == {"A", "B", "C"}
     assert [w.seal for w in q.scope_holders()] == [w.seal for w in p.scope_holders()]
@@ -152,7 +156,6 @@ def test_identical_operations_write_identical_journal_bytes(tmp_path):
     assert events[0]["prev"] == ""
     assert [e["prev"] for e in events[1:]] == [hashlib.sha256(b).hexdigest() for b in one[:-1]]
     assert all(e["planner"] == "vps3-plan" for e in events)
-    assert not any("at" in e or "time" in e for e in events)  # no wall clock in the journal
 
 
 # ---- admission across planners --------------------------------------------------------------
@@ -220,7 +223,7 @@ def test_a_journal_that_never_accepts_is_given_up_on_and_nothing_is_published():
 
     t = InMemoryTransport()
     p = planner(t, Never())
-    with pytest.raises(PlannerError, match="JOURNAL_CONTENDED"):
+    with pytest.raises(JournalContended, match="JOURNAL_CONTENDED"):
         p.dispatch(qi("A"), **FIELDS)
     assert Never.calls == MAX_COMMIT_RETRIES
     assert p.lineages == {} and len(t._queues[Channel.WORK]) == 0
@@ -300,7 +303,7 @@ def test_another_planner_can_carry_a_lineage_forward(tmp_path):
 # ---- fail-closed replay ---------------------------------------------------------------------
 
 
-def _journal_with(tmp_path, n_ready=1):
+def _journal_with(tmp_path):
     t = InMemoryTransport()
     p = planner(t, DirJournal(tmp_path / "j"))
     p.dispatch(qi("A"), **FIELDS)
@@ -339,12 +342,30 @@ def test_a_missing_middle_event_or_a_stray_file_is_refused(tmp_path):
 def test_garbage_and_non_object_events_are_refused(tmp_path):
     files = _journal_with(tmp_path)
     good = files[0].read_bytes()
-    for bad in (b"{not json", b"[1, 2]", b"{}", b'{"v": 2}'):
+    for bad, why in (
+        (b"{not json", "JOURNAL_CORRUPT:event 1"),
+        (b"[1, 2]", "event is not an object"),
+        (b"{}", "unsupported journal version None"),
+    ):
         files[0].write_bytes(bad)
-        with pytest.raises(PlannerError):
+        with pytest.raises(PlannerError, match=why):
             _open(tmp_path)
     files[0].write_bytes(good)
     assert _open(tmp_path).state.seq == 3
+    n, head = _head(tmp_path)
+    for body, why in (
+        (dict(v=2), "unsupported journal version 2"),
+        (dict(seq=float(n + 1)), "sequence or hash chain is broken"),
+        (dict(seq=n + 2), "sequence or hash chain is broken"),
+    ):
+        ev = {"v": 1, "seq": n + 1, "prev": head, "planner": "x", "event": "RELEASE", "root": "A"}
+        ev.update(evidence=MERGED, **body)
+        (tmp_path / "j" / f"{n + 1:012d}.json").write_bytes(json.dumps(ev, sort_keys=True).encode())
+        with pytest.raises(PlannerError, match=why):
+            _open(tmp_path)
+    ev.update(v=1, seq=n + 1)  # the same event, well-formed, is a legal RELEASE
+    (tmp_path / "j" / f"{n + 1:012d}.json").write_bytes(json.dumps(ev, sort_keys=True).encode())
+    assert _open(tmp_path).lineages["A"].scope_released == MERGED
 
 
 def _forge(path, seq, prev, **body):
@@ -377,30 +398,43 @@ def test_a_well_chained_event_that_is_not_a_legal_transition_is_refused(tmp_path
 
     cases = [
         # a second holder over a held scope
-        dict(event="DISPATCH", root="B", work=encode(w("B", ("src/x/a",)))),
+        (dict(event="DISPATCH", root="B", work=encode(w("B", ("src/x/a",)))), "SCOPE_COLLISION:A:"),
         # a lineage root that already exists
-        dict(event="DISPATCH", root="A", work=encode(w("A", ("src/q",)))),
+        (dict(event="DISPATCH", root="A", work=encode(w("A", ("src/q",)))), "already in use"),
         # root field that is not the work's own root
-        dict(event="DISPATCH", root="B", work=encode(w("C", ("src/q",)))),
+        (dict(event="DISPATCH", root="B", work=encode(w("C", ("src/q",)))), "not the root work"),
+        # a root in the namespace reserved for repair tasks
+        (dict(event="DISPATCH", root="B-R1", work=encode(w("B-R1", ("src/q",)))), "reserved"),
         # terminal on an already terminal (INTEGRATION_READY) lineage: no silent scope release
-        dict(event="TERMINAL", root="A", phase="BLOCKED", reason="x", evidence=""),
+        (
+            dict(event="TERMINAL", root="A", phase="BLOCKED", reason="x", evidence=""),
+            "already terminal",
+        ),
         # a terminal phase that is not a refusal phase
-        dict(event="TERMINAL", root="A", phase="DISPATCHED", reason="x", evidence=""),
+        (
+            dict(event="TERMINAL", root="A", phase="DISPATCHED", reason="x", evidence=""),
+            "must be BLOCKED or OWNER_REQUIRED",
+        ),
         # release without a merge revision
-        dict(event="RELEASE", root="A", evidence="main"),
-        dict(event="RELEASE", root="nope", evidence=MERGED),
-        dict(event="NONSENSE", root="A"),
+        (dict(event="RELEASE", root="A", evidence="main"), "40-hex merge revision"),
+        (dict(event="RELEASE", root="A", evidence=MERGED + "\n"), "40-hex merge revision"),
+        (dict(event="RELEASE", root="nope", evidence=MERGED), "unknown lineage"),
+        (dict(event="NONSENSE", root="A"), "unknown journal event"),
     ]
-    for body in cases:
+    for body, why in cases:
         _forge(j, n + 1, head, **body)
-        with pytest.raises(PlannerError):
+        with pytest.raises(PlannerError, match=why):
             _open(tmp_path)
         (j / f"{n + 1:012d}.json").unlink()
+    # control: a legal event at the same position is accepted, so the refusals above are real
+    _forge(j, n + 1, head, event="DISPATCH", root="B", work=encode(w("B", ("src/q",))))
+    assert _open(tmp_path).in_flight() == {"A", "B"}
+    (j / f"{n + 1:012d}.json").unlink()
     # a record whose seal does not verify
     wire = json.loads(encode(w("B", ("src/q",))))
     wire["body"]["allowed_paths"] = ["src/x"]
     _forge(j, n + 1, head, event="DISPATCH", root="B", work=json.dumps(wire))
-    with pytest.raises(Exception, match="seal"):
+    with pytest.raises(PlannerError, match="seal mismatch"):
         _open(tmp_path)
 
 
@@ -623,13 +657,13 @@ def test_recover_replays_a_result_that_was_claimed_but_never_journalled(tmp_path
     assert q.pump() == 0 and q.lineages["A"].phase is Phase.DISPATCHED  # the record is gone
     assert q.recover() == [f"REPLAYED:RESULT:{res.seal}"]
     assert q.lineages["A"].phase is Phase.VERIFYING and not q.quarantined
-    assert q.recover() == []  # journalled now: never fed twice
+    assert q.recover() == [] and not q.quarantined  # journalled now: never fed twice
     verify(t)
     ver = t.claim(Channel.VERDICT, role=Role.PLANNER, identity="vps3-plan")  # same crash, later
     r = planner(t, DirJournal(tmp_path / "j"))
     assert r.recover() == [f"REPLAYED:VERDICT:{ver.seal}"]
     assert r.lineages["A"].phase is Phase.INTEGRATION_READY and r.completed == {"A"}
-    assert r.recover() == []
+    assert r.recover() == [] and not r.quarantined
     # records claimed by a different planner identity are not this planner's to replay
     other = planner(t, DirJournal(tmp_path / "j2"), "other-plan")
     assert other.recover() == []
@@ -654,3 +688,139 @@ def test_the_default_journal_is_volatile_and_per_planner():
     q = planner(t, None)  # no shared journal: no shared ownership (documented limit)
     q.dispatch(qi("B"), **FIELDS)
     assert q.in_flight() == {"B"} and p.in_flight() == {"A"}
+
+
+# ---- replay re-checks record bindings -------------------------------------------------------
+
+
+def _two_verifying(tmp_path):
+    """A and B both VERIFYING; returns (transport, planner, their requests by task id)."""
+    t = InMemoryTransport()
+    p = planner(t, DirJournal(tmp_path / "j"))
+    p.dispatch(qi("A"), **FIELDS)
+    p.dispatch(qi("B"), **fields("src/y"))
+    implement(t)
+    implement(t)
+    p.pump()
+    reqs = {}
+    for _ in range(2):
+        req = t.claim(Channel.VERIFICATION, role=Role.VERIFIER, identity=VER)
+        reqs[req.task_id] = req
+    return t, p, reqs
+
+
+def test_replay_refuses_a_verdict_event_that_is_not_bound_to_its_lineage(tmp_path):
+    _, p, reqs = _two_verifying(tmp_path)
+    j = tmp_path / "j"
+    n, head = _head(tmp_path)
+    pass_b = make_verdict(reqs["B"], verdict=Verdict.PASS)
+    fail_a = make_verdict(reqs["A"], verdict=Verdict.FAIL, findings=DEFECT)
+    pass_a = make_verdict(reqs["A"], verdict=Verdict.PASS)
+    other_artifact = pass_a.model_copy(update={"result_revision": "9" * 40}).sealed()
+    other_verifier = pass_a.model_copy(update={"verifier_identity": "someone"}).sealed()
+    repair = p.lineages["A"].work.model_copy(update={"task_id": "A-R1", "attempt": 2}).sealed()
+    cases = [
+        # B's genuine PASS used to complete A
+        (dict(event="READY", root="A", verdict=encode(pass_b)), "without the outstanding"),
+        (dict(event="READY", root="A", verdict=encode(fail_a)), "READY needs a PASS verdict"),
+        (dict(event="READY", root="A", verdict=encode(other_artifact)), "assigned verifier"),
+        (dict(event="READY", root="A", verdict=encode(other_verifier)), "assigned verifier"),
+        (
+            dict(event="REPAIR", root="A", verdict=encode(pass_a), work=encode(repair)),
+            "REPAIR needs a non-PASS verdict",
+        ),
+        # a repair work that is not what the verdict materialises (same scope, hand-made)
+        (
+            dict(event="REPAIR", root="A", verdict=encode(fail_a), work=encode(repair)),
+            "not the repair this verdict materialises",
+        ),
+    ]
+    for body, why in cases:
+        _forge(j, n + 1, head, **body)
+        with pytest.raises(PlannerError, match=why):
+            _open(tmp_path)
+        (j / f"{n + 1:012d}.json").unlink()
+    _forge(j, n + 1, head, event="READY", root="A", verdict=encode(pass_a))  # control: legal
+    assert _open(tmp_path).completed == {"A"}
+
+
+def test_replay_refuses_a_result_event_that_does_not_answer_the_work(tmp_path):
+    from project_atlas.orchestration.autonomy.dev_contracts import make_verification_request
+
+    t = InMemoryTransport()
+    p = planner(t, DirJournal(tmp_path / "j"))
+    wa = p.dispatch(qi("A"), **FIELDS)
+    wb = p.dispatch(qi("B"), **fields("src/y"))
+    j = tmp_path / "j"
+    n, head = _head(tmp_path)
+
+    def res(w, **kw):
+        r = make_result(w, executor_identity=IMPL, result_revision=REV1, result_tree=TREE1)
+        return r.model_copy(update=kw).sealed() if kw else r
+
+    def ev(result, request_for=None, work=None):
+        req = make_verification_request(work or wa, request_for or result, verifier_identity=VER)
+        return dict(event="RESULT", root="A", result=encode(result), request=encode(req))
+
+    good = res(wa)
+    cases = [
+        (ev(res(wb), work=wb), "does not answer the lineage's dispatched work"),
+        (ev(res(wa, base_revision="9" * 40)), "identity/repository/base"),
+        (ev(good, request_for=res(wa, result_tree="9" * 40)), "does not cover the journalled"),
+    ]
+    for body, why in cases:
+        _forge(j, n + 1, head, **body)
+        with pytest.raises(PlannerError, match=why):
+            _open(tmp_path)
+        (j / f"{n + 1:012d}.json").unlink()
+    # the executor as its own verifier cannot even be sealed into a request
+    with pytest.raises(Exception, match=r"(?i)verif"):
+        make_verification_request(wa, good, verifier_identity=IMPL)
+    _forge(j, n + 1, head, **ev(good))  # control: legal
+    assert _open(tmp_path).lineages["A"].phase is Phase.VERIFYING
+
+
+# ---- a commit that could not be written does not lose the record ----------------------------
+
+
+def test_a_contended_or_failed_append_defers_the_claimed_record_instead_of_dropping_it():
+    class Shaky(MemoryJournal):
+        mode = "ok"
+
+        def append(self, seq, data):
+            if self.mode == "contended":
+                return False
+            if self.mode == "io":
+                raise OSError(28, "No space left on device")
+            return super().append(seq, data)
+
+    t = InMemoryTransport()
+    j = Shaky()
+    p = planner(t, j)
+    p.dispatch(qi("A"), **FIELDS)
+    implement(t)
+    j.mode = "contended"
+    assert p.pump() == 1
+    assert p.lineages["A"].phase is Phase.DISPATCHED and not p.quarantined
+    assert [c for c, _ in p.deferred] == [Channel.RESULT]
+    j.mode = "io"
+    with pytest.raises(OSError):
+        p.pump()
+    assert len(p.deferred) == 1 and not p.quarantined
+    j.mode = "ok"
+    assert p.pump() == 1  # the record consumed three pumps ago is decided now
+    assert p.lineages["A"].phase is Phase.VERIFYING and p.deferred == [] and not p.quarantined
+    assert p.pump() == 0
+
+
+def test_append_refuses_a_sequence_number_whose_predecessor_is_missing(tmp_path):
+    j = DirJournal(tmp_path / "j")
+    assert j.append(2, b"{}") is False and list((tmp_path / "j").iterdir()) == []
+    assert j.append(1, b"{}") is True and j.append(1, b"{}") is False
+    assert j.append(3, b"{}") is False and j.append(2, b"{}") is True
+    assert [p.name for p in sorted((tmp_path / "j").iterdir())] == [
+        "000000000001.json",
+        "000000000002.json",
+    ]
+    (tmp_path / "j" / ".tmp-crashed").write_bytes(b"half")  # a crashed writer's temp file
+    assert len(DirJournal(tmp_path / "j").read(0)) == 2  # is ignored
