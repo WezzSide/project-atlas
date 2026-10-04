@@ -15809,3 +15809,87 @@ Not done / open:
 - The redirect response of the artifact API request is not explicitly closed (as on the base).
 - Owner/reviewer call: item 2 drops debugging context (the chained `HTTPError`) for error
   responses that carry `Link` or `Content-Location`.
+
+## 2026-10-04 — ATLAS-DEVQ-0006: write-scope collision admission in the DEVQ planner (opt-in; admission control, not authority)
+
+What / why: two structural gaps stood in the way of running more than one lineage. (1)
+`select_next` had no notion of "in flight", so with an in-flight top-ranked item
+`Planner.select` returned that item again and the planner could not pick a second lineage.
+(2) Nothing compared the write scopes of two `WorkItem`s, so two lineages with overlapping
+`allowed_paths` would both be published and collide only at merge time. Base: main `71f6a039`.
+
+Changes (pure, in the existing modules; no new module, no `WorkItem` field, no seal change):
+- `dev_contracts.py`: `scope_overlap(a, b)` returns the sorted, de-duplicated pairs of entries
+  that are equal or nested on a directory boundary, compared by the key `_matches` uses (NFC,
+  trailing slashes dropped, `posixpath.normpath`, `lower()`). The pairs are those comparison
+  keys, not the raw spellings. A malformed entry raises `ContractError`. `works_collide(a, b)`
+  verifies both seals, returns `()` for a different repository or the same lineage root, else
+  `scope_overlap` of the two `allowed_paths`.
+- `dev_queue.py`: `inadmissible_reason` and `select_next` take an optional `in_flight`
+  (default empty). An in-flight task id is skipped with reason `IN_FLIGHT`, checked after
+  `ALREADY_COMPLETED` and before every other reason. An in-flight task does not satisfy a
+  dependency.
+- `dev_planner.py`: `SCOPE_HOLDING` = DISPATCHED, VERIFYING, REPAIR_DISPATCHED,
+  INTEGRATION_READY; `Planner.in_flight()`, `Planner.scope_holders()`; `Planner.select` passes
+  `in_flight`; `Planner(..., scope_admission=True)` makes `dispatch` refuse, before anything is
+  published or recorded, a work item that collides with a scope holder:
+  `SCOPE_COLLISION:<holder lineage root>:<new>|<held>[,...]`.
+
+Deviation from the requested design: the dispatch refusal is OPT-IN (`scope_admission=False`
+by default). An unconditional check makes the existing test
+`test_one_bad_record_does_not_abort_the_pass_for_other_lineages` fail (it dispatches lineages
+A and B with the identical scope and expects both), and the task forbade editing existing
+tests. A default planner therefore still publishes overlapping lineages, as before. Making
+the check the default needs an owner decision and an edit of that test.
+
+What holds and what releases scope (in this planner object):
+- holds: DISPATCHED, VERIFYING, REPAIR_DISPATCHED, INTEGRATION_READY;
+- releases: BLOCKED and OWNER_REQUIRED (every `_terminal` transition, including
+  `fail_execution`, NO_INDEPENDENT_VERIFIER, REPAIR_TASK_ID_COLLISION, attempt ceiling);
+- never released: INTEGRATION_READY. The planner has no transition after it and cannot observe
+  a merge, so that scope is held until the planner object is discarded. There is no release
+  call.
+
+Limits:
+- Opt-in; off by default.
+- In-memory only: a planner restart forgets every holder.
+- One planner process: no guarantee across processes or hosts.
+- Path overlap only: no semantic conflict detection (shared generated files, whole-suite
+  acceptance commands).
+- The planner cannot observe merges.
+- The fabric adapter's serial-dispatch rule is not lifted and not touched.
+- This is admission control, not authority: it grants nothing. It is NOT "safe concurrency":
+  no live run has exercised two lineages, and nothing constructs a planner with
+  `scope_admission=True` outside the tests.
+- The `SCOPE_COLLISION` message is split on `:`, `,` and `|`; `norm_path` does not forbid those
+  characters in a path or in a lineage root, so such names make the message ambiguous.
+- An OWNER_REQUIRED lineage releases its scope although its result branch may still exist.
+
+Observation, not changed: `dev_contracts.norm_path`/`_matches` and
+`dev_package._canon_path`/`_overlaps` agree on NFC, trailing-slash stripping, `normpath`,
+`lower()` and the directory-boundary rule. `_canon_path` is stricter on input: it also requires
+`_PATH_CHARS` and rejects padded or dot-ended segments, and it raises on a malformed entry
+where `_matches` silently skips a malformed prefix. `scope_overlap` follows the `dev_contracts`
+key and raises on malformed entries, so it accepts entries a package spec would reject.
+
+Commands and results (`PYTHONPATH=<worktree>/src`, `--no-cov -o addopts=""`):
+- `pytest` on the two changed test files, unchanged tree at `71f6a039`: 106 passed.
+- The same two files with the new tests against the base versions of the three source modules:
+  30 failed, 106 passed. All 30 new test cases fail there; most fail on the missing names
+  (`scope_overlap`, `works_collide`, `in_flight`, `scope_admission`), not on a behavioural
+  assertion.
+- This change, the two files: 136 passed.
+- `pytest` on `test_orchestration_dev_loop_contracts.py`, `_dev_queue.py`,
+  `_dev_fabric_adapter.py`, `_dev_package.py`, `_dev_package_repair.py`, `_dev_crosswalk.py`:
+  646 passed.
+- `pytest tests/unit -k "orchestration_dev or dev_package or executor or agent_execute or
+  workflow or autonomy or global_foundation or github_port"`: 1355 passed, 5152 deselected.
+- `ruff check .`: clean. `ruff format --check` on the five changed code files: clean.
+  `mypy src`: no issues in 415 source files.
+- The full test suite was not run.
+
+Not done / open:
+- Collision refusal as the default (see deviation).
+- Durable scope holders, a release on merge, cross-process exclusion.
+- No adapter or workflow wiring; no live run.
+- Not independently verified.

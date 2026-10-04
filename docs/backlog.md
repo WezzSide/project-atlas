@@ -836,3 +836,13 @@ Historical roadmaps are classified as inputs and are not erased._
 - [ ] Live validation of the sealed-base assertion through a real adapter dispatch (requires an owner dispatch grant).
 - [ ] F2 dispatch authority binding a reviewed package to a live dispatch (design in `docs/global/baseline/2026-10-02-AUTONOMY-FRONTIER.md`; not built).
 - [ ] `FabricAdapter` live wiring: the adapter is constructed only in tests.
+
+## Multi-agent autonomous delivery (governed)
+
+No multi-agent capability is proven by anything in this section.
+
+- [x] ATLAS-DEVQ-0006: write-scope collision admission in the DEVQ planner — in-flight exclusion in `select_next`/`Planner.select`, `scope_overlap`/`works_collide`, and an opt-in (`Planner(scope_admission=True)`, default off) dispatch refusal `SCOPE_COLLISION`. In-memory, single process, path overlap only; admission control, not authority. Lands with the PR that carries this entry.
+- [ ] Collision refusal on by default (owner decision; needs an edit of an existing planner test that dispatches two same-scope lineages).
+- [ ] Ledger-derived fleet/mission status with durable scope holders (survives a planner restart; release on observed merge).
+- [ ] Exact run correlation token + enforced single writer (needs a workflow change and an owner dispatch grant to prove).
+- [ ] Live evidence of two lineages in flight.

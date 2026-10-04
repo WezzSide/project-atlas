@@ -213,3 +213,53 @@ def test_owner_and_irreversible_reasons_when_sole_failure():
 def test_unhashable_task_id_raises_queue_error_not_type_error():
     with pytest.raises(QueueError):
         select_next([QueueItem(task_id=["x"], title="x", category=Category.RELIABILITY)])  # type: ignore[arg-type]
+
+
+# ---- ATLAS-DEVQ-0006: in-flight exclusion ------------------------------------------------------
+
+
+def test_in_flight_task_is_skipped_and_next_ranked_is_selected():
+    from project_atlas.orchestration.autonomy.dev_queue import inadmissible_reason
+
+    items = [item("a", severity=3), item("b", severity=2), item("c", severity=1)]
+    sel = select_next(items, in_flight={"a"})
+    assert sel.selected is not None and sel.selected.task_id == "b"
+    assert sel.skipped == (("a", "IN_FLIGHT"),)
+    assert sel.ranked == ("a", "b", "c")
+    assert select_next(items, in_flight=("a", "b", "c")).selected is None
+    why = inadmissible_reason(
+        items[0], completed=frozenset(), blocked={}, blocked_lanes=frozenset()
+    )
+    assert why is None  # default: no in-flight notion
+
+
+def test_in_flight_defaults_change_nothing_and_reason_order_is_stable():
+    items = [
+        item("a", severity=3),
+        item("b", severity=2, depends_on=("a",)),
+        item("c", severity=1, lane="gate"),
+        item("d"),
+    ]
+    kw = dict(completed={"d"}, blocked={"c": "X"}, blocked_lanes={"gate"})
+    assert select_next(items, **kw) == select_next(items, in_flight=(), **kw)
+    assert select_next(items) == select_next(items, in_flight=frozenset())
+    # ALREADY_COMPLETED wins over IN_FLIGHT; IN_FLIGHT wins over BLOCKED / lane / owner / deps
+    both = select_next([item("a")], completed={"a"}, in_flight={"a"})
+    assert both.skipped == (("a", "ALREADY_COMPLETED"),)
+    flying = item(
+        "f", lane="gate", requires_owner=(OwnerInput.SECRET,), bounded=False, depends_on=("a",)
+    )
+    sel = select_next(
+        [item("a"), flying],
+        blocked={"f": "X", "a": "Y"},
+        blocked_lanes={"gate"},
+        in_flight={"f"},
+    )
+    assert dict(sel.skipped)["f"] == "IN_FLIGHT"
+
+
+def test_in_flight_task_does_not_satisfy_a_dependency():
+    items = [item("base", severity=3), item("child", severity=2, depends_on=("base",))]
+    sel = select_next(items, in_flight={"base"})
+    assert sel.selected is None
+    assert sel.skipped == (("base", "IN_FLIGHT"), ("child", "DEPENDENCY_UNSATISFIED:base"))
