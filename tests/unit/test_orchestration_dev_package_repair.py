@@ -74,9 +74,15 @@ PARENT_SPEC: dict[str, Any] = {
 #     d9a36c922eb5411ca19816445cd8fcd2e5beece7 and held through main
 #     593fa1a3ae1b04a6fdf65dcb99e5afe0f8d022ee: implementation packages carried three workflow
 #     inputs and no ``base_revision``.
-#   * CANONICAL_GOLDEN is the current identity (HARDEN-DEVLOOP-003): the canonical dispatch
-#     payload carries the sealed ``base_revision``, so ``package_sha256`` and
-#     ``workflow_inputs_sha256`` changed. ``work_seal`` and ``spec_sha256`` did NOT change.
+#   * HARDEN-DEVLOOP-003 (main f17f582846493a5e6edde07b59bc0169c7a7390f) put the sealed
+#     ``base_revision`` into the canonical dispatch payload, still under builder id
+#     ``dev_package/1``: ``package_sha256`` became the values kept in
+#     ``V1_SEALED_IMPLEMENTATION_PACKAGE_SHA256`` and ``workflow_inputs_sha256`` took the
+#     values below.
+#   * CANONICAL_GOLDEN is the current identity under builder id ``dev_package/2``: only
+#     ``package_sha256`` moved again (``provenance.builder`` is part of the rendered package).
+#     ``work_seal`` and ``spec_sha256`` never changed; ``workflow_inputs_sha256`` is the
+#     HARDEN-DEVLOOP-003 value.
 LEGACY_GOLDEN = {
     "attempt-1": (
         "6289f1ce5e9101370dabf76a0788803cc23b5e3670f11d946e82c80f292484cc",
@@ -93,13 +99,13 @@ LEGACY_GOLDEN = {
 }
 CANONICAL_GOLDEN = {
     "attempt-1": (
-        "d6360a78152c02fb57a241345ee62384c305d86da0dac1c869a75c343ddf41f3",
+        "ad6d27a55c30537d5c2df837e07299faa7b81f1705c6295c11fd226f4deaf07f",
         "d2a7642602ea4d3ae46f612552a20aef62a76c4feeb98c74e883edce6c379d49",
         "23981d51ab1e073b0ec5614d0fce3b3869ea387ba0266dba11d347ca64a1efad",
         "33dcf5d297cc7273d63d173e5e88b10c4ff215f09d01078fd7aa927e1fdc2026",
     ),
     "attempt-2": (
-        "e6878dd8ee381b48c6dfa986ff730bb8c23cc1e8c663b9b4e4cbcecf9201d652",
+        "7893199decf5a4322c99a965e377a74ffc27b34788b0d60cb7c30b903d5edff1",
         "b57299b219be3994a4e2f13898003b445f8c3b2c17ab6a7620ab883081b468a3",
         "7c641ba3d028b26d9e81b7b45a47c3177e23e83fd9339ffb9dec8925cf6fa54b",
         "14349e5c401e8def0b391a9ab3081ecb7b3ad0756fd2d6f6c610e9b81d8693b2",
@@ -846,18 +852,97 @@ def test_i_repair_package_emits_the_sealed_base_revision_input(repair: Any) -> N
     assert verify_checkout_ref(pkg, RESULT_REVISION) is None
 
 
-def test_i_repair_package_bytes_unchanged_by_the_canonical_payload_move(repair: Any) -> None:
-    """Pinned from main 593fa1a3 (before base_revision moved into the canonical builder)."""
+def _as_builder_v1(pkg: dict[str, Any]) -> dict[str, Any]:
+    """The same package as an earlier builder version named it: only ``provenance.builder``."""
+    old = json.loads(json.dumps(pkg))
+    old["provenance"]["builder"] = "dev_package/1"
+    return old
+
+
+# Intermediate implementation identity: canonical sealed payload, still named dev_package/1
+# (main f17f582846493a5e6edde07b59bc0169c7a7390f).
+V1_SEALED_IMPLEMENTATION_PACKAGE_SHA256 = {
+    "attempt-1": "d6360a78152c02fb57a241345ee62384c305d86da0dac1c869a75c343ddf41f3",
+    "attempt-2": "e6878dd8ee381b48c6dfa986ff730bb8c23cc1e8c663b9b4e4cbcecf9201d652",
+}
+
+
+def test_i_repair_package_differs_from_the_v1_package_only_in_the_builder_id(repair: Any) -> None:
+    """Historical reproducibility of the LAST dev_package/1 repair shape (rendered from #1057
+    through main f17f5828): it is this package with the old builder id. The /1 hash below was
+    pinned from main 593fa1a3. Repair packages rendered before #1057 had a different shape
+    (three inputs) and are not covered here."""
     pkg = build_package(load_spec(json.dumps(repair[2])))
+    assert pkg["provenance"]["builder"] == "dev_package/2"
     assert (
         package_sha256(render_package(pkg)),
         pkg["workflow_inputs_sha256"],
         pkg["work_seal"],
     ) == (
-        "da0b36a1893680deb6857a04abcfa23de529ef941c700189853479ca47416474",
+        "0d5349a8b2faf58a2dbd14130224e4304a3535e125d8cec27c48c145c36f4557",
         "ad5892719d11420a33080324baa83586ae47571d38184ef89cc88127d4f629b2",
         "6b646b48d475302a11b06990b65db05151753ac12c076c191b90fc2df8974565",
     )
+    assert (
+        package_sha256(render_package(_as_builder_v1(pkg)))
+        == "da0b36a1893680deb6857a04abcfa23de529ef941c700189853479ca47416474"
+    )
+
+
+@pytest.mark.parametrize(
+    ("key", "over"),
+    [("attempt-1", {"attempt": 1, "execution_ordinal": 1}), ("attempt-2", {})],
+)
+def test_i_implementation_package_history_is_reproducible_by_exact_derivation(
+    key: str, over: dict[str, Any]
+) -> None:
+    """Both earlier dev_package/1 implementation identities follow from today's package by a
+    stated, exact transformation -- nothing about the historical packages is lost."""
+    from project_atlas.orchestration.autonomy.dev_fabric_adapter import DispatchPayload
+
+    golden_commands = [
+        "pytest tests/unit/x.py -q",
+        "ruff check src tests",
+        "ruff format --check src tests",
+        "mypy src",
+    ]
+    spec = load_spec(json.dumps({**PARENT_SPEC, "acceptance_commands": golden_commands, **over}))
+    pkg = build_package(spec)
+    # 1. same shape, old builder id: the HARDEN-DEVLOOP-003 identity
+    sealed_v1 = _as_builder_v1(pkg)
+    assert package_sha256(render_package(sealed_v1)) == V1_SEALED_IMPLEMENTATION_PACKAGE_SHA256[key]
+    # 2. additionally without the sealed-revision input and its abort condition: the original
+    #    three-input identity
+    legacy = _as_builder_v1(pkg)
+    del legacy["workflow_inputs"]["base_revision"]
+    removed = legacy["abort_conditions"].pop(1)
+    assert "workflow_inputs.base_revision" in removed
+    legacy["workflow_inputs_sha256"] = DispatchPayload(
+        workflow=legacy["workflow"], ref=legacy["workflow_ref"], inputs=legacy["workflow_inputs"]
+    ).sha256()
+    assert (
+        package_sha256(render_package(legacy)),
+        legacy["work_seal"],
+        legacy["provenance"]["spec_sha256"],
+        legacy["workflow_inputs_sha256"],
+    ) == LEGACY_GOLDEN[key]
+
+
+def test_i_package_from_an_earlier_builder_version_is_refused(repair: Any) -> None:
+    """dev_package/1 named several shapes; the current builder accepts only what it renders."""
+    for spec, sha in ((repair[2], RESULT_REVISION), (PARENT_SPEC, MAIN_REVISION)):
+        pkg = build_package(load_spec(json.dumps(spec)))
+        assert verify_checkout_ref(pkg, sha) is None
+        assert _verify_reason(_as_builder_v1(pkg), sha) == "PACKAGE_BUILDER_UNSUPPORTED"
+        for builder in ("dev_package/3", "dev_package/2 ", "", None, 2):
+            other = json.loads(json.dumps(pkg))
+            other["provenance"]["builder"] = builder
+            assert _verify_reason(other, sha) == "PACKAGE_BUILDER_UNSUPPORTED"
+        missing = json.loads(json.dumps(pkg))
+        del missing["provenance"]
+        assert _verify_reason(missing, sha) == "PACKAGE_BUILDER_UNSUPPORTED"
+        missing["provenance"] = "dev_package/2"
+        assert _verify_reason(missing, sha) == "PACKAGE_BUILDER_UNSUPPORTED"
 
 
 def test_i_implementation_package_emits_the_sealed_base_revision_input() -> None:
