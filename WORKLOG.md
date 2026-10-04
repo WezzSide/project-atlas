@@ -16113,8 +16113,8 @@ Limits:
 - Nothing in `src` constructs a `DirJournal`; with the default journal nothing is durable and
   two planners share nothing.
 - `DirJournal` needs a directory with atomic `link`. The tests in the repository use threads
-  in one process on one host. The independent verifier additionally ran separate OS processes
-  on one Linux host (reported on the PR). No multi-host run, no network file system, no local
+  in one process on one host. Independent verifiers additionally ran separate OS processes on
+  one Linux host against earlier heads of this PR (reported on the PR, each for its head). No multi-host run, no network file system, no local
   Windows run.
 - Under contention a compatible dispatch can be refused with `JOURNAL_CONTENDED`.
 - The hash chain and the seals are unkeyed: they detect corruption, not a writer with access
@@ -16134,59 +16134,78 @@ Limits:
 - This is not multi-agent delivery: no live run has exercised two lineages.
 
 Commands and results (`PYTHONPATH=<worktree>/src`, `--no-cov -o addopts=""`):
-- `pytest tests/unit/test_orchestration_dev_planner_journal.py` (new): 40 passed; twenty
-  consecutive runs, 40 passed each.
+- `pytest tests/unit/test_orchestration_dev_planner_journal.py` (new): 47 passed; twenty
+  consecutive runs, 47 passed each.
 - The same file against main's `dev_planner.py`: 1 error during collection (the imported
   names do not exist there).
 - `test_orchestration_dev_loop_contracts.py`, `_dev_queue.py`, `_dev_fabric_adapter.py`,
   `_dev_package.py`, `_dev_package_repair.py`, `_dev_crosswalk.py`: 749 passed.
-- Those six plus `_dev_spool_transport.py` and `_dev_planner_journal.py`: 800 passed.
+- Those six plus `_dev_spool_transport.py` and `_dev_planner_journal.py`: 807 passed.
 - `pytest tests/unit -k "orchestration_dev or dev_package or executor or agent_execute or
-  workflow or autonomy or global_foundation or github_port"`: 1498 passed, 5152 deselected.
+  workflow or autonomy or global_foundation or github_port"`: 1505 passed, 5152 deselected.
 - `ruff check .`: clean. `ruff format --check` on the four changed code files: clean.
   `mypy src`: no issues in 415 source files.
 - The full test suite was not run locally.
 
 Continuity repair (owner hold on head `fec822fb`: tail loss under a running planner allowed
 conflicting admissions against divergent histories):
-- Invariant implemented: loss or replacement of acknowledged coordination history is not
-  permission to admit or publish; where continuity cannot be established, admission and
-  recovery publication raise `JournalCorrupt` and nothing is appended or published.
-- Mechanism: `DirJournal(root, anchor=...)` keeps an acknowledgement anchor, one exclusive file
-  `<anchor>/<seq:012d>.ack` with the event's sha256, default `<root>.ack` (a sibling
-  directory). `_commit` appends, then acknowledges (reads the event back, creates or compares
-  the acknowledgement), then applies in memory and returns; the caller publishes only after
-  that. `replay` (run by every `sync`, so by `select`, `pump`, `recover`, every commit and the
-  republish path) first checks that the head the planner holds is still stored with the same
-  digest, compares each applied event with its acknowledgement, and refuses a journal that ends
-  below the highest acknowledged event (`JOURNAL_TRUNCATED`); a mismatch is `JOURNAL_DIVERGED`.
-  A planner acknowledges the events it replays; `fleet_status` only checks.
+- Invariant: loss or replacement of acknowledged coordination history must not become
+  permission to admit or publish conflicting work; where continuity cannot be established,
+  admission and recovery publication fail closed.
+- "Acknowledged": the event's sha256 is in the journal's anchor. `DirJournal(root, anchor=...)`
+  keeps one exclusive file `<anchor>/<seq:012d>.ack` per event, default `<root>.ack` (a sibling
+  directory). All planners on a journal must use the same anchor.
+- Mechanism. `_commit`: replay, decide, append, re-check the previous head, acknowledge (read
+  the new event back, create or compare its acknowledgement), then change the replica and
+  return; callers publish only after that. `replay` (every `sync`: `select`, `pump`, `recover`
+  and its republish path, every commit): the HEAD the planner holds must still be stored with
+  the same digest; each applied event must match its acknowledgement; every applied event that
+  has a successor must have an acknowledgement (`JOURNAL_UNANCHORED`; a writer acknowledges
+  all it replayed before it appends, so only the newest event can be unacknowledged); the
+  journal may not end below an acknowledged event, the highest one on a full open
+  (`JOURNAL_TRUNCATED`). Mismatches are `JOURNAL_DIVERGED`. All are `JournalCorrupt`: nothing
+  is published and the replica does not change. A planner acknowledges the events it replays;
+  `fleet_status` only checks and writes nothing.
 - The reported case, as tested: planner 1 holds A and B (events 1, 2); event 2 is deleted. A
   new planner does not construct (`JOURNAL_TRUNCATED`); planner 1's `dispatch`, `select`,
-  `pump`, `recover`, `fail_execution` all raise before deciding; the journal directory and the
-  spool's WORK files are unchanged. With event 2 replaced by a well-chained rival DISPATCH over
-  B's paths, both planners raise `JOURNAL_DIVERGED` and the rival work is not published.
-- Detection versus prevention: an event that is linked and then lost or replaced before the
-  writer's acknowledgement, or acknowledged by a rival with another digest, makes the commit
-  raise; the test asserts that the work was not published, the replica did not advance and no
-  acknowledgement was written.
+  `pump`, `recover`, `fail_execution` raise before deciding; the journal directory and the
+  spool's WORK files are unchanged. With event 2 replaced by a well-chained rival DISPATCH
+  over B's paths both planners raise `JOURNAL_DIVERGED` and the rival work is not published.
+- Detection versus prevention of publication. Prevented (commit raises before the publish,
+  replica unchanged, no acknowledgement written): the new event lost or replaced between the
+  append and the read-back; the previous head replaced between the decision and the append;
+  the event acknowledged by a rival with another digest. In those cases the event file may
+  remain in the journal, unacknowledged. NOT prevented, only detected afterwards: an event
+  lost or replaced after the read-back and before the publish. Its record is published; the
+  next operation of every planner raises, so no conflicting admission follows (pinned by a
+  test). `recover` checks once and then publishes the pending record of every live lineage.
 - Supported storage / failure model: event files can be lost or replaced (deleted tail, older
   copy of the journal directory restored, rival history written afterwards) while the anchor
-  survives; the process can die at any point. An event appended but not yet acknowledged can
-  be lost without consequence: nothing was published for it.
-- Remaining limits: (1) journal and anchor lost or rolled back together are not detected by a
-  NEW planner, which then admits against the shorter history (pinned by a test; a planner that
-  was running still stops). With the default sibling anchor a rollback of the common parent
-  directory is such a case; a separate `anchor` location narrows it. (2) A writer who rewrites
-  journal and anchor is out of scope. (3) An event lost after it was acknowledged and after
-  the operation's last check: its record is published, every later operation stops. (4) There
-  is no repair tool: after a continuity failure nothing runs until an operator restores the
-  journal. (5) `MemoryJournal` has no separate anchor. (6) One more file per event; a full
-  open lists the anchor directory.
+  survives; a planner process can die at any point. Operating-system crash and power loss are
+  not tested.
+- Remaining limits inside that model:
+  (1) a RUNNING planner re-checks only its head. If an acknowledged event below its head is
+  lost or replaced it keeps deciding against its replica, which is still the complete
+  acknowledged history, so it refuses what collides, but it keeps appending to and publishing
+  from a journal no new planner can open (pinned by a test);
+  (2) the publication window described above;
+  (3) an event appended but never acknowledged is not acknowledged history: lost, nothing was
+  published for it; still stored, the next planner validates, acknowledges and publishes it,
+  whoever wrote it.
+- Outside the model: journal and anchor lost or rolled back together, or a journal of at most
+  one event whose anchor is lost (a NEW planner then admits against the shorter history,
+  pinned by a test; a planner that was running still stops). With the default sibling anchor
+  a rollback of the common parent directory is such a case. A writer who rewrites journal and
+  anchor. A missing anchor directory is re-created empty; with two or more events that does
+  not replay.
+- No repair tool: after a continuity failure nothing runs until an operator restores the
+  journal. `MemoryJournal` has no separate anchor (its acknowledgement is its own event list).
+  Two files per event, never removed; a full open lists both directories.
 - Also in this repair: a deferred record whose event turns out to be journalled (the append
-  raised after linking) now has its pending record published by `pump`; tests for the
-  TERMINAL evidence type, strict event file names, `recover` after a journalled REPAIR verdict;
-  docstrings of `pump`, `_guarded`, `fail_execution`, `release_scope` corrected.
+  raised after linking) has its pending record published by `pump`; temp files are removed
+  best effort (a leftover `.tmp-` name is ignored); tests for the TERMINAL evidence type,
+  strict event file names, `recover` after a journalled REPAIR verdict; docstrings of `pump`,
+  `_guarded`, `fail_execution`, `release_scope` corrected.
 - No leases, driver wiring or executor allocation were added.
 
 Not done / open: see the backlog section "Multi-agent autonomous delivery (governed)".

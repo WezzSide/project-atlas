@@ -23,15 +23,19 @@ second record of it. Properties:
     (``claimed_records``: the spool), re-feeds records this identity had claimed but not yet
     journalled;
   * continuity before admission and before publication (the ownership invariant): loss or
-    replacement of ACKNOWLEDGED history is never permission to admit or publish. An event is
-    acknowledged once its digest is in the journal's anchor (``DirJournal``: one exclusive file
-    per event in a separate directory), which happens after the append and before anything is
-    published for it. Every replay, and so every operation that decides or publishes, first
-    checks that the head this planner holds is still stored unchanged, that each event it
-    applies matches its acknowledgement, and that the journal does not end below the highest
-    acknowledged event. Where that cannot be established the operation raises
-    ``JournalCorrupt`` and nothing is appended or published: a planner whose history was lost
-    or replaced under it stops, and a new planner does not start on the shortened journal;
+    replacement of ACKNOWLEDGED history must not become permission to admit or publish
+    conflicting work. An event is acknowledged once its digest is in the journal's anchor
+    (``DirJournal``: one exclusive file per event in a separate directory); that happens after
+    the append and before anything is published for the event, and a writer acknowledges
+    everything it replayed before it appends. Every replay, and so every operation that
+    decides or publishes, checks first that the HEAD event this planner holds is still stored
+    unchanged, that each event it applies matches its acknowledgement, that only the newest
+    event is unacknowledged, and that the journal does not end below an acknowledged event. A
+    commit checks the previous head once more after its append and reads its own event back
+    before acknowledging it. Where any of this fails the operation raises ``JournalCorrupt``,
+    publishes nothing and leaves the replica unchanged. So: a planner that starts on a journal
+    that lost or had replaced any acknowledged event does not start; a running planner stops
+    when its head, or its own new event before acknowledgement, is lost or replaced;
   * linearisable admission: event ``n`` exists only by EXCLUSIVE CREATION of its name
     (``os.link``, the primitive the spool uses); a writer first replays everything up to
     ``n - 1``, decides against that state, and loses with no effect if another writer created
@@ -57,14 +61,24 @@ Limits (what this is NOT):
     admission exist only with a ``DirJournal`` on a directory that offers atomic ``link``;
   * storage / failure model of the continuity check: event files may be lost or replaced (a
     deleted tail, a restored older copy of the journal directory, a rival history written
-    after such a loss) while the anchor survives, and the process may die at any point. NOT
-    covered: journal and anchor lost or rolled back TOGETHER (the default anchor is a sibling
-    directory, so a rollback of their common parent takes both; a new planner then accepts the
-    shorter history, while a planner that was running still stops); a writer who rewrites the
-    journal and the anchor; an event lost after the last continuity check of an operation that
-    had already been acknowledged (the record is published; every later operation stops);
-    loss of an event that was appended but not yet acknowledged, which is by definition not
-    acknowledged history and for which nothing was published;
+    after such a loss) while the anchor survives, and a planner process may die at any point
+    (operating-system crash and power loss are not tested). Within that model, what is NOT
+    prevented, precisely:
+      - a RUNNING planner re-checks only its head. If an acknowledged event BELOW its head is
+        lost or replaced, it keeps deciding against its replica, which is still the complete
+        acknowledged history, so it admits nothing conflicting; but it goes on appending to and
+        publishing from a journal that no new planner can open any more;
+      - an event lost or replaced after its writer's read-back (inside or after the
+        acknowledgement) and before the publish: the record is published; the next operation
+        of every planner stops, so no conflicting admission follows;
+      - ``recover`` checks once and then publishes the pending record of every live lineage;
+      - an event appended but never acknowledged (its writer died) is not acknowledged
+        history: if it is lost, nothing was published for it; if it is still stored, the next
+        planner validates, acknowledges and publishes it, whoever wrote it.
+    Outside the model: journal and anchor lost or rolled back TOGETHER, or a journal of at most
+    one event with its anchor lost (a new planner then accepts the shorter history; a planner
+    that was running still stops; the default anchor is a sibling directory, so a rollback of
+    the common parent is such a case); a writer who rewrites journal and anchor;
   * failing closed is the whole response: there is no repair or re-anchoring tool here, an
     operator has to restore the journal;
   * ``recover`` must be called by whoever restarts a planner; nothing in ``src`` does that yet;
@@ -92,6 +106,7 @@ import json
 import os
 import re
 import tempfile
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -214,6 +229,31 @@ def _sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _drop_tmp(tmp: str) -> None:
+    """Remove a temp name after its content was linked (or not) under the final name.
+
+    Best effort: where a file cannot be unlinked while another handle on it is open (Windows,
+    a reader of the final name), a leftover ``.tmp-`` name is harmless: listings ignore it.
+    """
+    for _ in range(5):
+        try:
+            os.unlink(tmp)
+            return
+        except FileNotFoundError:
+            return
+        except OSError:
+            time.sleep(0.002)
+
+
+def _sync_dir(path: Path) -> None:
+    with contextlib.suppress(OSError):  # directory fsync is best effort (not on Windows)
+        dfd = os.open(path, os.O_RDONLY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+
+
 class MemoryJournal:
     """Volatile, single-process journal (the default). Same contract, no durability.
 
@@ -261,7 +301,11 @@ class DirJournal:
     anchor is the witness that survives a loss of journal files: a journal that ends below the
     highest acknowledged number, or whose event differs from its acknowledgement, does not
     replay. ``anchor`` defaults to the sibling directory ``<root>.ack``; put it on storage that
-    does not fail together with ``root`` to cover more than the loss of event files.
+    does not fail together with ``root`` to cover more than the loss of event files. Every
+    planner on a journal must use the same anchor. A missing anchor directory is created: with
+    two or more events in the journal an empty or foreign anchor does not replay
+    (``JOURNAL_UNANCHORED``); with at most one event it is indistinguishable from "nothing
+    acknowledged yet".
     """
 
     def __init__(self, root: Path, *, anchor: Path | None = None) -> None:
@@ -314,7 +358,8 @@ class DirJournal:
                 with contextlib.suppress(FileExistsError):
                     os.link(tmp, self._ack(seq))  # exclusive: the first acknowledgement stands
             finally:
-                os.unlink(tmp)
+                _drop_tmp(tmp)
+            _sync_dir(self.anchor)
             known = self.acknowledged(seq)
         if known != digest:
             raise JournalCorrupt(
@@ -367,13 +412,8 @@ class DirJournal:
             except FileExistsError:
                 return False
         finally:
-            os.unlink(tmp)
-        with contextlib.suppress(OSError):  # directory fsync is best effort (not on Windows)
-            dfd = os.open(self.root, os.O_RDONLY)
-            try:
-                os.fsync(dfd)
-            finally:
-                os.close(dfd)
+            _drop_tmp(tmp)
+        _sync_dir(self.root)
         return True
 
 
@@ -579,13 +619,16 @@ def _transition(state: FleetState, ev: dict[str, Any], raw: bytes) -> Callable[[
 def replay(journal: Journal, state: FleetState, *, witness: bool = False) -> int:
     """Apply every journal event ``state`` has not seen; returns how many. Fail-closed.
 
-    Continuity is established on every call, before anything is applied and before the caller
-    may decide or publish anything:
-      * the event ``state`` already holds as its head must still be stored with the same digest
-        (a planner whose history was lost or replaced under it stops here);
-      * every event applied must match its acknowledgement where one exists;
-      * the journal may not end below the highest acknowledged sequence number (a journal that
-        lost its tail does not replay, however well-formed what is left of it is).
+    Continuity is checked on every call, before anything is applied and before the caller may
+    decide or publish anything:
+      * the event ``state`` already holds as its HEAD must still be stored with the same digest
+        (events below the head are not re-read by a planner that already applied them);
+      * every event applied must match its acknowledgement where one exists, and every applied
+        event that has a successor must HAVE one (a writer acknowledges all it replayed before
+        it appends, so only the newest event can be unacknowledged; a journal whose anchor is
+        missing, empty or someone else's does not replay past its first event);
+      * the journal may not end below an acknowledged sequence number: the highest one on a
+        full open (a listing of the anchor), the next one otherwise.
     With ``witness`` (a planner, not a read-only projection) each applied event is acknowledged.
     """
     full = state.seq == 0
@@ -594,7 +637,7 @@ def replay(journal: Journal, state: FleetState, *, witness: bool = False) -> int
     n = 0
     while True:
         batch = journal.read(state.seq)
-        for raw in batch:
+        for i, raw in enumerate(batch):
             seq = state.seq + 1
             try:
                 ev = json.loads(raw)
@@ -604,7 +647,12 @@ def replay(journal: Journal, state: FleetState, *, witness: bool = False) -> int
             except (ContractError, ValueError, KeyError, TypeError, RecursionError) as exc:
                 raise JournalCorrupt(f"JOURNAL_CORRUPT:event {seq}: {exc}") from exc
             digest = _sha(raw)
-            if journal.acknowledged(seq) not in (None, digest):
+            known = journal.acknowledged(seq)
+            if known is None and i + 1 < len(batch):
+                raise JournalCorrupt(
+                    f"JOURNAL_UNANCHORED:event {seq} has a successor but no acknowledgement"
+                )
+            if known not in (None, digest):
                 raise JournalCorrupt(
                     f"JOURNAL_DIVERGED:event {seq} is acknowledged as a different event"
                 )
@@ -615,13 +663,13 @@ def replay(journal: Journal, state: FleetState, *, witness: bool = False) -> int
         mark = journal.high_water(state.seq, full=full)
         if mark <= state.seq:
             return n
-        if not batch and not journal.read(state.seq):
+        if not journal.read(state.seq):
             # acknowledged beyond the journal and nothing more to read: the tail is gone
             raise JournalCorrupt(
                 f"JOURNAL_TRUNCATED:event {mark} is acknowledged but the journal ends at "
                 f"{state.seq}"
             )
-        full = False  # a writer got ahead while we read (event before acknowledgement): go on
+        # otherwise a writer got ahead while we read (event before acknowledgement): go on
 
 
 def fleet_status(journal: Journal) -> tuple[dict[str, Any], ...]:
@@ -707,9 +755,12 @@ class Planner:
 
         ``decide`` runs after a fresh replay and raises to refuse. If another writer takes the
         sequence number first, nothing was written: replay and decide again, a bounded number
-        of times. The appended event is acknowledged (read back and anchored) before the
-        in-memory state changes and before this returns, so the caller publishes only for an
-        event that is acknowledged history; if that fails this raises and nothing is published.
+        of times. After the append the previous head is checked again and the new event is
+        acknowledged (read back and anchored) before the in-memory state changes and before
+        this returns, so the caller publishes only for an event that is acknowledged history.
+        If that fails this raises: nothing is published and the replica does not advance. The
+        event file itself may already exist then, unacknowledged; a later replay applies it if
+        it is still a legal transition, or the journal stops replaying.
         """
         for _ in range(MAX_COMMIT_RETRIES):
             self.sync()
@@ -723,6 +774,8 @@ class Planner:
             raw = json.dumps(ev, sort_keys=True).encode()
             apply = _transition(self.state, ev, raw)
             if self.journal.append(ev["seq"], raw):
+                if self.state.seq:  # the event this one was decided on is still that event
+                    self.journal.check_head(self.state.seq, self.state.head)
                 self.journal.acknowledge(ev["seq"], _sha(raw))
                 apply()
                 return ev
@@ -1031,7 +1084,7 @@ class Planner:
         self._commit(decide)
 
     def release_scope(self, lineage_root: str, *, merged_revision: str) -> None:
-        """Release the scope of an INTEGRATION_READY lineage whose candidate was merged.
+        """Release the scope of an INTEGRATION_READY lineage on the caller's merge assertion.
 
         ``merged_revision`` (40-hex) is recorded as the evidence the CALLER asserts; the planner
         cannot observe a merge and does not verify it, so the revision is not proof that
