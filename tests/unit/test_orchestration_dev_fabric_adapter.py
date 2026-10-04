@@ -1074,7 +1074,12 @@ def test_live_dispatch_is_exactly_the_canonical_sealed_payload(tmp_path):
     assert "base_revision" not in legacy.inputs
     assert canonical.inputs == {**legacy.inputs, "base_revision": work.base_revision}
     assert legacy.sha256() != canonical.sha256()
-    assert dev_package.BASE_REVISION_INPUT is dev_fabric_adapter.BASE_REVISION_INPUT
+    assert dev_package.BASE_REVISION_INPUT == dev_fabric_adapter.BASE_REVISION_INPUT
+    # single definition: dev_package imports the name and never assigns it (an identity check
+    # would pass for an equal-valued re-definition because strings are interned)
+    package_source = Path(dev_package.__file__).read_text(encoding="utf-8")
+    assert "    BASE_REVISION_INPUT,\n" in package_source
+    assert "BASE_REVISION_INPUT =" not in package_source
     wf = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "atlas-agent-execute.yml"
     declared = wf.read_text(encoding="utf-8")
     assert f"      {dev_fabric_adapter.BASE_REVISION_INPUT}:\n" in declared
@@ -1159,3 +1164,22 @@ def test_a_port_that_mutates_its_inputs_cannot_change_the_recorded_payload(tmp_p
     assert payload.sha256() == _ledger_payload_sha(xw, work.seal)
     sent = gh.dispatches[-1][2]
     assert sent == payload.inputs and sent is not payload.inputs
+
+
+def test_the_legacy_unsealed_builder_has_no_caller_but_first_run_and_the_wrapper():
+    """Guards against a future caller silently packaging or dispatching the unsealed shape."""
+    import re
+    from pathlib import Path
+
+    src = Path(__file__).resolve().parents[2] / "src"
+    callers = sorted(
+        path.relative_to(src).as_posix()
+        for path in src.rglob("*.py")
+        if re.search(r"(?<![A-Za-z_])build_dispatch_payload\(", path.read_text(encoding="utf-8"))
+    )
+    assert callers == [
+        "project_atlas/orchestration/autonomy/dev_fabric_adapter.py",  # definition + wrapper
+        "project_atlas/orchestration/autonomy/dev_first_run.py",  # frozen DEVQ-0001 package
+    ]
+    adapter = (src / callers[0]).read_text(encoding="utf-8")
+    assert len(re.findall(r"(?<![A-Za-z_])build_dispatch_payload\(", adapter)) == 2

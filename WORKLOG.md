@@ -15635,7 +15635,9 @@ Change:
   argument cannot make the returned payload drift from the ledger hash (closes DEVQ-0003 P2-1).
 - `build_dispatch_payload` (legacy three inputs) is unchanged and kept only for the frozen
   `dev_first_run` module, so the committed, already executed `ATLAS-DEVQ-0001.package.json`
-  still reproduces byte for byte and the `dev_first_run.py` blob pin holds.
+  still reproduces with JSON-identical content (key order differs from the committed file, as
+  it already did before this change) and the existing `dev_first_run.py` blob pin holds. A new
+  test restricts the legacy builder's callers to `dev_first_run` and the canonical wrapper.
 - `dev_package`: every package now carries `workflow_inputs.base_revision` and the matching
   abort condition; `verify_checkout_ref` requires the input for every package kind (previously
   repair only). `BASE_REVISION_INPUT` has one definition (adapter), re-exported by `dev_package`.
@@ -15656,13 +15658,16 @@ Identity effects (measured, not assumed):
 
 Commands and results:
 - `pytest` on the fabric-adapter, package, package-repair, first-run, sealed-base-assert and
-  crosswalk test files: 542 passed.
+  crosswalk test files: 543 passed.
 - `pytest tests/unit -k "orchestration_dev or dev_package or executor or agent_execute or
-  workflow or autonomy or global_foundation"`: 1299 passed before the last added pin test.
+  workflow or autonomy or global_foundation"`: 1300 passed.
 - `ruff check`, `ruff format --check`, `mypy` on the two changed modules: clean.
 
 Not done / open:
 - Not live-validated: nothing was dispatched. `FabricAdapter` is still constructed only in tests.
+- The payload identity holds for the same work item, base branch, statement and commands.
+  Nothing yet forces the adapter's `task_statement` callback to come from the reviewed package;
+  that binding is the unbuilt F2 dispatch authority.
 - Owner question: bump `BUILDER_ID` to `dev_package/2` (truthful builder versioning, at the
   cost of changing repair package bytes) or keep the precedent.
 - The F2 dispatch authority itself is not built; this removes the identity mismatch it would hit.

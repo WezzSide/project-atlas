@@ -832,7 +832,7 @@ Historical roadmaps are classified as inputs and are not erased._
 ## ATLAS-DEVQ-0003 / ATLAS-DEVQ-0004 — sealed base revision and canonical dispatch identity
 
 - [x] ATLAS-DEVQ-0003 (HARDEN-DEVLOOP-002): `FabricAdapter.dispatch` carries the sealed `base_revision`. Merged 2026-10-04 as `15f27693734325514e7993544362f8997b441e77` (PR #1061); independent verification P0 0 / P1 0; post-merge CI `37191807277` PASS on `593fa1a3`.
-- [x] ATLAS-DEVQ-0004 (HARDEN-DEVLOOP-003): one canonical dispatch payload (`build_sealed_dispatch_payload`) shared by packages and the live adapter, so package `workflow_inputs_sha256` equals ledger `payload_sha256`; defensive inputs copy. Lands with the PR that carries this entry. Repair package bytes unchanged; implementation package digests re-pinned (legacy values retained in the test).
+- [x] ATLAS-DEVQ-0004 (HARDEN-DEVLOOP-003): one canonical dispatch payload (`build_sealed_dispatch_payload`) shared by packages and the live adapter, so for the same work item, base branch, statement and commands a package's `workflow_inputs_sha256` equals the ledger `payload_sha256`; defensive inputs copy. Lands with the PR that carries this entry. Repair package bytes unchanged; implementation package digests re-pinned (legacy values retained in the test).
 - [ ] Live validation of the sealed-base assertion through a real adapter dispatch (requires an owner dispatch grant).
 - [ ] F2 dispatch authority binding a reviewed package to a live dispatch (design in `docs/global/baseline/2026-10-02-AUTONOMY-FRONTIER.md`; not built).
 - [ ] `FabricAdapter` live wiring: the adapter is constructed only in tests.

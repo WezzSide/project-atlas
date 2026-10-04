@@ -212,8 +212,8 @@ def build_dispatch_payload(
     """Legacy three-input payload (no ``base_revision``), without secret values.
 
     Kept only so the frozen ``dev_first_run`` module keeps reproducing the committed, already
-    executed ATLAS-DEVQ-0001 package byte for byte. Nothing else may dispatch or package this
-    shape: use ``build_sealed_dispatch_payload``.
+    executed ATLAS-DEVQ-0001 package (JSON-identical content). Nothing else may dispatch or
+    package this shape: use ``build_sealed_dispatch_payload``. A test restricts its callers.
     """
     work.verify_seal()
     if not re.fullmatch(r"[A-Za-z0-9._/-]+", base_branch) or ".." in base_branch:
