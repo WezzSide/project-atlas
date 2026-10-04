@@ -84,7 +84,8 @@ Limits (what this is NOT):
       - an event appended but never acknowledged (its writer died or its commit failed) is not
         acknowledged history: if it is lost, nothing was published for it; if it is still
         stored, the next replay by any planner, including the one whose commit failed,
-        validates and acknowledges it, whoever wrote it, and ``recover`` publishes its record.
+        validates and acknowledges it, whoever wrote it; its record is then published by
+        ``recover``, or by ``pump`` when the record that led to it is still deferred.
     Outside the model, where conflicting work CAN be admitted: journal and anchor lost or
     rolled back TOGETHER, in whole or in part, or a journal of at most one event with its
     anchor lost. A new planner then accepts the shorter history. A planner that was running
@@ -93,12 +94,15 @@ Limits (what this is NOT):
     new planner would refuse (a running planner probes only the next acknowledgement, a full
     open lists the anchor). The default anchor is a sibling directory, so a rollback of the
     common parent is such a case. Also outside: the anchor alone lost under a running planner
-    (it continues against its complete replica and re-anchors only new events, while new
-    planners refuse the journal; an anchor that cannot be written raises ``OSError`` after
-    the event was linked, with nothing published); a writer who rewrites journal and anchor;
+    on a plain ``DirJournal`` (a planner at the head continues against its complete replica;
+    one event behind it adopts and re-anchors that event; two or more behind it fails closed;
+    new planners refuse a journal of two or more events; an anchor that cannot be written
+    raises ``OSError`` after the event was linked, with nothing published); a writer who
+    rewrites journal and anchor. A ``StoreJournal`` (below) turns a missing, re-created or
+    foreign anchor into a refusal for every planner, running or new, at any journal length;
   * failing closed is the whole response: there is no repair or re-anchoring tool here, an
     operator has to restore the journal;
-  * ``recover`` must be called by whoever restarts a planner; nothing in ``src`` does that yet;
+  * ``recover`` must be called by whoever restarts a planner; ``Coordinator.tick`` does;
   * a full open lists the journal directory and reads every event; the directory fsync after
     an append is best effort (not available on Windows);
   * path overlap only: no semantic conflict detection (a generated file two lineages both
@@ -113,6 +117,17 @@ Limits (what this is NOT):
   * the quarantine list is evidence in memory only and is not journalled;
   * it does not lift the fabric adapter's serial-dispatch rule, and no live run has exercised
     two lineages.
+
+Store identity and coordinator (ATLAS-DEVQ-0008): ``StoreJournal`` is a ``DirJournal`` whose
+journal and anchor directories are created once, carry one store id, and are afterwards only
+attached, never created. ``Coordinator`` runs recover, pump and the preparation of further
+compatible lineages as one ``tick`` on such a store and writes a journal-derived status file.
+It refuses a journal without store identity and a transport that does not keep its records,
+checks that every published WORK record is known to the journal (a witness that does not
+depend on the anchor), and never dispatches an executor or releases a scope. See both classes
+for what they do not establish: in particular, journal and anchor on one filesystem are
+reported as an inadequate boundary for live conflicting work, and a different filesystem is
+evidence against one failure mode, not proof of independent storage.
 """
 
 from __future__ import annotations
@@ -124,7 +139,8 @@ import os
 import re
 import tempfile
 import time
-from collections.abc import Callable
+import uuid
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -212,6 +228,7 @@ _ACK_FILE = re.compile(r"[0-9]{12}\.ack")
 _DIGEST = re.compile(r"[0-9a-f]{64}")
 _REVISION = re.compile(r"[0-9a-f]{40}")
 _EXECUTING = frozenset({Phase.DISPATCHED, Phase.REPAIR_DISPATCHED})
+_LIVE = _EXECUTING | {Phase.VERIFYING}  # executing or being verified
 
 
 class Journal(Protocol):
@@ -336,6 +353,15 @@ class DirJournal:
         )
         self.anchor.mkdir(parents=True, exist_ok=True)
 
+    _ignored: frozenset[str] = frozenset()  # names in either directory that are not events/acks
+
+    def _names(self, directory: Path) -> list[str]:
+        return [
+            p.name
+            for p in directory.iterdir()
+            if not p.name.startswith(".tmp-") and p.name not in self._ignored
+        ]
+
     def _path(self, seq: int) -> Path:
         return self.root / f"{seq:012d}.json"
 
@@ -389,7 +415,7 @@ class DirJournal:
     def high_water(self, at_least: int, *, full: bool) -> int:
         if not full:
             return at_least + 1 if self._ack(at_least + 1).exists() else at_least
-        names = [p.name for p in self.anchor.iterdir() if not p.name.startswith(".tmp-")]
+        names = self._names(self.anchor)
         odd = sorted(n for n in names if not _ACK_FILE.fullmatch(n) or int(n[:12]) < 1)
         if odd:
             raise JournalCorrupt(f"JOURNAL_CORRUPT:anchor holds something else: {odd[:3]}")
@@ -398,7 +424,7 @@ class DirJournal:
     def read(self, after: int) -> list[bytes]:
         last = 0
         if after == 0:  # full open: nothing but event files, and (below) no gap before the last
-            names = sorted(p.name for p in self.root.iterdir() if not p.name.startswith(".tmp-"))
+            names = sorted(self._names(self.root))
             odd = [n for n in names if not _EVENT_FILE.fullmatch(n) or int(n[:12]) < 1]
             if odd:
                 raise JournalCorrupt(f"JOURNAL_CORRUPT:directory is not events 1..k: {odd[:3]}")
@@ -435,6 +461,126 @@ class DirJournal:
             _drop_tmp(tmp)
         _sync_dir(self.root)
         return True
+
+
+STORE_MARKER = "STORE.json"
+STORE_VERSION = 1
+SEPARATE_FILESYSTEM = "SEPARATE_FILESYSTEM"
+SAME_FILESYSTEM = "SAME_FILESYSTEM"
+
+
+class StoreJournal(DirJournal):
+    """A ``DirJournal`` whose journal and anchor directories carry one explicit store identity.
+
+    A coordination store is CREATED once (``create``: both directories absent or empty; each
+    gets a ``STORE.json`` marker with the same random store id) and afterwards only ATTACHED
+    (``attach``: both directories and both markers must exist and agree). Nothing here creates
+    a directory or a marker implicitly, so a journal or anchor that went missing is never
+    mistaken for, or re-created as, a fresh start:
+      * a missing or foreign anchor fails at attach and at every later read or
+        acknowledgement (``STORE_IDENTITY``), also for a journal of zero or one event and
+        also for a planner that is already running;
+      * an anchor of another store, or the plain ``DirJournal`` default sibling, cannot be
+        attached by accident.
+    The identity is checked on every ``read`` (so on every replay) and before every
+    acknowledgement. Like every seal here it is unkeyed: it guards against loss, mix-up and
+    re-creation, not against a writer who copies the marker.
+
+    ``boundary`` reports whether the two directories are on different filesystems
+    (``st_dev``). Same filesystem means one snapshot or rollback of a common parent can take
+    journal and anchor back together, which the continuity check cannot see. Different
+    filesystems is evidence against that one failure, not proof of independent storage.
+    """
+
+    _ignored = frozenset({STORE_MARKER})
+
+    def __init__(self, root: Path, anchor: Path, store_id: str) -> None:
+        # deliberately not DirJournal.__init__: nothing is created here
+        self.root = Path(root)
+        self.anchor = Path(anchor)
+        self.store_id = store_id
+        self.check_store()
+
+    @staticmethod
+    def _marker(directory: Path, role: str) -> str:
+        try:
+            raw = json.loads((directory / STORE_MARKER).read_text(encoding="utf-8"))
+            if raw["v"] != STORE_VERSION or raw["role"] != role:
+                raise ValueError(f"marker is not a v{STORE_VERSION} {role} marker")
+            store_id = raw["store"]
+            if not isinstance(store_id, str) or not re.fullmatch(r"[0-9a-f]{32}", store_id):
+                raise ValueError("store id is not 32 hex digits")
+        except FileNotFoundError:
+            raise JournalCorrupt(
+                f"STORE_IDENTITY:{role} directory {directory} has no store marker"
+            ) from None
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise JournalCorrupt(
+                f"STORE_IDENTITY:{role} marker in {directory} is unusable: {exc}"
+            ) from exc
+        return store_id
+
+    def check_store(self) -> None:
+        """Both directories still carry this store's marker; otherwise ``JournalCorrupt``."""
+        for directory, role in ((self.root, "journal"), (self.anchor, "anchor")):
+            found = self._marker(directory, role)
+            if found != self.store_id:
+                raise JournalCorrupt(
+                    f"STORE_IDENTITY:{role} directory belongs to store {found}, not {self.store_id}"
+                )
+
+    @classmethod
+    def create(cls, root: Path, anchor: Path) -> StoreJournal:
+        """Create a NEW, empty store. Refuses anything that already holds something."""
+        root, anchor = Path(root), Path(anchor)
+        a, b = root.resolve(), anchor.resolve()
+        if a == b or a.is_relative_to(b) or b.is_relative_to(a):
+            raise PlannerError("STORE_LAYOUT:journal and anchor must be separate directories")
+        for directory in (root, anchor):
+            if directory.exists() and (not directory.is_dir() or any(directory.iterdir())):
+                raise PlannerError(
+                    f"STORE_EXISTS:{directory} is not empty; a store is created once and then "
+                    "attached, never re-created over what is there"
+                )
+        store_id = uuid.uuid4().hex
+        for directory, role in ((root, "journal"), (anchor, "anchor")):
+            directory.mkdir(parents=True, exist_ok=True)
+            body = json.dumps({"v": STORE_VERSION, "role": role, "store": store_id}, sort_keys=True)
+            fd, tmp = tempfile.mkstemp(dir=directory, prefix=".tmp-")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                    fh.write(body)
+                    fh.flush()
+                    os.fsync(fh.fileno())
+                os.link(tmp, directory / STORE_MARKER)  # exclusive: never overwrites a marker
+            finally:
+                _drop_tmp(tmp)
+            _sync_dir(directory)
+        return cls(root, anchor, store_id)
+
+    @classmethod
+    def attach(cls, root: Path, anchor: Path) -> StoreJournal:
+        """Attach to an EXISTING store. Creates nothing; both markers must exist and agree."""
+        root, anchor = Path(root), Path(anchor)
+        return cls(root, anchor, cls._marker(root, "journal"))
+
+    @property
+    def boundary(self) -> str:
+        try:
+            same = os.stat(self.root).st_dev == os.stat(self.anchor).st_dev
+        except OSError as exc:
+            raise JournalCorrupt(
+                f"STORE_IDENTITY:store directories are not readable: {exc}"
+            ) from exc
+        return SAME_FILESYSTEM if same else SEPARATE_FILESYSTEM
+
+    def read(self, after: int) -> list[bytes]:
+        self.check_store()
+        return super().read(after)
+
+    def acknowledge(self, seq: int, digest: str) -> None:
+        self.check_store()
+        super().acknowledge(seq, digest)
 
 
 @dataclass
@@ -647,7 +793,7 @@ def replay(journal: Journal, state: FleetState, *, witness: bool = False) -> int
       * every event applied must match its acknowledgement where one exists, and every applied
         event that has a successor must HAVE one (a writer acknowledges all it replayed before
         it appends, so only the newest event can be unacknowledged; a journal whose anchor is
-        missing, empty or someone else's does not replay past its first event);
+        missing, empty or someone else's stops at the first event that has a successor);
       * the journal may not end below an acknowledged sequence number: the highest one on a
         full open (a listing of the anchor), the next one otherwise.
     With ``witness`` (a planner, not a read-only projection) each applied event is acknowledged.
@@ -871,7 +1017,12 @@ class Planner:
         )
 
     def dispatch(
-        self, item: QueueItem, *, execution_ordinal: int = 1, **work_fields: object
+        self,
+        item: QueueItem,
+        *,
+        execution_ordinal: int = 1,
+        live_limit: int | None = None,
+        **work_fields: object,
     ) -> WorkItem:
         """Materialize + publish the sealed work for an admissible queue item.
 
@@ -881,6 +1032,8 @@ class Planner:
         colliding holder in lineage-root order, with all of its colliding pairs as normalised
         comparison keys in sorted order. Nothing is published, no state changes, and the task id
         stays usable for a later dispatch. A holder whose seal no longer verifies is an error.
+        ``live_limit`` (optional) refuses with ``LIVE_LIMIT`` when that many lineages are
+        already executing or being verified.
         The decision is taken against the journal and committed as its next event, so it also
         holds against other planners on the same journal. The DISPATCH event is written before
         the work is published; if publishing fails the lineage is DISPATCHED and ``recover``
@@ -908,6 +1061,12 @@ class Planner:
                 raise PlannerError(f"task not admissible: {sel.skipped}")
             if item.task_id in self.lineages or item.task_id in self._by_task:
                 raise PlannerError("lineage/task id already in use")
+            if live_limit is not None:
+                # decided against the journal like the scope check, so the bound holds across
+                # every planner on this journal, not only for this object's view
+                live = sum(1 for st in self.lineages.values() if st.phase in _LIVE)
+                if live >= live_limit:
+                    raise PlannerError(f"LIVE_LIMIT:{live} lineages are live, limit {live_limit}")
             work = make_work(
                 task_id=item.task_id,
                 execution_id=f"{item.task_id}-E{execution_ordinal}",
@@ -1132,3 +1291,177 @@ class Planner:
             "reason": reason,
             "evidence": evidence,
         }
+
+
+MAX_LIVE_DEFAULT = 2
+STATUS_VERSION = 1
+
+
+class Coordinator:
+    """One recoverable coordination step over a durable store: recover, track, prepare.
+
+    ``tick`` (1) establishes continuity (journal replay, store identity, and that every WORK
+    record the transport holds is known to the journal), (2) finishes what a crash left
+    (``Planner.recover``), (3) consumes results and verdicts (``pump``), (4) PREPARES further
+    lineages: it dispatches, into the transport, the next admissible candidates whose scope is
+    compatible with every scope holder, up to ``max_live`` executing or verifying lineages
+    in the store, and (5) writes a status file derived from the journal. Any number of
+    coordinators may tick on one store; scope admission and the ``max_live`` bound are both
+    decided in the journal commit, not by this object (coordinators configured with different
+    limits each enforce their own).
+
+    What it is NOT, and never does:
+      * it does not dispatch an executor: publishing a WORK record makes it available to an
+        implementer role; causing a workflow run is the fabric adapter's separate, authority
+        bound step. Nothing here holds or consumes a dispatch grant;
+      * recovery is not a new attempt: ``recover`` only re-publishes the SAME sealed record
+        (same seal, same execution id, same attempt number). A transport that still has the
+        record, pending or claimed, ignores it, and the adapter refuses to dispatch a seal its
+        ledger already dispatched;
+      * it never releases a scope: it does not call ``fail_execution`` or ``release_scope``.
+        A failure report, a timeout or a caller-supplied revision is not proof that an
+        executor stopped writing or that a candidate was merged; a lineage keeps its scope
+        until something with that proof says otherwise;
+      * it does not fall back: it refuses a journal without store identity (``MemoryJournal``,
+        a plain ``DirJournal``) and a transport that does not keep its records, and it refuses
+        a store whose journal and anchor share a filesystem unless the caller explicitly
+        accepts that reduced boundary, which the status file then states.
+    Limits: the witness check trusts the transport directory as much as the journal (anyone
+    who can write a WORK record there can stop every coordinator); one tick is not atomic (a
+    crash between its steps is finished by the next tick); candidates are supplied by the
+    caller, there is no mission decomposition here; no leases and no executor assignment.
+    """
+
+    def __init__(
+        self,
+        journal: Journal,
+        transport: DevTransport,
+        *,
+        identity: str,
+        verifier_identities: tuple[str, ...],
+        status_path: Path,
+        max_live: int = MAX_LIVE_DEFAULT,
+        accept_same_filesystem: bool = False,
+    ) -> None:
+        if not isinstance(journal, StoreJournal):
+            raise PlannerError(
+                "COORDINATOR_NEEDS_STORE:a coordinator runs only on an attached StoreJournal "
+                f"(got {type(journal).__name__}); there is no in-memory or unanchored fallback"
+            )
+        for needed in ("claimed_records", "published"):
+            if not callable(getattr(transport, needed, None)):
+                raise PlannerError(
+                    f"COORDINATOR_NEEDS_DURABLE_TRANSPORT:transport has no {needed}()"
+                )
+        if not isinstance(max_live, int) or isinstance(max_live, bool) or max_live < 1:
+            raise PlannerError("max_live must be an integer >= 1")
+        self.boundary = journal.boundary
+        if self.boundary != SEPARATE_FILESYSTEM and not accept_same_filesystem:
+            raise PlannerError(
+                "STORE_BOUNDARY:journal and anchor are on the same filesystem; one rollback of "
+                "it takes both back together, which the continuity check cannot detect. Put "
+                "the anchor on a different filesystem or accept the reduced boundary "
+                "explicitly (accept_same_filesystem=True)"
+            )
+        self.journal = journal
+        self.status_path = Path(status_path)
+        self.max_live = max_live
+        self.planner = Planner(
+            transport, identity=identity, verifier_identities=verifier_identities, journal=journal
+        )
+        self._witness()
+
+    def _witness(self) -> None:
+        """Every WORK record the transport holds must be a work the journal knows.
+
+        The journal is written before a record is published, so a published work the journal
+        does not know means the journal lost history (or this is another store's transport).
+        Independent of the anchor: it also catches journal and anchor rolled back together, as
+        long as the transport was not rolled back with them.
+        """
+        known = {w.seal for w in self.planner.state.works.values()}
+        published = self.planner.transport.published(Channel.WORK)  # type: ignore[attr-defined]
+        unknown = sorted(r.seal for r in published if r.seal not in known)
+        if unknown:
+            raise JournalCorrupt(
+                f"JOURNAL_BEHIND_TRANSPORT:{len(unknown)} published work record(s) are unknown "
+                f"to the journal, first {unknown[0]}"
+            )
+
+    def live(self) -> frozenset[str]:
+        """Lineage roots that are executing or being verified (what ``max_live`` bounds)."""
+        return frozenset(r for r, st in self.planner.lineages.items() if st.phase in _LIVE)
+
+    def tick(
+        self, candidates: Sequence[tuple[QueueItem, Mapping[str, Any]]] = ()
+    ) -> dict[str, Any]:
+        """Run one coordination step and return the status that was written.
+
+        ``candidates`` are (queue item, sealed work fields) pairs the caller proposes; a
+        candidate refused for a scope collision or for contention is reported as deferred and
+        may simply be proposed again. Raises ``JournalCorrupt`` (nothing prepared, the status
+        file untouched) when continuity cannot be established.
+        """
+        p = self.planner
+        p.sync()
+        self._witness()
+        recovered = p.recover()
+        processed = p.pump()
+        fields = {item.task_id: (item, dict(work)) for item, work in candidates}
+        if len(fields) != len(candidates):
+            raise PlannerError("duplicate task id among the candidates")
+        admitted: list[str] = []
+        deferred: list[tuple[str, str]] = []
+        remaining = [item for item, _ in candidates]
+        while remaining and len(self.live()) < self.max_live:
+            sel = p.select(remaining)
+            if sel.selected is None:
+                break
+            item, work = fields[sel.selected.task_id]
+            remaining = [i for i in remaining if i.task_id != item.task_id]
+            try:
+                p.dispatch(item, live_limit=self.max_live, **work)
+            except JournalContended as exc:
+                deferred.append((item.task_id, str(exc).split(":")[0]))
+                break  # the journal is busy: leave the rest for the next tick
+            except JournalCorrupt:
+                raise
+            except PlannerError as exc:
+                reason = str(exc)
+                if reason.startswith("LIVE_LIMIT:"):
+                    break  # another coordinator filled the capacity since we looked
+                deferred.append(
+                    (
+                        item.task_id,
+                        reason if reason.startswith("SCOPE_COLLISION:") else f"REFUSED:{reason}",
+                    )
+                )
+                continue
+            admitted.append(item.task_id)
+        status = {
+            "v": STATUS_VERSION,
+            "store": self.journal.store_id,
+            "continuity_boundary": self.boundary,
+            "boundary_adequate_for_live_conflicting_work": self.boundary == SEPARATE_FILESYSTEM,
+            "journal": {"seq": p.state.seq, "head": p.state.head},
+            "max_live": self.max_live,
+            "live": sorted(self.live()),
+            "admitted": admitted,
+            "deferred": [list(d) for d in deferred],
+            "recovered": recovered,
+            "records_processed": processed,
+            "records_deferred": len(p.deferred),
+            "records_quarantined": len(p.quarantined),
+            "lineages": [dict(r) for r in fleet_status(self.journal)],
+        }
+        self._write_status(status)
+        return status
+
+    def _write_status(self, status: dict[str, Any]) -> None:
+        self.status_path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=self.status_path.parent, prefix=".tmp-status-")
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(status, sort_keys=True, indent=2) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, self.status_path)  # atomic: a reader never sees a torn status

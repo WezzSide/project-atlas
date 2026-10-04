@@ -219,6 +219,27 @@ class SpoolTransport:
             return False
         return True
 
+    def published(self, channel: Channel) -> list[Record]:
+        """Every decodable record this spool holds on ``channel``, pending or claimed.
+
+        Read-only. Records are kept after a claim, so this is the transport's own account of
+        what was ever published and not rejected; an unreadable file is skipped (it would be
+        parked on a claim, never handed out).
+        """
+        d = self._dir(channel)
+        out: dict[str, Record] = {}
+        for folder in (d, d / _CLAIMED):
+            for path in sorted(folder.glob("*.json")):
+                if path.name.endswith(".claim.json") or path.name.startswith("."):
+                    continue
+                try:
+                    rec = decode(_read_wire(path))
+                except (OSError, ValueError, ContractError, RecursionError):
+                    continue
+                if rec.seal == path.stem and CHANNEL_FOR_KIND[rec.KIND] is channel:
+                    out[rec.seal] = rec
+        return [out[k] for k in sorted(out)]
+
     def claimed_records(self, channel: Channel, *, identity: str) -> list[Record]:
         """Records this identity claimed earlier (crash recovery: claim-before-persist window)."""
         d = self._dir(channel) / _CLAIMED
