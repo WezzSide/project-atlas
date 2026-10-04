@@ -456,7 +456,8 @@ def test_one_bad_record_does_not_abort_the_pass_for_other_lineages():
     t = InMemoryTransport()
     p = planner(t)
     p.dispatch(qi("A"), **FIELDS)
-    p.dispatch(qi("B"), **FIELDS)
+    # B gets a disjoint scope: two live lineages may not share a write scope (ATLAS-DEVQ-0006)
+    p.dispatch(qi("B"), **{**FIELDS, "allowed_paths": ("src/y",)})
     stray = make_work(
         **{
             **dict(task_id="ZZ", execution_id="ZZ-E1", lineage_root="ZZ"),
@@ -751,7 +752,7 @@ def _fields(*paths, **kw):
 
 
 def scoped(t):
-    return Planner(t, identity="vps3-plan", verifier_identities=(VER,), scope_admission=True)
+    return Planner(t, identity="vps3-plan", verifier_identities=(VER,))
 
 
 def _work_records(t):
@@ -1070,15 +1071,14 @@ def test_two_disjoint_scope_lineages_are_dispatched_and_proceed_independently():
     assert p.in_flight() == {"A"} and not p.quarantined
 
 
-def test_scope_admission_is_opt_in_and_the_default_planner_is_unchanged():
+def test_scope_admission_cannot_be_switched_off():
     t = InMemoryTransport()
-    p = planner(t)  # default: scope_admission=False
-    assert p.scope_admission is False
+    p = planner(t)  # the ordinary constructor: there is no opt-out
     p.dispatch(qi("A"), **FIELDS)
-    p.dispatch(qi("B"), **FIELDS)  # overlapping scope is NOT refused by a default planner
-    assert _work_records(t) == 2 and p.in_flight() == {"A", "B"}
-    assert len(p.scope_holders()) == 2  # the view exists either way; only the refusal is opt-in
+    with pytest.raises(PlannerError, match=r"^SCOPE_COLLISION:A:"):
+        p.dispatch(qi("B"), **FIELDS)
+    assert _work_records(t) == 1 and p.in_flight() == {"A"}
     with pytest.raises(PlannerError, match="lineage/task id already in use"):
         p.dispatch(qi("A"), **FIELDS)  # repeated dispatch keeps its existing refusal
-    with pytest.raises(PlannerError):
-        Planner(t, identity="vps3-plan", verifier_identities=(VER,), scope_admission=1)  # type: ignore[arg-type]
+    with pytest.raises(TypeError):
+        Planner(t, identity="vps3-plan", verifier_identities=(VER,), scope_admission=False)  # type: ignore[call-arg]

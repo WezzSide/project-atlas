@@ -8,13 +8,11 @@ owner-required, or blocked. One blocked lineage never blocks the program.
 Not a merge actor: INTEGRATION_READY means "verified candidate exists"; governance/merge admission
 (merge gate, owner policy) is a separate, later, owner-bound step. This module never grants a gate.
 
-Write-scope admission (ATLAS-DEVQ-0006): ``select`` skips tasks that are in flight, and a planner
-constructed with ``scope_admission=True`` refuses in ``dispatch`` a new lineage whose sealed
-``allowed_paths`` overlap those of a lineage that still holds its scope (``SCOPE_HOLDING``). The
-check is OFF by default (``scope_admission=False``): a default planner publishes overlapping
-lineages exactly as before. This is admission control, not authority: it grants nothing and it is
-not a concurrency guarantee. Limits:
-  * opt-in: without ``scope_admission=True`` no scope is compared at all;
+Write-scope admission (ATLAS-DEVQ-0006): ``select`` skips tasks that are in flight, and
+``dispatch`` always refuses a new lineage whose sealed ``allowed_paths`` overlap those of a
+lineage that still holds its scope (``SCOPE_HOLDING``); there is no switch to turn the check
+off. This is admission control, not authority: it grants nothing and it is not a concurrency
+guarantee. Limits:
   * in-memory only: a planner restart forgets every holder;
   * one planner process: nothing is guaranteed across processes or hosts;
   * path overlap only: no semantic conflict detection (a generated file two lineages both rewrite,
@@ -98,10 +96,7 @@ class Planner:
         *,
         identity: str,
         verifier_identities: tuple[str, ...],
-        scope_admission: bool = False,
     ) -> None:
-        if not isinstance(scope_admission, bool):
-            raise PlannerError("scope_admission must be a bool")
         if not verifier_identities or not isinstance(verifier_identities, tuple | list):
             raise PlannerError("at least one verifier identity is required (as a tuple)")
         if not isinstance(identity, str) or not all(
@@ -121,7 +116,6 @@ class Planner:
             raise PlannerError("the planner may not be one of its own verifiers")
         self.transport = transport
         self.identity = identity
-        self.scope_admission = scope_admission  # write-scope collision check in dispatch
         self.verifiers = tuple(verifier_identities)  # own copy: later mutation cannot bypass checks
         self.lineages: dict[str, LineageState] = {}
         self._by_task: dict[str, str] = {}  # task_id -> lineage_root
@@ -162,9 +156,8 @@ class Planner:
     ) -> WorkItem:
         """Materialize + publish the sealed work for an admissible queue item.
 
-        With ``scope_admission=True`` (constructor; default off), before anything is published
-        or recorded the sealed work is compared with the current work of every scope holder
-        (``works_collide``). On an overlap this raises ``PlannerError``
+        Before anything is published or recorded the sealed work is compared with the current
+        work of every scope holder (``works_collide``). On an overlap this raises ``PlannerError``
         ``SCOPE_COLLISION:<holder lineage root>:<new>|<held>[,<new>|<held>...]`` for the first
         colliding holder in lineage-root order, with all of its colliding pairs as normalised
         comparison keys in sorted order. Nothing is published, no state changes, and the task id
@@ -199,7 +192,7 @@ class Planner:
             max_attempts=item.max_attempts,
             **work_fields,
         )
-        for holder in self.scope_holders() if self.scope_admission else ():
+        for holder in self.scope_holders():
             pairs = works_collide(work, holder)
             if pairs:
                 raise PlannerError(

@@ -15810,7 +15810,7 @@ Not done / open:
 - Owner/reviewer call: item 2 drops debugging context (the chained `HTTPError`) for error
   responses that carry `Link` or `Content-Location`.
 
-## 2026-10-04 — ATLAS-DEVQ-0006: write-scope collision admission in the DEVQ planner (opt-in; admission control, not authority)
+## 2026-10-04 — ATLAS-DEVQ-0006: write-scope collision admission in the DEVQ planner (admission control, not authority)
 
 What / why: two structural gaps stood in the way of running more than one lineage. (1)
 `select_next` had no notion of "in flight", so with an in-flight top-ranked item
@@ -15831,16 +15831,24 @@ Changes (pure, in the existing modules; no new module, no `WorkItem` field, no s
   dependency.
 - `dev_planner.py`: `SCOPE_HOLDING` = DISPATCHED, VERIFYING, REPAIR_DISPATCHED,
   INTEGRATION_READY; `Planner.in_flight()`, `Planner.scope_holders()`; `Planner.select` passes
-  `in_flight`; `Planner(..., scope_admission=True)` makes `dispatch` refuse, before anything is
-  published or recorded, a work item that collides with a scope holder:
-  `SCOPE_COLLISION:<holder lineage root>:<new>|<held>[,...]`.
+  `in_flight`; `dispatch` always refuses, before anything is published or recorded, a work
+  item that collides with a scope holder:
+  `SCOPE_COLLISION:<holder lineage root>:<new>|<held>[,...]`. There is no switch to turn the
+  refusal off.
 
-Deviation from the requested design: the dispatch refusal is OPT-IN (`scope_admission=False`
-by default). An unconditional check makes the existing test
-`test_one_bad_record_does_not_abort_the_pass_for_other_lineages` fail (it dispatches lineages
-A and B with the identical scope and expects both), and the task forbade editing existing
-tests. A default planner therefore still publishes overlapping lineages, as before. Making
-the check the default needs an owner decision and an edit of that test.
+Behaviour change for existing callers: a planner that previously published two lineages with
+overlapping `allowed_paths` in the same repository now refuses the second one. Four existing
+tests dispatched a second lineage with the same scope as the first for reasons unrelated to
+scope, and were edited:
+- `test_orchestration_dev_loop_contracts.py::test_one_bad_record_does_not_abort_the_pass_for_other_lineages`:
+  lineage B now gets `allowed_paths=("src/y",)`.
+- `test_orchestration_dev_fabric_adapter.py::test_second_work_is_deferred_until_the_first_is_bound_to_a_run`,
+  `::test_run_already_bound_to_a_failed_lineage_is_never_adopted_by_the_next_dispatch`,
+  `::test_dropped_lineage_keeps_blocking_so_its_late_run_is_never_adopted`: DEVQ-2 is dispatched
+  with `FIELDS_DISJOINT` (`allowed_paths=("src/y/",)`). The third test also asserted that
+  DEVQ-1 is the work dispatched first; with the changed seal the adapter dispatches DEVQ-2
+  first, so the test now takes whichever of the two failed and asserts the same properties for
+  the other one. No adapter source changed.
 
 What holds and what releases scope (in this planner object):
 - holds: DISPATCHED, VERIFYING, REPAIR_DISPATCHED, INTEGRATION_READY;
@@ -15851,7 +15859,6 @@ What holds and what releases scope (in this planner object):
   call.
 
 Limits:
-- Opt-in; off by default.
 - In-memory only: a planner restart forgets every holder.
 - One planner process: no guarantee across processes or hosts.
 - Path overlap only: no semantic conflict detection (shared generated files, whole-suite
@@ -15859,8 +15866,7 @@ Limits:
 - The planner cannot observe merges.
 - The fabric adapter's serial-dispatch rule is not lifted and not touched.
 - This is admission control, not authority: it grants nothing. It is NOT "safe concurrency":
-  no live run has exercised two lineages, and nothing constructs a planner with
-  `scope_admission=True` outside the tests.
+  no live run has exercised two lineages.
 - The `SCOPE_COLLISION` message is split on `:`, `,` and `|`; `norm_path` does not forbid those
   characters in a path or in a lineage root, so such names make the message ambiguous.
 - An OWNER_REQUIRED lineage releases its scope although its result branch may still exist.
@@ -15874,9 +15880,9 @@ key and raises on malformed entries, so it accepts entries a package spec would 
 
 Commands and results (`PYTHONPATH=<worktree>/src`, `--no-cov -o addopts=""`):
 - `pytest` on the two changed test files, unchanged tree at `71f6a039`: 106 passed.
-- The same two files with the new tests against the base versions of the three source modules:
-  30 failed, 106 passed. All 30 new test cases fail there; most fail on the missing names
-  (`scope_overlap`, `works_collide`, `in_flight`, `scope_admission`), not on a behavioural
+- Those two files plus `test_orchestration_dev_fabric_adapter.py` from this change against the
+  base versions of the three source modules: 30 failed, 169 passed. Most of the 30 fail on the
+  missing names (`scope_overlap`, `works_collide`, `in_flight`), not on a behavioural
   assertion.
 - This change, the two files: 136 passed.
 - `pytest` on `test_orchestration_dev_loop_contracts.py`, `_dev_queue.py`,
@@ -15884,12 +15890,12 @@ Commands and results (`PYTHONPATH=<worktree>/src`, `--no-cov -o addopts=""`):
   646 passed.
 - `pytest tests/unit -k "orchestration_dev or dev_package or executor or agent_execute or
   workflow or autonomy or global_foundation or github_port"`: 1355 passed, 5152 deselected.
-- `ruff check .`: clean. `ruff format --check` on the five changed code files: clean.
+- `ruff check .`: clean. `ruff format --check` on the six changed code files: clean.
   `mypy src`: no issues in 415 source files.
 - The full test suite was not run.
 
 Not done / open:
-- Collision refusal as the default (see deviation).
+- Owner adoption point: INTEGRATION_READY keeps holding scope with no release call.
 - Durable scope holders, a release on merge, cross-process exclusion.
 - No adapter or workflow wiring; no live run.
 - Not independently verified.
