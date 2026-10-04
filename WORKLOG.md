@@ -15676,3 +15676,50 @@ Closure notes for earlier work packages (no separate PR): ATLAS-DEVQ-0003 merged
 `15f27693734325514e7993544362f8997b441e77` (PR #1061); global contract v2 / OC-L and directive
 template v2 merged as `593fa1a3ae1b04a6fdf65dcb99e5afe0f8d022ee` (PR #1062); post-merge CI run
 `37191807277` on `593fa1a3` passed.
+
+## 2026-10-04 — ATLAS-DEVQ-0004 follow-up: builder identity `dev_package/2` (owner decision, trust surface)
+
+Owner steering: `provenance.builder` is a builder-version identity, and #1063 changed what the
+builder renders, so it must not keep presenting itself as `dev_package/1`. The steering asked
+for the bump on #1063 before merge; #1063 had already been merged (owner account,
+`f17f582846493a5e6edde07b59bc0169c7a7390f`, 2026-10-04T10:43:39Z) when it arrived, so the bump
+is this separate follow-up on top of that merge. Between that merge and this change, `main`
+renders the canonical sealed payload under the old id `dev_package/1`.
+
+Change (`dev_package.py` only, plus tests and docs):
+- `BUILDER_ID = "dev_package/2"`, with a version history comment. Under `dev_package/1` the
+  rendered shape changed more than once without a bump (#1055, #1057, #1063), so that id does
+  not identify one shape.
+- `verify_checkout_ref` refuses any package whose `provenance.builder` is not the current
+  `BUILDER_ID` (new stable reason `PACKAGE_BUILDER_UNSUPPORTED`), including a missing or
+  malformed `provenance`. A package from an earlier builder version must be re-rendered from
+  its spec before it can be dispatched. This is stricter than before, never looser.
+- No production code path renders `dev_package/1` packages.
+
+Identity effects (measured):
+- Every rendered package's `package_sha256` changes, because `provenance.builder` is part of the
+  rendered document. `work_seal`, `spec_sha256` and `workflow_inputs_sha256` do NOT change, so
+  the canonical package/live-dispatch payload identity from #1063 is untouched.
+- Repair fixture: `da0b36a1…6474` -> `0d5349a8b2faf58a2dbd14130224e4304a3535e125d8cec27c48c145c36f4557`.
+  Implementation goldens: `d6360a78…41f3` -> `ad6d27a55c30537d5c2df837e07299faa7b81f1705c6295c11fd226f4deaf07f`
+  and `e6878dd8…d652` -> `7893199decf5a4322c99a965e377a74ffc27b34788b0d60cb7c30b903d5edff1`.
+
+Historical reproducibility (nothing historical is rewritten; stored packages, hashes, evidence
+and commits are untouched):
+- A `dev_package/1` repair package is today's package with the old builder id and nothing else.
+  Tested on the fixture, and measured on the real reviewed ATLAS-DEVQ-0002-E2-R2 v4 package:
+  rebuilt from its stored spec and re-labelled `dev_package/1`, it is byte-equal to the stored
+  copy (`b449999a1801456c9e9bcaa49c40410e85965e316b852ee569e8fd56338a6835`). Its `/2` rendering
+  is `53d897c3fe24eca1f78e6c5bae90712389301fb1e6378299ede2e923b77476fc`.
+- Both earlier implementation identities are reproduced in tests by exact, stated derivations
+  from today's package: old builder id only (the #1063 identity), and additionally without the
+  `base_revision` input and its abort condition (the original three-input identity,
+  `LEGACY_GOLDEN`).
+- The frozen `dev_first_run` module and the committed ATLAS-DEVQ-0001 package are unaffected.
+
+Commands and results:
+- `pytest` on the fabric-adapter, package, package-repair, first-run, sealed-base-assert and
+  crosswalk test files: 546 passed.
+- `ruff check .`, `ruff format --check` on changed files, `mypy src`: clean.
+
+Not done: no dispatch; no live validation; the adapter is still constructed only in tests.

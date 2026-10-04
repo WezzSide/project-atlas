@@ -183,7 +183,7 @@ def test_package_has_provenance_and_never_asserts_secret_presence() -> None:
     text = render_package(pkg)
     assert "CONFIRMED_PRESENT" not in text
     assert pkg["secrets"]["ANTHROPIC_API_KEY"].startswith("NOT_ASSERTED")
-    assert pkg["provenance"]["builder"] == "dev_package/1"
+    assert pkg["provenance"]["builder"] == "dev_package/2"
     canon = json.dumps(
         {k: list(v) if isinstance(v, list) else v for k, v in BASE_SPEC.items()},
         sort_keys=True,

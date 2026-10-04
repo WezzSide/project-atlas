@@ -83,7 +83,17 @@ __all__ = [
     "verify_checkout_ref",
 ]
 
-BUILDER_ID = "dev_package/1"
+# Builder-version identity recorded in ``provenance.builder``. It changes whenever the rendered
+# package for a given spec changes, so a package always names the builder that can reproduce it.
+#   dev_package/1  every package rendered up to main f17f582846493a5e6edde07b59bc0169c7a7390f.
+#                  Under that id the rendered shape changed more than once without a bump
+#                  (repair support, the repair-only ``base_revision`` input, then the canonical
+#                  sealed payload for implementation packages); the id alone therefore does not
+#                  identify one shape. Those packages are historical evidence and stay as they
+#                  are; this builder no longer renders or accepts them.
+#   dev_package/2  the canonical sealed dispatch payload for every package kind. Apart from
+#                  this id, a /2 repair package is identical to the last /1 repair shape.
+BUILDER_ID = "dev_package/2"
 BASE_BRANCH = "main"
 # ``BASE_REVISION_INPUT`` (imported from ``dev_fabric_adapter``, re-exported here) names the
 # atlas-agent-execute.yml input the workflow asserts its checked-out HEAD against. The canonical
@@ -969,9 +979,10 @@ def verify_checkout_ref(package: Mapping[str, Any], resolved_sha: object) -> Non
     must name ``main``; the recorded workflow inputs must still hash to
     ``workflow_inputs_sha256``. Every package must also carry
     ``workflow_inputs.base_revision`` equal to the sealed base revision (the value the execute
-    workflow asserts against its checked-out HEAD); a package without it (including one
-    rendered before the input became part of the canonical payload) is refused. Raises
-    ``PackageSpecError`` with a stable reason otherwise.
+    workflow asserts against its checked-out HEAD); a package without it is refused. A
+    package whose ``provenance.builder`` is not the current ``BUILDER_ID`` (any package rendered
+    by an earlier builder version) is refused with ``PACKAGE_BUILDER_UNSUPPORTED``: it must be
+    re-rendered from its spec. Raises ``PackageSpecError`` with a stable reason otherwise.
 
     This checks the package's INTERNAL consistency only. It does not authenticate the package:
     a forged but self-consistent document passes. The trust anchor is the reviewed
@@ -992,6 +1003,12 @@ def verify_checkout_ref(package: Mapping[str, Any], resolved_sha: object) -> Non
         or "base_branch" not in inputs
     ):
         raise _fail("CHECKOUT_PACKAGE_INVALID", "package lacks well-formed checkout fields")
+    provenance = package.get("provenance")
+    if not isinstance(provenance, dict) or provenance.get("builder") != BUILDER_ID:
+        raise _fail(
+            "PACKAGE_BUILDER_UNSUPPORTED",
+            f"package was not rendered by {BUILDER_ID}; re-render it from its spec",
+        )
     recorded = DispatchPayload(workflow=workflow, ref=ref, inputs=inputs).sha256()
     if package.get("workflow_inputs_sha256") != recorded:
         raise _fail("CHECKOUT_PACKAGE_INVALID", "workflow_inputs do not match their sha256")
