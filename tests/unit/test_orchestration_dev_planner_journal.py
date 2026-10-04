@@ -25,6 +25,7 @@ from project_atlas.orchestration.autonomy.dev_planner import (
     MAX_COMMIT_RETRIES,
     DirJournal,
     JournalContended,
+    JournalCorrupt,
     MemoryJournal,
     Phase,
     Planner,
@@ -675,9 +676,34 @@ def test_a_corrupt_journal_makes_pump_raise_instead_of_quarantining_records(tmp_
     p.dispatch(qi("A"), **FIELDS)
     implement(t)
     _forge(tmp_path / "j", 2, "0" * 64, event="NONSENSE", root="A")
-    with pytest.raises(PlannerError, match=r"JOURNAL_CORRUPT|hash chain"):
+    with pytest.raises(JournalCorrupt, match="hash chain"):
         p.pump()
     assert len(t._queues[Channel.RESULT]) == 1 and not p.quarantined  # nothing was consumed
+
+
+def test_a_journal_that_stops_replaying_mid_pump_keeps_the_claimed_record(tmp_path):
+    class Late(DirJournal):
+        poison_at = 0
+        reads = 0
+
+        def read(self, after):
+            self.reads += 1
+            if self.reads == self.poison_at:
+                _forge(self.root, after + 1, "0" * 64, event="NONSENSE", root="A")
+            return super().read(after)
+
+    t = InMemoryTransport()
+    j = Late(tmp_path / "j")
+    p = planner(t, j)
+    p.dispatch(qi("A"), **FIELDS)
+    implement(t)
+    j.reads, j.poison_at = 0, 2  # read 1 is pump's own replay, read 2 the handler's commit
+    with pytest.raises(JournalCorrupt):
+        p.pump()
+    assert not p.quarantined and not t._queues[Channel.RESULT]
+    assert [c for c, _ in p.deferred] == [Channel.RESULT]  # claimed, undecided, kept
+    (tmp_path / "j" / "000000000002.json").unlink()  # the operator removes the bad event
+    assert p.pump() == 1 and p.lineages["A"].phase is Phase.VERIFYING and p.deferred == []
 
 
 def test_the_default_journal_is_volatile_and_per_planner():
@@ -813,6 +839,73 @@ def test_a_contended_or_failed_append_defers_the_claimed_record_instead_of_dropp
     assert p.pump() == 0
 
 
+def test_every_deferred_record_survives_an_io_error_on_one_of_them():
+    class Shaky(MemoryJournal):
+        mode = "ok"
+
+        def append(self, seq, data):
+            if self.mode == "contended":
+                return False
+            if self.mode == "io":
+                self.mode = "ok"  # one IO error, then healthy
+                raise OSError(5, "Input/output error")
+            return super().append(seq, data)
+
+    t = InMemoryTransport()
+    j = Shaky()
+    p = planner(t, j)
+    for root, path in (("A", "src/a"), ("B", "src/b"), ("C", "src/c")):
+        p.dispatch(qi(root), **fields(path))
+        implement(t)
+    j.mode = "contended"
+    assert p.pump() == 3 and len(p.deferred) == 3
+    j.mode = "io"
+    with pytest.raises(OSError):
+        p.pump()
+    assert len(p.deferred) == 3 and not p.quarantined  # none dropped by the failed retry
+    assert p.pump() == 3 and p.deferred == [] and not p.quarantined
+    assert {r: s.phase for r, s in p.lineages.items()} == dict.fromkeys("ABC", Phase.VERIFYING)
+    assert p.pump() == 0 and p.state.seq == 6  # each result journalled exactly once
+
+
+def test_a_publish_failure_after_the_commit_does_not_defer_the_record():
+    class Flaky(InMemoryTransport):
+        down = False
+
+        def publish(self, record):
+            if self.down and record.KIND.value == "VERIFICATION_REQUEST":
+                raise OSError("down")
+            return super().publish(record)
+
+    t = Flaky()
+    p = planner(t, None)
+    p.dispatch(qi("A"), **FIELDS)
+    implement(t)
+    t.down = True
+    with pytest.raises(OSError):
+        p.pump()
+    # journalled (VERIFYING), so the result is decided: not deferred, never fed again
+    assert p.lineages["A"].phase is Phase.VERIFYING and p.deferred == []
+    t.down = False
+    assert p.pump() == 0 and not p.quarantined
+    assert p.recover() == ["REPUBLISHED:A:VERIFICATION_REQUEST"]
+
+
+def test_a_result_that_ends_in_no_independent_verifier_is_not_fed_again(tmp_path):
+    def only_impl():
+        return Planner(
+            t, identity="vps3-plan", verifier_identities=(IMPL,), journal=DirJournal(tmp_path / "j")
+        )
+
+    t = SpoolTransport(tmp_path / "spool")
+    p = only_impl()
+    p.dispatch(qi("A"), **FIELDS)
+    implement(t)
+    assert p.pump() == 1 and p.blocked == {"A": "BLOCKED:NO_INDEPENDENT_VERIFIER"}
+    q = only_impl()
+    assert q.recover() == [] and not q.quarantined  # its seal is journalled as evidence
+
+
 def test_append_refuses_a_sequence_number_whose_predecessor_is_missing(tmp_path):
     j = DirJournal(tmp_path / "j")
     assert j.append(2, b"{}") is False and list((tmp_path / "j").iterdir()) == []
@@ -824,3 +917,6 @@ def test_append_refuses_a_sequence_number_whose_predecessor_is_missing(tmp_path)
     ]
     (tmp_path / "j" / ".tmp-crashed").write_bytes(b"half")  # a crashed writer's temp file
     assert len(DirJournal(tmp_path / "j").read(0)) == 2  # is ignored
+    (tmp_path / "j" / "000000000000.json").write_bytes(b"{}")  # not an event number
+    with pytest.raises(JournalCorrupt):
+        DirJournal(tmp_path / "j").read(0)

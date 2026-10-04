@@ -16065,22 +16065,25 @@ change, no adapter / crosswalk / transport / workflow change):
   and appends event `seq+1`; if another writer created that name first nothing was written, and
   the commit replays and decides again, at most `MAX_COMMIT_RETRIES` (16) times, then raises
   `JournalContended` (`JOURNAL_CONTENDED`). A dispatch refused that way must be retried by its
-  caller. A RESULT / VERDICT record whose event could not be written (contention, or an
-  `OSError` from the journal, which is re-raised) is kept in `Planner.deferred` and decided by
-  the next `pump`; it is not quarantined.
+  caller. A RESULT / VERDICT record whose event could not be written (contention; an `OSError`
+  from the journal; a journal that stopped replaying, `JournalCorrupt`; the last two are
+  re-raised) is kept in `Planner.deferred` and decided by a later `pump`; it is not
+  quarantined. Deferred records are retried one at a time, so a raise keeps the others.
 - Write-ahead: the event is appended before the matching record is published. `recover()`
   re-publishes the current work of executing lineages and the issued request of verifying ones
   (publishing is idempotent) and re-feeds RESULT / VERDICT records this identity had claimed
   from a transport that keeps them (`claimed_records`, i.e. the spool) but that are not in the
   journal.
-- Replay is fail-closed: a non-contiguous directory, a broken chain, a non-integer or wrong
+- Replay is fail-closed: on a full open a directory that is not exactly events 1..k (a later
+  incremental read only probes for the next event), a broken chain, a non-integer or wrong
   sequence number, an unknown version or event, a bad seal, a second holder over a held scope,
-  a `-R<n>` root, a RESULT that does not answer the lineage's current work or whose request
-  does not cover it, a READY / REPAIR whose verdict is not the assigned verifier's verdict on
+  a `-R<n>` root, a RESULT that does not answer the lineage's current work, or whose request
+  names another result or task or the executor as verifier (nothing else of the request is
+  checked), a READY / REPAIR whose verdict is not the assigned verifier's verdict on
   the lineage's outstanding request and artifact, a READY without PASS, a REPAIR with PASS, a
   repair work that changes repository or `allowed_paths` or is not the one `materialize_repair`
-  produces, a TERMINAL on a terminal lineage, a RELEASE without a 40-hex revision all raise
-  `PlannerError`; `Planner(...)` then does not construct. Replay does not know a planner's
+  produces, a TERMINAL on a terminal lineage or with non-string evidence, a RELEASE without a 40-hex
+  revision all raise `JournalCorrupt` (a `PlannerError`); `Planner(...)` then does not construct. Replay does not know a planner's
   verifier list, and a TERMINAL on a non-terminal lineage is accepted in any phase (the
   executing-work guard of `fail_execution` is a live check only).
 - `fleet_status(journal)` returns one row per lineage (phase, reason, current task / execution
@@ -16099,7 +16102,8 @@ Behaviour changes for existing callers:
 - Every operation that reads or changes lineage state replays the journal first: `select`,
   `pump`, `recover`, and every commit (`dispatch`, result and verdict handling,
   `fail_execution`, `release_scope`). `in_flight()` and `scope_holders()` do not; they return
-  the replica as of the last replay. `pump` raises on a journal that does not replay.
+  the replica as of the last replay. `pump` raises `JournalCorrupt` on a journal that does not replay, at its start or
+  later in the pass.
 - No existing test function was changed; one test was added to
   `tests/unit/test_orchestration_dev_queue.py`.
 
@@ -16131,15 +16135,15 @@ Limits:
 - This is not multi-agent delivery: no live run has exercised two lineages.
 
 Commands and results (`PYTHONPATH=<worktree>/src`, `--no-cov -o addopts=""`):
-- `pytest tests/unit/test_orchestration_dev_planner_journal.py` (new): 26 passed; twenty
-  consecutive runs, 26 passed each.
+- `pytest tests/unit/test_orchestration_dev_planner_journal.py` (new): 30 passed; twenty
+  consecutive runs, 30 passed each.
 - The same file against main's `dev_planner.py`: 1 error during collection (the imported
   names do not exist there).
 - `test_orchestration_dev_loop_contracts.py`, `_dev_queue.py`, `_dev_fabric_adapter.py`,
   `_dev_package.py`, `_dev_package_repair.py`, `_dev_crosswalk.py`: 749 passed.
-- Those six plus `_dev_spool_transport.py` and `_dev_planner_journal.py`: 786 passed.
+- Those six plus `_dev_spool_transport.py` and `_dev_planner_journal.py`: 790 passed.
 - `pytest tests/unit -k "orchestration_dev or dev_package or executor or agent_execute or
-  workflow or autonomy or global_foundation or github_port"`: 1484 passed, 5152 deselected.
+  workflow or autonomy or global_foundation or github_port"`: 1488 passed, 5152 deselected.
 - `ruff check .`: clean. `ruff format --check` on the four changed code files: clean.
   `mypy src`: no issues in 415 source files.
 - The full test suite was not run locally.

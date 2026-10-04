@@ -32,11 +32,14 @@ second record of it. Properties:
     view from the journal alone, without a planner object;
   * tamper-evident, fail-closed: events are hash-chained (``prev``) and carry the sealed records
     they refer to; a gap, a broken chain, a bad seal or an event that ``_transition`` does not
-    accept makes replay raise, and the planner then does nothing. Replay re-checks what follows
-    from the journal itself (record bindings, phases, scope, the materialised repair); it does
-    not know a planner's verifier list, and, like every seal here, the chain is unkeyed: it
-    detects corruption and accidents, it does not authenticate a writer. Whoever can write the
-    journal directory can write a well-formed history.
+    accept makes replay raise, and the planner then does nothing. Replay re-checks phases,
+    scope, that a result answers the lineage's current work, that a verdict is the assigned
+    verifier's on the outstanding request and artifact, and that a repair is the materialised
+    one; of a journalled verification request it checks only the result seal, the task id and
+    that the verifier is not the executor. It does not know a planner's verifier list, and,
+    like every seal here, the chain is unkeyed: it detects corruption and accidents, it does
+    not authenticate a writer. Whoever can write the journal directory can write a well-formed
+    history.
 Limits (what this is NOT):
   * the default ``MemoryJournal`` is per-process and volatile; durability and cross-process
     admission exist only with a ``DirJournal`` on a directory that offers atomic ``link``;
@@ -134,6 +137,10 @@ class PlannerError(ContractError):
     code = "DEV_PLANNER_REFUSED"
 
 
+class JournalCorrupt(PlannerError):
+    """The journal does not replay (gap, broken chain, bad record, illegal transition)."""
+
+
 class JournalContended(PlannerError):
     """A commit lost the race for its sequence number too often; nothing was written."""
 
@@ -145,7 +152,7 @@ _REPAIR_SUFFIX = re.compile(r"-R[0-9]+$")  # reserved for planner-materialised r
 
 JOURNAL_VERSION = 1
 MAX_COMMIT_RETRIES = 16  # lost exclusive-create races before a commit gives up (never spins)
-_EVENT_FILE = re.compile(r"^[0-9]{12}\.json$")
+_EVENT_FILE = re.compile(r"[0-9]{12}\.json")
 _REVISION = re.compile(r"[0-9a-f]{40}")
 _EXECUTING = frozenset({Phase.DISPATCHED, Phase.REPAIR_DISPATCHED})
 
@@ -193,9 +200,9 @@ class DirJournal:
         last = 0
         if after == 0:  # full open: nothing but event files, and (below) no gap before the last
             names = sorted(p.name for p in self.root.iterdir() if not p.name.startswith(".tmp-"))
-            odd = [n for n in names if not _EVENT_FILE.match(n)]
+            odd = [n for n in names if not _EVENT_FILE.fullmatch(n) or int(n[:12]) < 1]
             if odd:
-                raise PlannerError(f"JOURNAL_CORRUPT:directory is not events 1..k: {odd[:3]}")
+                raise JournalCorrupt(f"JOURNAL_CORRUPT:directory is not events 1..k: {odd[:3]}")
             last = max((int(n[:12]) for n in names), default=0)
         out: list[bytes] = []
         seq = after + 1
@@ -208,7 +215,7 @@ class DirJournal:
         # events are never removed, so every event below one the listing saw must be readable;
         # checking it this way stays correct while other writers append during the listing
         if seq <= last:
-            raise PlannerError(f"JOURNAL_CORRUPT:directory is not events 1..k: missing {seq}")
+            raise JournalCorrupt(f"JOURNAL_CORRUPT:directory is not events 1..k: missing {seq}")
         return out
 
     def append(self, seq: int, data: bytes) -> bool:
@@ -401,6 +408,8 @@ def _transition(state: FleetState, ev: dict[str, Any], raw: bytes) -> Callable[[
         if st.phase in TERMINAL:
             raise PlannerError(f"lineage {root} is already terminal ({st.phase.value})")
         evidence = ev.get("evidence", "")
+        if not isinstance(evidence, str):
+            raise PlannerError("TERMINAL evidence must be a string")
 
         def do_terminal() -> None:
             if evidence:
@@ -442,8 +451,8 @@ def replay(journal: Journal, state: FleetState) -> int:
             if not isinstance(ev, dict):
                 raise PlannerError("event is not an object")
             _transition(state, ev, raw)()
-        except (ValueError, KeyError, TypeError, RecursionError) as exc:
-            raise PlannerError(f"JOURNAL_CORRUPT:event {state.seq + 1}: {exc}") from exc
+        except (ContractError, ValueError, KeyError, TypeError, RecursionError) as exc:
+            raise JournalCorrupt(f"JOURNAL_CORRUPT:event {state.seq + 1}: {exc}") from exc
         n += 1
     return n
 
@@ -675,8 +684,8 @@ class Planner:
     def pump(self) -> int:
         """Consume every available result and verdict once; returns records processed.
 
-        Starts with a journal replay, so a corrupt journal raises here instead of turning every
-        claimed record into a quarantine entry.
+        Starts with a journal replay and raises ``JournalCorrupt`` when the journal does not
+        replay, there or later in the pass; a record claimed by then is kept in ``deferred``.
         """
         self.sync()
         n = 0
@@ -684,8 +693,8 @@ class Planner:
             Channel.RESULT: self._on_result,
             Channel.VERDICT: self._on_verdict,
         }
-        retry, self.deferred = self.deferred, []
-        for channel, rec in retry:  # claimed earlier, not journalled then: decide them first
+        for _ in range(len(self.deferred)):  # claimed earlier, not journalled then: first
+            channel, rec = self.deferred.pop(0)  # one at a time: a raise keeps the rest
             if rec.seal not in self.state.seals:
                 self._guarded(channel.value, rec.seal, handlers[channel], rec)
                 n += 1
@@ -711,13 +720,17 @@ class Planner:
         """One bad record is quarantined; it never aborts the pass or blocks other lineages.
 
         A record whose event could not be WRITTEN (lost the append race too often, or the
-        journal raised an IO error) was not judged at all: it is kept in ``deferred`` for the
-        next pump instead of being quarantined. An IO error is re-raised after that.
+        journal raised an IO error, or the journal no longer replays) was not judged at all: it
+        is kept in ``deferred`` for the next pump instead of being quarantined. An IO error or a
+        corrupt journal is re-raised after that. ``deferred`` is in memory only.
         """
         try:
             fn(rec)
         except JournalContended:
             self.deferred.append((Channel(channel), rec))
+        except JournalCorrupt:  # the journal stopped replaying mid-pass: stop, keep the record
+            self.deferred.append((Channel(channel), rec))
+            raise
         except ContractError as exc:
             self._quarantine(channel, seal, str(exc))
         except OSError:
