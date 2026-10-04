@@ -3,9 +3,9 @@
 | Field | Value |
 |---|---|
 | Canonical ID | `ATLAS_GLOBAL_AUTONOMOUS_OPERATING_CONTRACT` |
-| Version | 1 |
+| Version | 2 |
 | Directive | `ATLAS-GLOBALIZE-AUTONOMY-2026-10-02` |
-| Status | ADOPTED — binding as governance on `main` (owner-merged, PR #1047) |
+| Status | ADOPTED — binding as governance on `main` by owner merge (v1: PR #1047; v2 adds OC-L and is binding only through the owner merge that lands it) |
 | Scope | Every agent, session, host and WorkItem acting on Project Atlas |
 | Index | [README.md](./README.md) |
 
@@ -124,6 +124,45 @@ Ask the owner only for genuine authority decisions, never for routine state tran
 polling or copy/paste. Every remaining relay is a defect to remove (Global Goal G13), not a
 convention to keep.
 
+### OC-L — DIRECTIVES_DEFINE_ENVELOPE_NOT_PROCEDURE
+Owner directives define intent, outcome, scope envelope, authority boundaries, trust
+invariants and required evidence. Inside that authorized envelope the agent owns execution:
+it investigates, implements, repairs, tests, reconciles and collects evidence without
+returning for each step.
+
+Directives SHOULD NOT prescribe implementation mechanics, command ordering, iteration counts
+or internal agent workflow. The exception is a mechanic that is itself part of a required
+trust, security, provenance or safety property. Such a mechanic is stated as an invariant
+(MUST), and it binds like any other invariant. Examples: "hash the exact payload that is
+sent", "verification runs in a fresh session", a sealed `max_attempts`, a single-use dispatch.
+
+The agent returns to the owner when:
+- the acceptance contract is satisfied and a true owner action is required; or
+- a genuine authority, scope, trust, provenance or safety boundary is reached.
+
+These are not owner boundaries by themselves while they stay inside the authorized envelope:
+routine technical uncertainty, test failures, implementation repair, CI investigation,
+reconciliation after `main` moves, and evidence collection (OC-C, OC-D, OC-K).
+
+OC-L changes who owns execution detail. It does not change who holds authority:
+- it grants nothing and widens nothing (section 0), and it does not turn governed autonomy
+  into standing or continuous autonomy (OC-B);
+- every section 3 boundary stays a hard boundary: merge, mutation of `main`, dispatch and
+  execution grants, deployment, secrets, permission and privilege changes, trust roots,
+  destructive or external mutations, and the non-grantable list;
+- a platform or classifier denial is still reported as an owner action and never retried in
+  another form or routed around (section 3);
+- independent verification stays mandatory wherever OC-H, `GOVERNANCE.md`, `autonomy/policy.md`
+  or the directive requires it;
+- exact, immutable evidence and provenance requirements are unchanged (OC-G, OC-J);
+- OC-A's exclusion is unchanged: authority, trust and governance procedures are never treated
+  as "mere procedure";
+- what may follow a failed independent verification is still governed by OC-D, and open owner
+  decisions D1–D5 stay open.
+
+Where a directive is silent on execution detail, the agent chooses. Where a directive is
+silent on authority, the answer is no additional authority.
+
 ## 2. Decision priority order
 
 When concerns conflict, resolve them in this order:
@@ -235,5 +274,10 @@ frontier** that names the remaining boundary and who holds it (Global Goal G15).
 
 ## 6. Change control
 
-Only the owner amends this contract. Principle IDs (`OC-A`…`OC-K`) and the canonical ID are
+Only the owner amends this contract. Principle IDs (`OC-A`…`OC-L`) and the canonical ID are
 stable. A change in meaning gets a new version; IDs are never reused.
+
+| Version | Change |
+|---|---|
+| 1 | Initial contract, OC-A…OC-K (PR #1047) |
+| 2 | Adds OC-L. No existing principle, boundary or open decision is changed |

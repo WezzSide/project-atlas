@@ -6,10 +6,10 @@ Directives and WorkItems **inherit** these documents by ID and state only their 
 
 | Canonical ID | Doc | Role |
 |---|---|---|
-| `ATLAS_GLOBAL_AUTONOMOUS_OPERATING_CONTRACT` | [ATLAS-GLOBAL-OPERATING-CONTRACT.md](./ATLAS-GLOBAL-OPERATING-CONTRACT.md) | How agents act inside granted authority (OC-A…OC-K), decision priority, default owner boundaries, evidence vocabulary |
+| `ATLAS_GLOBAL_AUTONOMOUS_OPERATING_CONTRACT` | [ATLAS-GLOBAL-OPERATING-CONTRACT.md](./ATLAS-GLOBAL-OPERATING-CONTRACT.md) | How agents act inside granted authority (OC-A…OC-L), decision priority, default owner boundaries, evidence vocabulary |
 | `ATLAS_GLOBAL_STYLE_MISSION` | [ATLAS-GLOBAL-STYLE-MISSION.md](./ATLAS-GLOBAL-STYLE-MISSION.md) | Truthful, semantically separated, premium operator surfaces |
 | `ATLAS_GLOBAL_GOALS` | [ATLAS-GLOBAL-GOALS.md](./ATLAS-GLOBAL-GOALS.md) | Global Goals `ATLAS-GOAL-G01`…`G15` |
-| `ATLAS_DIRECTIVE_TEMPLATE` | [ATLAS-DIRECTIVE-TEMPLATE.md](./ATLAS-DIRECTIVE-TEMPLATE.md) | INHERITS / OUTCOME / SCOPE / INVARIANTS / AUTHORITY DELTA / SUCCESS / OPERATING EXPECTATION |
+| `ATLAS_DIRECTIVE_TEMPLATE` | [ATLAS-DIRECTIVE-TEMPLATE.md](./ATLAS-DIRECTIVE-TEMPLATE.md) | INHERITS / OUTCOME / SCOPE / AUTHORITY DELTA / INVARIANTS / SUCCESS / EXECUTION FREEDOM / OWNER RETURN CONDITIONS / OPERATING EXPECTATION |
 
 Dated baselines are evidence snapshots. They are not doctrine and are never rewritten:
 
