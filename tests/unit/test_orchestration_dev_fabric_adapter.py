@@ -33,6 +33,9 @@ FIELDS = dict(
     forbidden_paths=("infra/atlas-runner/controller",),
     acceptance_contract=("task tests pass",),
 )
+# ATLAS-DEVQ-0006: a second concurrent lineage needs a write scope disjoint from FIELDS,
+# otherwise the planner refuses it (SCOPE_COLLISION) before the adapter ever sees it.
+FIELDS_DISJOINT = {**FIELDS, "allowed_paths": ("src/y/",)}
 
 
 @dataclass
@@ -405,7 +408,7 @@ def test_second_work_is_deferred_until_the_first_is_bound_to_a_run(tmp_path):
     gh = FakeGitHub()
     _spool, _xw, ad, pl = build(tmp_path, gh)
     item = QueueItem(task_id="DEVQ-2", title="t", category=Category.RELIABILITY, severity=1)
-    pl.dispatch(item, **FIELDS)
+    pl.dispatch(item, **FIELDS_DISJOINT)
     ev = ad.tick()
     assert ev.count("DISPATCHED:DEVQ-1") + ev.count("DISPATCHED:DEVQ-2") == 1
     assert len(gh.dispatches) == 1
@@ -452,7 +455,9 @@ def test_string_source_run_id_matches_and_conflicting_reports_are_refused(tmp_pa
 def test_run_already_bound_to_a_failed_lineage_is_never_adopted_by_the_next_dispatch(tmp_path):
     gh = FakeGitHub()
     _spool, xw, ad, pl = build(tmp_path, gh)
-    pl.dispatch(QueueItem(task_id="DEVQ-2", title="t", category=Category.RELIABILITY), **FIELDS)
+    pl.dispatch(
+        QueueItem(task_id="DEVQ-2", title="t", category=Category.RELIABILITY), **FIELDS_DISJOINT
+    )
     ad.tick()  # dispatches exactly one work item (serialised)
     first = next(iter(ad.works))
     gh.executor_finishes(None, "", conclusion="failure")  # its run fails fast
@@ -521,15 +526,20 @@ def test_dropped_lineage_keeps_blocking_so_its_late_run_is_never_adopted(tmp_pat
 
     gh = Flaky()
     _, _, ad, pl = build(tmp_path, gh)
-    pl.dispatch(QueueItem(task_id="DEVQ-2", title="t", category=Category.RELIABILITY), **FIELDS)
+    pl.dispatch(
+        QueueItem(task_id="DEVQ-2", title="t", category=Category.RELIABILITY), **FIELDS_DISJOINT
+    )
     ev = ad.tick()
-    assert any(e.startswith("EXECUTION_FAILED:DEVQ-1") for e in ev)
-    assert len(gh.dispatches) == 1  # DEVQ-2 deferred: the ledger still has an unbound dispatch
-    gh.executor_finishes(R1, T1)  # W1's late run surfaces
+    # which of the two goes first follows the adapter's own ordering, not this test
+    failed = [e.split(":")[1] for e in ev if e.startswith("EXECUTION_FAILED:")]
+    assert len(failed) == 1 and failed[0] in {"DEVQ-1", "DEVQ-2"}
+    other = ({"DEVQ-1", "DEVQ-2"} - set(failed)).pop()
+    assert len(gh.dispatches) == 1  # the other is deferred: the ledger has an unbound dispatch
+    gh.executor_finishes(R1, T1)  # the dropped work's late run surfaces
     assert not any(e.startswith("DISPATCHED") for e in ad.tick())
     assert ad.xw.bound_run_ids() == frozenset()  # and nobody adopted it
     ad.clock = _late("2026-09-30T16:30:00Z")  # dispatch deadline elapsed
-    assert any(e.startswith("DISPATCHED:DEVQ-2") for e in ad.tick())
+    assert any(e.startswith(f"DISPATCHED:{other}") for e in ad.tick())
 
 
 def test_a_run_is_never_located_in_the_tick_that_dispatched_it(tmp_path):

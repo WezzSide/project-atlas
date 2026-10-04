@@ -7,6 +7,20 @@ owner-required, or blocked. One blocked lineage never blocks the program.
 
 Not a merge actor: INTEGRATION_READY means "verified candidate exists"; governance/merge admission
 (merge gate, owner policy) is a separate, later, owner-bound step. This module never grants a gate.
+
+Write-scope admission (ATLAS-DEVQ-0006): ``select`` skips tasks that are in flight, and
+``dispatch`` always refuses a new lineage whose sealed ``allowed_paths`` overlap those of a
+lineage that still holds its scope (``SCOPE_HOLDING``); there is no switch to turn the check
+off. This is admission control, not authority: it grants nothing and it is not a concurrency
+guarantee. Limits:
+  * in-memory only: a planner restart forgets every holder;
+  * one planner process: nothing is guaranteed across processes or hosts;
+  * path overlap only: no semantic conflict detection (a generated file two lineages both rewrite,
+    a whole-suite acceptance command);
+  * the planner cannot observe a merge, so an INTEGRATION_READY lineage holds its scope for the
+    lifetime of this planner object; no transition releases it (the pre-existing, unguarded
+    ``fail_execution`` would move it to BLOCKED and so drop it; nothing in ``src`` calls that);
+  * it does not lift the fabric adapter's serial-dispatch rule.
 """
 
 from __future__ import annotations
@@ -31,6 +45,7 @@ from project_atlas.orchestration.autonomy.dev_contracts import (
     materialize_repair,
     same_identity,
     validate_identity,
+    works_collide,
 )
 from project_atlas.orchestration.autonomy.dev_queue import QueueItem, Selection, select_next
 from project_atlas.orchestration.autonomy.dev_transport import Channel, DevTransport
@@ -46,6 +61,14 @@ class Phase(StrEnum):
 
 
 TERMINAL = frozenset({Phase.INTEGRATION_READY, Phase.OWNER_REQUIRED, Phase.BLOCKED})
+
+SCOPE_HOLDING = frozenset(
+    {Phase.DISPATCHED, Phase.VERIFYING, Phase.REPAIR_DISPATCHED, Phase.INTEGRATION_READY}
+)
+"""Phases in which a lineage still holds its write scope: every non-terminal phase, plus
+INTEGRATION_READY. INTEGRATION_READY is terminal for the planner, but it means "a verified,
+UNMERGED candidate exists"; releasing its scope there would admit a second lineage over the same
+paths and move the conflict back to merge time. OWNER_REQUIRED and BLOCKED do not hold scope."""
 
 
 @dataclass
@@ -104,14 +127,47 @@ class Planner:
         self.quarantined: list[tuple[str, str, str]] = []  # (channel, seal, reason)
 
     # -- selection / dispatch -------------------------------------------------------------
+    def in_flight(self) -> frozenset[str]:
+        """Lineage roots (task ids) whose phase is scope-holding (see ``SCOPE_HOLDING``)."""
+        return frozenset(r for r, st in self.lineages.items() if st.phase in SCOPE_HOLDING)
+
+    def scope_holders(self) -> tuple[WorkItem, ...]:
+        """The CURRENT sealed work of every scope-holding lineage, ordered by lineage root.
+
+        For a lineage in repair this is its current repair work, which carries the lineage's
+        original ``allowed_paths`` (``materialize_repair`` never changes scope). In-memory view
+        of this planner object only.
+        """
+        return tuple(
+            st.work for _, st in sorted(self.lineages.items()) if st.phase in SCOPE_HOLDING
+        )
+
     def select(self, items: list[QueueItem]) -> Selection:
-        return select_next(items, completed=self.completed, blocked=self.blocked)
+        """Next ranked admissible item, skipping tasks that are in flight (``IN_FLIGHT``).
+
+        Selection does not look at write scopes (a ``QueueItem`` carries none); a selected item
+        can still be refused by ``dispatch`` with ``SCOPE_COLLISION``.
+        """
+        return select_next(
+            items, completed=self.completed, blocked=self.blocked, in_flight=self.in_flight()
+        )
 
     def dispatch(
         self, item: QueueItem, *, execution_ordinal: int = 1, **work_fields: object
     ) -> WorkItem:
-        """Materialize + publish the sealed work for an admissible queue item."""
-        sel = self.select([item])
+        """Materialize + publish the sealed work for an admissible queue item.
+
+        Before anything is published or recorded the sealed work is compared with the current
+        work of every scope holder (``works_collide``). On an overlap this raises ``PlannerError``
+        ``SCOPE_COLLISION:<holder lineage root>:<new>|<held>[,<new>|<held>...]`` for the first
+        colliding holder in lineage-root order, with all of its colliding pairs as normalised
+        comparison keys in sorted order. Nothing is published, no state changes, and the task id
+        stays usable for a later dispatch. A holder whose seal no longer verifies is an error.
+        See the module docstring for what this check does not cover.
+        """
+        # admission as before ATLAS-DEVQ-0006 (no in-flight filter here), so a repeated dispatch
+        # of a live task id keeps its existing refusal below
+        sel = select_next([item], completed=self.completed, blocked=self.blocked)
         if sel.selected is None:
             raise PlannerError(f"task not admissible: {sel.skipped}")
         if execution_ordinal < 1:
@@ -137,6 +193,13 @@ class Planner:
             max_attempts=item.max_attempts,
             **work_fields,
         )
+        for holder in self.scope_holders():
+            pairs = works_collide(work, holder)
+            if pairs:
+                raise PlannerError(
+                    f"SCOPE_COLLISION:{holder.lineage_root}:"
+                    + ",".join(f"{a}|{b}" for a, b in pairs)
+                )
         self.transport.publish(work)
         self.lineages[item.task_id] = LineageState(
             item.task_id, Phase.DISPATCHED, work, history=[f"DISPATCHED:{work.task_id}"]

@@ -412,6 +412,56 @@ def _matches(path: str, prefixes: tuple[str, ...]) -> bool:
     return False
 
 
+def _scope_key(entry: str) -> str:
+    """Comparison key of one scope entry, by the rule ``_matches`` uses; fail closed otherwise."""
+    if not isinstance(entry, str):
+        raise ContractError(f"malformed scope entry {entry!r} (not a string)")
+    n = norm_path(entry.rstrip("/"))
+    if n is None:
+        raise ContractError(f"malformed scope entry {entry!r} (no globs/absolute/escapes)")
+    return n.lower()  # same rule as _matches: lower(), not casefold()
+
+
+def scope_overlap(a: tuple[str, ...], b: tuple[str, ...]) -> tuple[tuple[str, str], ...]:
+    """Pairs (entry of ``a``, entry of ``b``) that are equal or nested on a directory boundary.
+
+    Entries are compared by the key ``_matches`` uses for scope matching: NFC, trailing slashes
+    dropped, ``posixpath.normpath``, then ``lower()``. The pairs are returned AS THOSE KEYS (not
+    the raw spellings), de-duplicated and sorted, so the result does not depend on the order or
+    the spelling of the inputs and ``scope_overlap(b, a)`` is the mirror image of
+    ``scope_overlap(a, b)``. ``src/a`` overlaps ``src/a`` and ``src/a/b.py``; it does not overlap
+    ``src/ab``. An empty scope overlaps nothing. A malformed entry raises ``ContractError`` (every
+    entry of both scopes is checked, also when the other scope is empty): an entry that cannot be
+    compared is never "no overlap".
+
+    Path overlap only. Two scopes that share no path can still conflict (a generated file both
+    lineages rewrite, a whole-suite acceptance command); that is not detected here.
+    """
+    ka = sorted({_scope_key(e) for e in a})
+    kb = sorted({_scope_key(e) for e in b})
+    return tuple(
+        (x, y) for x in ka for y in kb if x == y or x.startswith(y + "/") or y.startswith(x + "/")
+    )
+
+
+def works_collide(a: WorkItem, b: WorkItem) -> tuple[tuple[str, str], ...]:
+    """Overlapping ``allowed_paths`` of two sealed work items of DIFFERENT lineages, else ``()``.
+
+    Both seals are verified first (``ContractError`` when either fails): an unverifiable work
+    item is an error, never "no collision". Work in different repositories never collides, and
+    work of the same lineage never collides with itself (a repair keeps its lineage's scope by
+    construction, see ``materialize_repair``). The repository is compared case-insensitively
+    (GitHub ``owner/name`` is case-insensitive); no other spelling is unified (a ``.git`` suffix
+    or a URL form is a different repository here). The lineage root is compared exactly, as
+    sealed. Pure; grants nothing.
+    """
+    a.verify_seal()
+    b.verify_seal()
+    if a.repository.lower() != b.repository.lower() or a.lineage_root == b.lineage_root:
+        return ()
+    return scope_overlap(a.allowed_paths, b.allowed_paths)
+
+
 class RepairDecision(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     action: str  # REPAIR | OWNER_REQUIRED | BLOCKED

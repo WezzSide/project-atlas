@@ -155,10 +155,18 @@ def inadmissible_reason(
     completed: frozenset[str],
     blocked: Mapping[str, str],
     blocked_lanes: frozenset[str],
+    in_flight: frozenset[str] = frozenset(),
 ) -> str | None:
-    """First reason an item may not start autonomously, or None when admissible."""
+    """First reason an item may not start autonomously, or None when admissible.
+
+    ``in_flight`` (default empty: no effect) names task ids that are already being worked on; such
+    an item is skipped with ``IN_FLIGHT`` so the next ranked item can be selected. It is checked
+    right after ``ALREADY_COMPLETED`` and before every other reason.
+    """
     if item.task_id in completed:
         return "ALREADY_COMPLETED"
+    if item.task_id in in_flight:
+        return "IN_FLIGHT"
     if item.task_id in blocked:
         return f"BLOCKED:{blocked[item.task_id]}"
     if item.lane and item.lane in blocked_lanes:
@@ -183,20 +191,26 @@ def select_next(
     completed: Iterable[str] = (),
     blocked: Mapping[str, str] | None = None,
     blocked_lanes: Iterable[str] = (),
+    in_flight: Iterable[str] = (),
 ) -> Selection:
     """Pick the highest-ranked admissible item; never raises for a merely-blocked program.
 
     A blocked task, a blocked lane, an unsatisfied dependency (including a dependency that is itself
     blocked) only removes that item from consideration; the scheduler continues with the rest.
+    An ``in_flight`` task id (default: none) is skipped the same way, with reason ``IN_FLIGHT``;
+    an in-flight task does NOT satisfy a dependency (only ``completed`` does).
     """
     ordered = rank(items)
     done = frozenset(completed)
     blk = dict(blocked or {})
     lanes = frozenset(blocked_lanes)
+    flying = frozenset(in_flight)
     skipped: list[tuple[str, str]] = []
     chosen: QueueItem | None = None
     for it in ordered:
-        why = inadmissible_reason(it, completed=done, blocked=blk, blocked_lanes=lanes)
+        why = inadmissible_reason(
+            it, completed=done, blocked=blk, blocked_lanes=lanes, in_flight=flying
+        )
         if why is None:
             chosen = it
             break

@@ -837,3 +837,13 @@ Historical roadmaps are classified as inputs and are not erased._
 - [ ] F2 dispatch authority binding a reviewed package to a live dispatch (design in `docs/global/baseline/2026-10-02-AUTONOMY-FRONTIER.md`; not built).
 - [ ] ATLAS-DEVQ-0005 (HARDEN-DEVLOOP-004): package-to-dispatch binding groundwork, landing with the PR that carries this entry: pure `dev_package.bind_package_to_work`, `FabricAdapter.dispatch_package` / `package_source`, optional `package_sha256` on the ledger DISPATCH record. Binding only, not a grant: it issues, consumes and verifies no owner dispatch grant, and the F2 authority above stays unbuilt. Not live-validated; the adapter is constructed only in tests; the callback dispatch path is kept.
 - [ ] `FabricAdapter` live wiring: the adapter is constructed only in tests.
+
+## Multi-agent autonomous delivery (governed)
+
+No multi-agent capability is proven by anything in this section.
+
+- [x] ATLAS-DEVQ-0006: write-scope collision admission in the DEVQ planner — in-flight exclusion in `select_next`/`Planner.select`, `scope_overlap`/`works_collide`, and an always-on dispatch refusal `SCOPE_COLLISION` (no off switch). In-memory, single process, path overlap only; admission control, not authority. Lands with the PR that carries this entry.
+- [ ] `Planner.fail_execution` phase guard (it is unguarded: on INTEGRATION_READY or on a DISPATCHED lineage with a live run it releases the scope); validate the `in_flight` argument of `select_next`.
+- [ ] Ledger-derived fleet/mission status with durable scope holders (survives a planner restart; release on observed merge).
+- [ ] Exact run correlation token + enforced single writer (needs a workflow change and an owner dispatch grant to prove).
+- [ ] Live evidence of two lineages in flight.

@@ -456,7 +456,8 @@ def test_one_bad_record_does_not_abort_the_pass_for_other_lineages():
     t = InMemoryTransport()
     p = planner(t)
     p.dispatch(qi("A"), **FIELDS)
-    p.dispatch(qi("B"), **FIELDS)
+    # B gets a disjoint scope: two live lineages may not share a write scope (ATLAS-DEVQ-0006)
+    p.dispatch(qi("B"), **{**FIELDS, "allowed_paths": ("src/y",)})
     stray = make_work(
         **{
             **dict(task_id="ZZ", execution_id="ZZ-E1", lineage_root="ZZ"),
@@ -738,3 +739,355 @@ def test_execution_ordinal_defaults_to_e1_and_yields_a_distinct_sealed_identity(
 def test_execution_ordinal_below_one_is_refused():
     with pytest.raises(PlannerError):
         planner(InMemoryTransport()).dispatch(qi("A"), execution_ordinal=0, **FIELDS)
+
+
+# ---- ATLAS-DEVQ-0006: write-scope collision admission ------------------------------------------
+
+
+def _fields(*paths, **kw):
+    d = dict(FIELDS)
+    d["allowed_paths"] = tuple(paths)
+    d.update(kw)
+    return d
+
+
+def scoped(t):
+    return Planner(t, identity="vps3-plan", verifier_identities=(VER,))
+
+
+def _work_records(t):
+    return len(t._queues[Channel.WORK])
+
+
+def _to_verifying(t, p):
+    run_role_implementer(t, [(REV1, TREE1)])
+    p.pump()
+
+
+def _defect(req):
+    return (
+        Verdict.FAIL,
+        (Finding(finding_id="F1", category=FindingCategory.DEFECT, paths=("src/x/a.py",)),),
+    )
+
+
+def test_scope_overlap_directory_boundary_semantics():
+    from project_atlas.orchestration.autonomy.dev_contracts import scope_overlap
+
+    assert scope_overlap(("src/a",), ("src/a/b.py",)) == (("src/a", "src/a/b.py"),)
+    assert scope_overlap(("src/a/b.py",), ("src/a",)) == (("src/a/b.py", "src/a"),)
+    assert scope_overlap(("src/a",), ("src/a",)) == (("src/a", "src/a"),)
+    assert scope_overlap(("src/a",), ("src/ab",)) == ()
+    assert scope_overlap(("src/a",), ("src/ab/a",)) == ()
+    # trailing slash and redundant separators are the same entry
+    assert scope_overlap(("src/a/",), ("src/a",)) == (("src/a", "src/a"),)
+    assert scope_overlap(("src//a/",), ("./src/a/b",)) == (("src/a", "src/a/b"),)
+    # case: lower() as in _matches -- variants collide, but sharp s is not "ss"
+    assert scope_overlap(("SRC/A",), ("src/a/B.py",)) == (("src/a", "src/a/b.py"),)
+    assert scope_overlap(("src/straße",), ("src/strasse",)) == ()
+    # unicode: NFC as in norm_path -- composed and decomposed spellings are one entry
+    assert scope_overlap(("src/café",), ("src/café/x",)) == (("src/café", "src/café/x"),)
+    # empty scopes overlap nothing
+    assert scope_overlap((), ()) == ()
+    assert scope_overlap((), ("src/a",)) == ()
+    assert scope_overlap(("src/a",), ()) == ()
+
+
+def test_scope_overlap_is_symmetric_deduplicated_and_order_independent():
+    from project_atlas.orchestration.autonomy.dev_contracts import scope_overlap
+
+    a = ("src/b", "docs", "src/a/", "SRC/A", "tests/unit/t.py")
+    b = ("src/a/x.py", "docs/adr/1.md", "src", "tests/unit", "other")
+    ab = scope_overlap(a, b)
+    assert ab == (
+        ("docs", "docs/adr/1.md"),
+        ("src/a", "src"),
+        ("src/a", "src/a/x.py"),
+        ("src/b", "src"),
+        ("tests/unit/t.py", "tests/unit"),
+    )
+    assert scope_overlap(tuple(reversed(a)), tuple(reversed(b))) == ab
+    assert scope_overlap(b, a) == tuple(sorted((y, x) for x, y in ab))
+
+
+@pytest.mark.parametrize("bad", ["", "/abs", "../x", "a/../b", "src/*", "a\\b", "a\x00b", "/", "."])
+def test_scope_overlap_malformed_entry_raises_never_no_overlap(bad):
+    from project_atlas.orchestration.autonomy.dev_contracts import scope_overlap
+
+    for a, b in (((bad,), ("src/a",)), (("src/a",), (bad,)), ((bad,), ()), ((), (bad,))):
+        with pytest.raises(ContractError):
+            scope_overlap(a, b)
+    with pytest.raises(ContractError):
+        scope_overlap((1,), ("src/a",))  # type: ignore[arg-type]
+
+
+def test_works_collide_lineage_repository_and_seal_rules():
+    from project_atlas.orchestration.autonomy.dev_contracts import works_collide
+
+    a = work(task_id="A", execution_id="A-E1", lineage_root="A", allowed_paths=("src/x",))
+    b = work(task_id="B", execution_id="B-E1", lineage_root="B", allowed_paths=("src/x/y.py",))
+    assert works_collide(a, b) == (("src/x", "src/x/y.py"),)
+    assert works_collide(b, a) == (("src/x/y.py", "src/x"),)
+    # a different repository never collides
+    other = work(task_id="B", execution_id="B-E1", lineage_root="B", repository="WezzSide/other")
+    assert works_collide(a, other) == ()
+    # a repair never collides with its own lineage (same scope by construction)
+    r = result(a)
+    f = Finding(finding_id="F1", category=FindingCategory.DEFECT, paths=("src/x/a.py",))
+    rep = materialize_repair(a, _fail(a, r, f), result=r).repair_work
+    assert rep is not None and rep.allowed_paths == a.allowed_paths
+    assert works_collide(a, rep) == () and works_collide(rep, a) == ()
+    # ...but that repair work still collides with a foreign lineage
+    assert works_collide(rep, b) == (("src/x", "src/x/y.py"),)
+    # the scope compared is allowed_paths, not forbidden_paths
+    c = work(
+        task_id="C",
+        execution_id="C-E1",
+        lineage_root="C",
+        allowed_paths=("docs",),
+        forbidden_paths=("src/x",),
+    )
+    assert works_collide(a, c) == ()
+
+
+def test_works_collide_with_a_tampered_seal_raises():
+    from project_atlas.orchestration.autonomy.dev_contracts import works_collide
+
+    a = work(task_id="A", execution_id="A-E1", lineage_root="A")
+    b = work(task_id="B", execution_id="B-E1", lineage_root="B", allowed_paths=("docs",))
+    tampered = b.model_copy(update={"allowed_paths": ("other",)})  # seal no longer matches
+    unsealed = b.model_copy(update={"seal": ""})
+    for bad in (tampered, unsealed):
+        with pytest.raises(ContractError):
+            works_collide(a, bad)
+        with pytest.raises(ContractError):
+            works_collide(bad, a)
+    # also when repository / lineage would short-circuit to "no collision"
+    foreign = a.model_copy(update={"repository": "WezzSide/other"})
+    with pytest.raises(ContractError):
+        works_collide(a, foreign)
+    with pytest.raises(ContractError):
+        works_collide(a, a.model_copy(update={"task_id": "A2"}))
+
+
+def test_planner_select_skips_in_flight_and_returns_next_ranked():
+    t = InMemoryTransport()
+    p = scoped(t)
+    a, b = qi("A", severity=3), qi("B", severity=1)
+    assert p.in_flight() == frozenset() and p.scope_holders() == ()
+    wa = p.dispatch(a, **FIELDS)
+    assert p.in_flight() == {"A"} and p.scope_holders() == (wa,)
+    sel = p.select([a, b])
+    assert sel.selected is not None and sel.selected.task_id == "B"
+    assert sel.skipped == (("A", "IN_FLIGHT"),)
+
+
+def test_second_dispatch_with_overlapping_scope_is_refused_and_nothing_published():
+    t = InMemoryTransport()
+    p = scoped(t)
+    p.dispatch(qi("A", severity=3), **_fields("src/x", "docs/a"))
+    before = (dict(p._by_task), dict(p._works), set(p.completed), dict(p.blocked))
+    with pytest.raises(PlannerError) as exc:
+        p.dispatch(qi("B"), **_fields("docs/a/n.md", "SRC/X/", "tests/t.py"))
+    assert str(exc.value) == "SCOPE_COLLISION:A:docs/a/n.md|docs/a,src/x|src/x"
+    assert _work_records(t) == 1
+    assert len(p.lineages) == 1 and "B" not in p.lineages
+    assert (dict(p._by_task), dict(p._works), set(p.completed), dict(p.blocked)) == before
+
+
+def test_child_file_and_parent_directory_of_an_in_flight_scope_are_refused():
+    t = InMemoryTransport()
+    p = scoped(t)
+    p.dispatch(qi("DIR"), **_fields("src/pkg"))
+    with pytest.raises(PlannerError, match=r"^SCOPE_COLLISION:DIR:src/pkg/mod\.py\|src/pkg$"):
+        p.dispatch(qi("CHILD"), **_fields("src/pkg/mod.py"))
+    p.dispatch(qi("SIBLING"), **_fields("src/pkgs"))  # not on a directory boundary: admitted
+    assert set(p.lineages) == {"DIR", "SIBLING"} and _work_records(t) == 2
+
+
+def test_parent_directory_of_an_in_flight_file_is_refused():
+    t = InMemoryTransport()
+    p = scoped(t)
+    p.dispatch(qi("FILE"), **_fields("src/pkg/mod.py"))
+    with pytest.raises(PlannerError, match=r"^SCOPE_COLLISION:FILE:src\|src/pkg/mod\.py$"):
+        p.dispatch(qi("PARENT"), **_fields("src"))
+    assert _work_records(t) == 1 and set(p.lineages) == {"FILE"}
+
+
+def test_collision_is_checked_on_the_sealed_work_scope_not_queue_metadata():
+    t = InMemoryTransport()
+    p = scoped(t)
+    p.dispatch(qi("A", lane="one"), **_fields("src/x"))
+    # queue metadata says "unrelated" (other lane, other title); the sealed scope overlaps
+    with pytest.raises(PlannerError, match=r"^SCOPE_COLLISION:A:"):
+        p.dispatch(qi("B", lane="two"), **_fields("src/x/deep/f.py"))
+    # same lane, same category, disjoint sealed scope: admitted
+    w = p.dispatch(qi("C", lane="one"), **_fields("src/y"))
+    w.verify_seal()
+    assert [h.task_id for h in p.scope_holders()] == ["A", "C"]
+    assert _work_records(t) == 2
+
+
+def test_first_colliding_holder_is_reported_in_lineage_root_order():
+    t = InMemoryTransport()
+    p = scoped(t)
+    p.dispatch(qi("Z"), **_fields("src/z"))
+    p.dispatch(qi("M"), **_fields("src/m"))
+    with pytest.raises(PlannerError) as exc:
+        p.dispatch(qi("N"), **_fields("src/z/a", "src/m/b", "src/m/a"))
+    assert str(exc.value) == "SCOPE_COLLISION:M:src/m/a|src/m,src/m/b|src/m"
+
+
+def test_collision_refusal_leaves_the_task_id_reusable_once_the_holder_releases():
+    t = InMemoryTransport()
+    p = scoped(t)
+    p.dispatch(qi("A"), **FIELDS)
+    with pytest.raises(PlannerError, match=r"^SCOPE_COLLISION:A:src/x\|src/x$"):
+        p.dispatch(qi("B"), **FIELDS)
+    assert "B" not in p._by_task and "B" not in p._works and "B" not in p.blocked
+    p.fail_execution("A", "runner lost")
+    assert p.lineages["A"].phase is Phase.BLOCKED
+    assert p.in_flight() == frozenset() and p.scope_holders() == ()
+    wb = p.dispatch(qi("B"), **FIELDS)  # same task id, same scope: now admitted
+    assert wb.task_id == "B" and p.lineages["B"].phase is Phase.DISPATCHED
+    assert _work_records(t) == 2
+
+
+def test_verifying_and_repair_dispatched_lineages_still_hold_scope():
+    t = InMemoryTransport()
+    p = scoped(t)
+    p.dispatch(qi("A"), **FIELDS)
+    _to_verifying(t, p)
+    assert p.lineages["A"].phase is Phase.VERIFYING and p.in_flight() == {"A"}
+    with pytest.raises(PlannerError, match=r"^SCOPE_COLLISION:A:"):
+        p.dispatch(qi("B"), **FIELDS)
+    run_role_verifier(t, _defect)
+    p.pump()
+    st = p.lineages["A"]
+    assert st.phase is Phase.REPAIR_DISPATCHED and st.work.task_id == "A-R1"
+    # the holder is the CURRENT (repair) work, reported under its lineage root
+    assert p.scope_holders() == (st.work,) and p.in_flight() == {"A"}
+    with pytest.raises(PlannerError, match=r"^SCOPE_COLLISION:A:src/x/n\.py\|src/x$"):
+        p.dispatch(qi("B"), **_fields("src/x/n.py"))
+    assert set(p.lineages) == {"A"}
+
+
+def test_integration_ready_lineage_still_holds_scope():
+    t = InMemoryTransport()
+    p = scoped(t)
+    a = qi("A", severity=3)
+    p.dispatch(a, **FIELDS)
+    _to_verifying(t, p)
+    run_role_verifier(t, lambda req: (Verdict.PASS, ()))
+    p.pump()
+    assert p.lineages["A"].phase is Phase.INTEGRATION_READY and "A" in p.completed
+    assert p.in_flight() == {"A"} and len(p.scope_holders()) == 1
+    with pytest.raises(PlannerError, match=r"^SCOPE_COLLISION:A:src/x\|src/x$"):
+        p.dispatch(qi("B"), **FIELDS)
+    # selection keeps reporting it as completed (existing reason order), and B is selectable
+    sel = p.select([a, qi("B")])
+    assert sel.skipped == (("A", "ALREADY_COMPLETED"),)
+    assert sel.selected is not None and sel.selected.task_id == "B"
+
+
+def test_blocked_and_owner_required_lineages_release_scope():
+    t = InMemoryTransport()
+    p = scoped(t)
+    p.dispatch(qi("A"), **FIELDS)
+    _to_verifying(t, p)
+    run_role_verifier(
+        t,
+        lambda req: (
+            Verdict.FAIL,
+            (Finding(finding_id="S", category=FindingCategory.SECRET_REQUIRED),),
+        ),
+    )
+    p.pump()
+    assert p.lineages["A"].phase is Phase.OWNER_REQUIRED
+    assert p.in_flight() == frozenset() and p.scope_holders() == ()
+    p.dispatch(qi("B"), **FIELDS)
+    p.fail_execution("B", "boom")
+    assert p.lineages["B"].phase is Phase.BLOCKED and p.in_flight() == frozenset()
+    p.dispatch(qi("C"), **FIELDS)
+    assert p.in_flight() == {"C"}
+
+
+def test_different_repository_never_collides_in_the_planner():
+    t = InMemoryTransport()
+    p = scoped(t)
+    p.dispatch(qi("A"), **FIELDS)
+    p.dispatch(qi("B"), **_fields("src/x", repository="WezzSide/other"))
+    assert p.in_flight() == {"A", "B"} and _work_records(t) == 2
+
+
+def test_repository_case_variant_is_the_same_repository_and_collides():
+    t = InMemoryTransport()
+    p = scoped(t)
+    p.dispatch(qi("A"), **FIELDS)
+    with pytest.raises(PlannerError, match="SCOPE_COLLISION:A:"):
+        p.dispatch(qi("B"), **_fields("src/x", repository=FIELDS["repository"].upper()))
+    assert p.in_flight() == {"A"} and _work_records(t) == 1
+
+
+def test_a_holder_with_a_broken_seal_fails_closed():
+    t = InMemoryTransport()
+    p = scoped(t)
+    p.dispatch(qi("A"), **FIELDS)
+    st = p.lineages["A"]
+    st.work = st.work.model_copy(update={"allowed_paths": ("elsewhere",)})  # seal now stale
+    with pytest.raises(ContractError) as exc:
+        p.dispatch(qi("B"), **FIELDS)
+    assert "seal mismatch" in str(exc.value)
+    assert _work_records(t) == 1 and set(p.lineages) == {"A"}
+
+
+def test_two_disjoint_scope_lineages_are_dispatched_and_proceed_independently():
+    t = InMemoryTransport()
+    p = scoped(t)
+    a, b = qi("A", severity=3), qi("B", severity=1)
+    first = p.select([a, b]).selected
+    assert first is not None and first.task_id == "A"
+    p.dispatch(first, **_fields("src/x"))
+    second = p.select([a, b]).selected
+    assert second is not None and second.task_id == "B"
+    p.dispatch(second, **_fields("src/y"))
+    assert _work_records(t) == 2 and p.in_flight() == {"A", "B"}
+    assert p.select([a, b]).selected is None
+
+    revs = [(REV1, TREE1), (REV2, TREE2)]
+    wa = run_role_implementer(t, revs)
+    wb = run_role_implementer(t, revs)
+    assert (wa.task_id, wb.task_id) == ("A", "B")
+    assert p.pump() == 2
+    assert {r: s.phase for r, s in p.lineages.items()} == {
+        "A": Phase.VERIFYING,
+        "B": Phase.VERIFYING,
+    }
+    # A passes, B fails with an owner-only finding: neither outcome touches the other lineage
+    by_task = {
+        "A": (Verdict.PASS, ()),
+        "B": (
+            Verdict.FAIL,
+            (Finding(finding_id="S", category=FindingCategory.SECRET_REQUIRED),),
+        ),
+    }
+    run_role_verifier(t, lambda req: by_task[req.task_id])
+    run_role_verifier(t, lambda req: by_task[req.task_id])
+    assert p.pump() == 2
+    assert p.lineages["A"].phase is Phase.INTEGRATION_READY
+    assert p.lineages["B"].phase is Phase.OWNER_REQUIRED
+    assert p.completed == {"A"} and set(p.blocked) == {"B"}
+    assert p.in_flight() == {"A"} and not p.quarantined
+
+
+def test_scope_admission_cannot_be_switched_off():
+    t = InMemoryTransport()
+    p = planner(t)  # the ordinary constructor: there is no opt-out
+    p.dispatch(qi("A"), **FIELDS)
+    with pytest.raises(PlannerError, match=r"^SCOPE_COLLISION:A:"):
+        p.dispatch(qi("B"), **FIELDS)
+    assert _work_records(t) == 1 and p.in_flight() == {"A"}
+    with pytest.raises(PlannerError, match="lineage/task id already in use"):
+        p.dispatch(qi("A"), **FIELDS)  # repeated dispatch keeps its existing refusal
+    with pytest.raises(TypeError):
+        Planner(t, identity="vps3-plan", verifier_identities=(VER,), scope_admission=False)  # type: ignore[call-arg]
