@@ -222,8 +222,9 @@ class SpoolTransport:
     def published(self, channel: Channel) -> list[Record]:
         """Every decodable record this spool holds on ``channel``, pending or claimed.
 
-        Read-only. Records are kept after a claim, so this is the transport's own account of
-        what was ever published and not rejected; an unreadable file is skipped (it would be
+        Read-only: what the spool directory holds now. Records are kept after a claim, so
+        absent loss this is what was published and not rejected; a file that cannot be
+        decoded, or whose name or channel does not match its record, is skipped (it would be
         parked on a claim, never handed out).
         """
         d = self._dir(channel)

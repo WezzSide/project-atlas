@@ -2,7 +2,7 @@
 
 Local tests of preparation, tracking and recovery over a durable store. Nothing here causes a
 workflow run; the one test that uses the fabric adapter does so with a fake port to show that
-recovery never becomes a second dispatch.
+recovery re-publishes the same record and the adapter's ledger refuses a second dispatch.
 """
 
 from __future__ import annotations
@@ -201,7 +201,8 @@ def test_boundary_reports_whether_journal_and_anchor_share_a_filesystem(tmp_path
         c = coordinator(tmp_path, far, accept_same_filesystem=False)
         st = c.tick([cand("A", "src/a")])
         assert st["continuity_boundary"] == SEPARATE_FILESYSTEM
-        assert st["boundary_adequate_for_live_conflicting_work"] is True
+        # a different st_dev is reported, never promoted to "adequate"
+        assert st["live_conflicting_work_boundary"] == "NOT_ESTABLISHED"
     finally:
         for f in anchor.glob("*"):
             f.unlink()
@@ -247,8 +248,8 @@ def test_tick_prepares_compatible_lineages_and_defers_what_collides(tmp_path):
     assert st["admitted"] == ["A", "C", "D"] and st["live"] == ["A", "C", "D"]
     assert st["deferred"] == [["B", "SCOPE_COLLISION:A:src/a/sub|src/a"]]  # E: no capacity left
     assert st["max_live"] == 3 and st["journal"]["seq"] == 3 and len(works(tmp_path)) == 3
-    assert st["continuity_boundary"] == SAME_FILESYSTEM
-    assert st["boundary_adequate_for_live_conflicting_work"] is False
+    assert st["continuity_boundary"] == SAME_FILESYSTEM and st["state"] == "OK"
+    assert st["live_conflicting_work_boundary"] == "NOT_ESTABLISHED"
     assert [r["lineage_root"] for r in st["lineages"]] == ["A", "C", "D"]
     assert all(r["holds_scope"] and r["dispatched_by"] == "coord-1" for r in st["lineages"])
     on_disk = json.loads((tmp_path / "status" / "status.json").read_text())
@@ -347,7 +348,15 @@ def test_published_work_the_journal_does_not_know_stops_every_coordinator(tmp_pa
         c1.tick(over_b)  # the one whose head was lost
     assert tree(tmp_path) == before  # nothing appended, acknowledged or published
     status = json.loads((tmp_path / "status" / "status.json").read_text())
-    assert status["journal"]["seq"] == 2  # the last good status is left as it was
+    assert status["state"] == "HALTED" and status["reason"].startswith("JOURNAL_DIVERGED")
+    assert set(status) == {
+        "v",
+        "state",
+        "reason",
+        "store",
+        "continuity_boundary",
+        "live_conflicting_work_boundary",
+    }
     # contrast: the planner alone, without the witness, admits over the lost lineage
     p = Planner(
         SpoolTransport(tmp_path / "spool"),
@@ -384,7 +393,9 @@ class FakePort:
         return BASE if branch == "main" else None
 
 
-def test_recovery_republishes_the_same_record_and_never_causes_a_second_dispatch(tmp_path):
+def test_recovery_republishes_the_same_record_and_the_adapter_ledger_refuses_a_second_dispatch(
+    tmp_path,
+):
     store(tmp_path)
     port = FakePort()
 
@@ -419,8 +430,18 @@ def test_recovery_republishes_the_same_record_and_never_causes_a_second_dispatch
     ]
     events = adapter().tick()
     assert len(port.dispatches) == 1  # the adapter's ledger refuses a second dispatch
-    assert not any(e.startswith("DISPATCHED") for e in events)
+    assert events == ["ACCEPTED:A"]  # accepted again, not dispatched again
     assert coordinator(tmp_path).tick()["lineages"][0]["phase"] == "DISPATCHED"  # unchanged
+    # pinned limit: that protection is the adapter's crosswalk ledger. Lose the transport's
+    # record AND the ledger, and the republished record is dispatched a second time.
+    for f in claimed.iterdir():
+        f.unlink()
+    (tmp_path / "xw.jsonl").unlink()
+    for f in (tmp_path / "pending").iterdir():
+        f.unlink()
+    assert coordinator(tmp_path).tick()["recovered"] == ["REPUBLISHED:A:WORK"]
+    assert adapter().tick() == ["ACCEPTED:A", "DISPATCHED:A"] and len(port.dispatches) == 2
+    assert port.dispatches[0] == port.dispatches[1]  # the same payload, not a new work item
 
 
 # ---- several coordinators -------------------------------------------------------------------
@@ -495,3 +516,247 @@ def test_the_live_limit_is_part_of_the_dispatch_decision(tmp_path):
     assert p.dispatch(b, live_limit=1, **fb).task_id == "B"
     c, fc = cand("C", "src/c")
     assert p.dispatch(c, **fc).task_id == "C"  # no limit given: unchanged behaviour
+
+
+# ---- continuity inside a tick ---------------------------------------------------------------
+
+
+def test_another_coordinators_dispatch_is_never_mistaken_for_lost_history(tmp_path):
+    """The witness lists the transport before it replays, so a faster peer is not an alarm."""
+    store(tmp_path)
+    c1 = coordinator(tmp_path, identity="coord-1", max_live=8)
+    c2 = coordinator(tmp_path, identity="coord-2", max_live=8)
+    c1.tick([cand("A", "src/a")])  # c2's replica has not seen A
+    assert c2.tick()["journal"]["seq"] == 1
+
+    class Interleaved(SpoolTransport):
+        hook = None
+
+        def published(self, channel):
+            out = super().published(channel)
+            if self.hook:
+                hook, self.hook = self.hook, None
+                hook()  # a peer commits and publishes right after this listing
+            return out
+
+    t3 = Interleaved(tmp_path / "spool")
+    c3 = Coordinator(
+        store(tmp_path, create=False),
+        t3,
+        identity="coord-3",
+        verifier_identities=(VER,),
+        status_path=tmp_path / "status" / "s3.json",
+        max_live=8,
+        accept_same_filesystem=True,
+    )
+    c1.tick([cand("B", "src/b")])  # after c3's last replay
+    t3.hook = lambda: c1.tick([cand("C", "src/c")])
+    st = c3.tick([cand("D", "src/d")])
+    assert st["state"] == "OK" and st["admitted"] == ["D"]
+    assert [r["lineage_root"] for r in st["lineages"]] == ["A", "B", "C", "D"]
+
+
+def test_a_running_coordinator_notices_a_lost_event_below_its_head_before_preparing(tmp_path):
+    j = store(tmp_path)
+    c = coordinator(tmp_path, max_live=8)
+    c.tick([cand("A", "src/a"), cand("B", "src/b"), cand("C", "src/c")])
+    for lost, why in (
+        (j.root / "000000000001.json", "missing 1"),
+        (j.anchor / "000000000001.ack", "JOURNAL_UNANCHORED:event 1"),
+    ):
+        saved = lost.read_bytes()
+        lost.unlink()
+        before = tree(tmp_path)
+        with pytest.raises(JournalCorrupt, match=why):
+            c.tick([cand("D", "src/d")])
+        assert tree(tmp_path) == before  # D was not appended, acknowledged or published
+        status = json.loads((tmp_path / "status" / "status.json").read_text())
+        assert status["state"] == "HALTED" and why in status["reason"]
+        lost.write_bytes(saved)
+    assert c.tick([cand("D", "src/d")])["admitted"] == ["D"]  # restored: it goes on
+
+
+def test_identity_lost_between_append_and_acknowledgement_is_never_published(tmp_path):
+    class LosesAnchor(StoreJournal):
+        armed = False
+
+        def append(self, seq, data):
+            ok = super().append(seq, data)
+            if ok and self.armed:
+                (self.anchor / STORE_MARKER).unlink()
+            return ok
+
+    base = store(tmp_path)
+    j = LosesAnchor(base.root, base.anchor, base.store_id)
+    p = Planner(
+        SpoolTransport(tmp_path / "spool"), identity="c", verifier_identities=(VER,), journal=j
+    )
+    j.armed = True
+    item, fields = cand("A", "src/a")
+    with pytest.raises(JournalCorrupt, match="STORE_IDENTITY:anchor directory"):
+        p.dispatch(item, **fields)
+    # the event was linked before the loss; it is not acknowledged, applied or published
+    assert [f.name for f in sorted(j.root.iterdir())] == ["000000000001.json", STORE_MARKER]
+    assert list(j.anchor.iterdir()) == [] and works(tmp_path) == [] and p.lineages == {}
+    # each store operation checks identity on its own, not only through a preceding read
+    for call in (lambda: j.append(2, b"{}"), lambda: j.acknowledge(1, "0" * 64), lambda: j.read(0)):
+        with pytest.raises(JournalCorrupt, match="STORE_IDENTITY"):
+            call()
+
+
+def test_the_witness_also_counts_work_records_that_were_already_claimed(tmp_path):
+    j = store(tmp_path)
+    coordinator(tmp_path).tick([cand("A", "src/a")])
+    implement(tmp_path)  # A's WORK record is now in claimed/
+    spool = SpoolTransport(tmp_path / "spool")
+    assert [r.task_id for r in spool.published(Channel.WORK)] == ["A"]
+    assert not list((tmp_path / "spool" / "WORK").glob("*.json"))
+    (j.root / "000000000001.json").unlink()
+    (j.anchor / "000000000001.ack").unlink()
+    with pytest.raises(JournalCorrupt, match="JOURNAL_BEHIND_TRANSPORT:1 published work"):
+        coordinator(tmp_path, identity="coord-2")
+
+
+def test_limit_the_witness_does_not_see_a_lost_later_event_of_a_published_lineage(tmp_path):
+    """Pinned: only DISPATCH/REPAIR loss is witnessed; the lineage replays to an earlier phase."""
+    j = store(tmp_path)
+    c = coordinator(tmp_path)
+    c.tick([cand("A", "src/a")])
+    implement(tmp_path)
+    c.tick()
+    verify(tmp_path)
+    assert c.tick()["lineages"][0]["phase"] == "INTEGRATION_READY"
+    (j.root / "000000000003.json").unlink()
+    (j.anchor / "000000000003.ack").unlink()
+    st = coordinator(tmp_path, identity="coord-2").tick([cand("X", "src/a/x")])
+    assert st["lineages"][0]["phase"] == "VERIFYING"  # earlier, and still holding its scope
+    assert st["deferred"] == [["X", "SCOPE_COLLISION:A:src/a/x|src/a"]]
+
+
+# ---- no scope handover ----------------------------------------------------------------------
+
+
+def test_the_coordinator_admits_nothing_over_the_scope_of_a_terminal_lineage(tmp_path):
+    from project_atlas.orchestration.autonomy.dev_contracts import Finding, FindingCategory
+
+    store(tmp_path)
+    c = coordinator(tmp_path, max_live=4)
+    c.tick([cand("A", "src/a"), cand("B", "src/b")])
+    w1, w2 = implement(tmp_path), implement(tmp_path)
+    c.tick()
+    spool = SpoolTransport(tmp_path / "spool")
+    for _ in range(2):
+        req = spool.claim(Channel.VERIFICATION, role=Role.VERIFIER, identity=VER)
+        finding = Finding(finding_id="S", category=FindingCategory.SECRET_REQUIRED)
+        spool.publish(make_verdict(req, verdict=Verdict.FAIL, findings=(finding,)))
+    st = c.tick([cand("X", "src/a/x"), cand("Y", "src/y")])
+    assert {r["lineage_root"]: r["phase"] for r in st["lineages"]} == {
+        "A": "OWNER_REQUIRED",
+        "B": "OWNER_REQUIRED",
+        "Y": "DISPATCHED",
+    }
+    # the verdict ended lineage A; it did not prove A's executor or result branch is gone
+    assert st["deferred"] == [["X", "SCOPE_RETAINED:A:src/a/x|src/a"]] and st["admitted"] == ["Y"]
+    assert {w1.task_id, w2.task_id} == {"A", "B"}
+    # the planner's own default is unchanged: asked directly, it admits over a terminal scope
+    item, fields = cand("X", "src/a/x")
+    with pytest.raises(PlannerError, match=r"^SCOPE_RETAINED:A:src/a/x\|src/a$"):
+        c.planner.dispatch(item, retain_terminal_scopes=True, **fields)
+    assert c.planner.dispatch(item, **fields).task_id == "X"
+
+
+# ---- candidates and status ------------------------------------------------------------------
+
+
+def test_a_malformed_candidate_list_raises_before_anything_is_read_or_written(tmp_path):
+    store(tmp_path)
+    c = coordinator(tmp_path)
+    before = tree(tmp_path)
+    item, fields = cand("A", "src/a")
+    bad_lists = [
+        [item],
+        [(item,)],
+        [("A", fields)],
+        [(item, None)],
+        [(item, {1: "x"})],
+        [(item, {**fields, "live_limit": 99})],
+        [(item, {**fields, "retain_terminal_scopes": False})],
+        [(item, {**fields, "execution_ordinal": 5})],
+        [(item, fields), (item, fields)],
+        [cand("A", "src/a", severity=9)],
+    ]
+    for bad in bad_lists:
+        with pytest.raises((PlannerError, ValueError)):
+            c.tick(bad)
+    assert tree(tmp_path) == before and not (tmp_path / "status" / "status.json").exists()
+
+
+def test_a_candidate_that_dispatch_refuses_is_reported_and_the_tick_goes_on(tmp_path):
+    store(tmp_path)
+    c = coordinator(tmp_path, max_live=4)
+    dep = QueueItem(task_id="B", title="B", category=Category.RELIABILITY, depends_on=("A",))
+    st = c.tick(
+        [
+            cand("A", "src/a", severity=3),
+            (dep, cand("B", "src/b")[1]),
+            (cand("C-R1", "src/c")[0], cand("C-R1", "src/c")[1]),  # reserved repair suffix
+            (cand("D", "src/d")[0], {**cand("D", "src/d")[1], "task_id": "other"}),
+            cand("E", "../outside"),
+            cand("F", "src/f"),
+        ]
+    )
+    assert st["admitted"] == ["A", "F"] and st["state"] == "OK"
+    refused = dict(st["deferred"])
+    assert set(refused) == {"C-R1", "D", "E"} and all(
+        v.startswith("REFUSED:") for v in refused.values()
+    )
+    # B waits for A (an in-flight task does not satisfy a dependency); once A is done, the
+    # planner validates B on its own and refuses it: dependencies are not supported yet
+    implement(tmp_path)
+    implement(tmp_path)
+    c.tick()
+    verify(tmp_path)
+    verify(tmp_path)
+    c.tick()
+    st = c.tick([cand("A", "src/a"), (dep, cand("B", "src/b")[1])])
+    assert st["admitted"] == [] and st["deferred"][0][0] == "B"
+    assert "unknown dependency" in st["deferred"][0][1]
+
+
+def test_contention_is_reported_as_deferred_and_ends_the_preparation_step(tmp_path):
+    class Busy(StoreJournal):
+        busy = False
+
+        def append(self, seq, data):
+            return False if self.busy else super().append(seq, data)
+
+    base = store(tmp_path)
+    j = Busy(base.root, base.anchor, base.store_id)
+    c = coordinator(tmp_path, j, max_live=4)
+    j.busy = True
+    st = c.tick([cand("A", "src/a", severity=3), cand("B", "src/b")])
+    assert st["admitted"] == [] and st["deferred"] == [["A", "JOURNAL_CONTENDED"]]  # B not tried
+    j.busy = False
+    assert c.tick([cand("A", "src/a", severity=3), cand("B", "src/b")])["admitted"] == ["A", "B"]
+
+
+def test_the_status_file_may_not_live_inside_the_store_or_the_transport(tmp_path):
+    j = store(tmp_path)
+    spool = SpoolTransport(tmp_path / "spool")
+    for inside in (
+        j.root / STORE_MARKER,
+        j.root / "000000000001.json",
+        j.root / "status.json",
+        j.anchor / "status.json",
+        tmp_path / "spool" / "WORK" / "status.json",
+    ):
+        with pytest.raises(PlannerError, match="STATUS_PATH"):
+            Coordinator(
+                j,
+                spool,
+                identity="c",
+                verifier_identities=(VER,),
+                status_path=inside,
+                accept_same_filesystem=True,
+            )
+    assert json.loads((j.root / STORE_MARKER).read_text())["store"] == j.store_id

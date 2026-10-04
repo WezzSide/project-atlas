@@ -124,10 +124,10 @@ attached, never created. ``Coordinator`` runs recover, pump and the preparation 
 compatible lineages as one ``tick`` on such a store and writes a journal-derived status file.
 It refuses a journal without store identity and a transport that does not keep its records,
 checks that every published WORK record is known to the journal (a witness that does not
-depend on the anchor), and never dispatches an executor or releases a scope. See both classes
-for what they do not establish: in particular, journal and anchor on one filesystem are
-reported as an inadequate boundary for live conflicting work, and a different filesystem is
-evidence against one failure mode, not proof of independent storage.
+depend on the anchor), and never dispatches an executor or hands a scope over. See both
+classes for what they do not establish: in particular, no continuity boundary adequate for
+live conflicting work is established here; a different filesystem for the anchor is evidence
+against one failure mode, not proof of independent storage.
 """
 
 from __future__ import annotations
@@ -161,7 +161,12 @@ from project_atlas.orchestration.autonomy.dev_contracts import (
     validate_identity,
     works_collide,
 )
-from project_atlas.orchestration.autonomy.dev_queue import QueueItem, Selection, select_next
+from project_atlas.orchestration.autonomy.dev_queue import (
+    QueueItem,
+    Selection,
+    select_next,
+    validate,
+)
 from project_atlas.orchestration.autonomy.dev_transport import (
     Channel,
     DevTransport,
@@ -482,9 +487,14 @@ class StoreJournal(DirJournal):
         also for a planner that is already running;
       * an anchor of another store, or the plain ``DirJournal`` default sibling, cannot be
         attached by accident.
-    The identity is checked on every ``read`` (so on every replay) and before every
-    acknowledgement. Like every seal here it is unkeyed: it guards against loss, mix-up and
-    re-creation, not against a writer who copies the marker.
+    The identity is checked on every ``read`` (so on every replay), before every append and
+    before every acknowledgement. An identity lost between a commit's append and its
+    acknowledgement leaves the event linked, unacknowledged and unpublished. A store whose
+    creation was interrupted after the first marker can be neither attached nor re-created;
+    an operator has to remove it. Like every seal here the marker is unkeyed: it guards
+    against loss, mix-up and re-creation, not against a writer who copies the marker, and it
+    says nothing about the acknowledgement FILES: with the marker intact and the ``.ack``
+    files gone, the plain ``DirJournal`` rules apply.
 
     ``boundary`` reports whether the two directories are on different filesystems
     (``st_dev``). Same filesystem means one snapshot or rollback of a common parent can take
@@ -577,6 +587,10 @@ class StoreJournal(DirJournal):
     def read(self, after: int) -> list[bytes]:
         self.check_store()
         return super().read(after)
+
+    def append(self, seq: int, data: bytes) -> bool:
+        self.check_store()
+        return super().append(seq, data)
 
     def acknowledge(self, seq: int, digest: str) -> None:
         self.check_store()
@@ -1022,6 +1036,7 @@ class Planner:
         *,
         execution_ordinal: int = 1,
         live_limit: int | None = None,
+        retain_terminal_scopes: bool = False,
         **work_fields: object,
     ) -> WorkItem:
         """Materialize + publish the sealed work for an admissible queue item.
@@ -1033,7 +1048,10 @@ class Planner:
         comparison keys in sorted order. Nothing is published, no state changes, and the task id
         stays usable for a later dispatch. A holder whose seal no longer verifies is an error.
         ``live_limit`` (optional) refuses with ``LIVE_LIMIT`` when that many lineages are
-        already executing or being verified.
+        already executing or being verified. ``retain_terminal_scopes`` (optional) also
+        refuses, with ``SCOPE_RETAINED``, a work item that overlaps the last work of a BLOCKED
+        or OWNER_REQUIRED lineage: those phases end the lineage for this planner, but they
+        are not evidence that its executor stopped writing or that its result branch is gone.
         The decision is taken against the journal and committed as its next event, so it also
         holds against other planners on the same journal. The DISPATCH event is written before
         the work is published; if publishing fails the lineage is DISPATCHED and ``recover``
@@ -1082,6 +1100,14 @@ class Planner:
                         f"SCOPE_COLLISION:{holder.lineage_root}:"
                         + ",".join(f"{a}|{b}" for a, b in pairs)
                     )
+            if retain_terminal_scopes:
+                for root, st in sorted(self.lineages.items()):
+                    if st.phase in (Phase.BLOCKED, Phase.OWNER_REQUIRED):
+                        pairs = works_collide(work, st.work)
+                        if pairs:
+                            raise PlannerError(
+                                f"SCOPE_RETAINED:{root}:" + ",".join(f"{a}|{b}" for a, b in pairs)
+                            )
             return {"event": "DISPATCH", "root": item.task_id, "work": encode(work)}
 
         self._commit(decide)
@@ -1300,15 +1326,16 @@ STATUS_VERSION = 1
 class Coordinator:
     """One recoverable coordination step over a durable store: recover, track, prepare.
 
-    ``tick`` (1) establishes continuity (journal replay, store identity, and that every WORK
-    record the transport holds is known to the journal), (2) finishes what a crash left
-    (``Planner.recover``), (3) consumes results and verdicts (``pump``), (4) PREPARES further
-    lineages: it dispatches, into the transport, the next admissible candidates whose scope is
-    compatible with every scope holder, up to ``max_live`` executing or verifying lineages
-    in the store, and (5) writes a status file derived from the journal. Any number of
-    coordinators may tick on one store; scope admission and the ``max_live`` bound are both
-    decided in the journal commit, not by this object (coordinators configured with different
-    limits each enforce their own).
+    ``tick`` (1) establishes continuity: it lists the WORK records the transport holds, replays
+    the journal, requires every listed record to be a work the journal knows, and re-reads the
+    whole journal against the anchor; (2) finishes what a crash left (``Planner.recover``);
+    (3) consumes results and verdicts (``pump``); (4) PREPARES further lineages: it dispatches,
+    into the transport, the next admissible candidates whose scope is compatible with every
+    scope holder and with every terminal lineage, while fewer than ``max_live`` lineages are
+    executing or being verified in the store; (5) writes a status file derived from the
+    journal. Several coordinators may tick on one store: scope admission and the ``max_live``
+    bound are decided in the journal commit, not by this object (coordinators configured with
+    different limits each enforce their own).
 
     What it is NOT, and never does:
       * it does not dispatch an executor: publishing a WORK record makes it available to an
@@ -1316,20 +1343,41 @@ class Coordinator:
         bound step. Nothing here holds or consumes a dispatch grant;
       * recovery is not a new attempt: ``recover`` only re-publishes the SAME sealed record
         (same seal, same execution id, same attempt number). A transport that still has the
-        record, pending or claimed, ignores it, and the adapter refuses to dispatch a seal its
-        ledger already dispatched;
-      * it never releases a scope: it does not call ``fail_execution`` or ``release_scope``.
-        A failure report, a timeout or a caller-supplied revision is not proof that an
-        executor stopped writing or that a candidate was merged; a lineage keeps its scope
-        until something with that proof says otherwise;
+        record, pending or claimed, ignores it. If the transport lost it, the record is
+        published again, and whether that leads to a second workflow dispatch is decided by
+        the adapter's own ledger (the crosswalk), which refuses a seal it already dispatched:
+        that protection lasts exactly as long as that ledger does;
+      * it never hands a scope over: it does not call ``fail_execution`` or ``release_scope``,
+        and it admits nothing that overlaps the last work of a BLOCKED or OWNER_REQUIRED
+        lineage (``SCOPE_RETAINED``). ``pump`` does move lineages into those phases, on a
+        verdict or a missing independent verifier; that ends the lineage, it is not evidence
+        that its executor stopped writing or that its result branch is gone. Until a verified
+        release exists, such a scope stays closed to this coordinator;
       * it does not fall back: it refuses a journal without store identity (``MemoryJournal``,
         a plain ``DirJournal``) and a transport that does not keep its records, and it refuses
         a store whose journal and anchor share a filesystem unless the caller explicitly
-        accepts that reduced boundary, which the status file then states.
-    Limits: the witness check trusts the transport directory as much as the journal (anyone
-    who can write a WORK record there can stop every coordinator); one tick is not atomic (a
-    crash between its steps is finished by the next tick); candidates are supplied by the
-    caller, there is no mission decomposition here; no leases and no executor assignment.
+        accepts that. Either way the status file says that an adequate continuity boundary
+        for live conflicting work is NOT established: a different filesystem is one ``st_dev``
+        comparison, taken once at construction, not proof of independent storage.
+    Limits:
+      * the witness covers WORK records only and only what the transport still holds: it
+        detects a journal that no longer knows a published work (a lost DISPATCH or REPAIR
+        event, including journal and anchor rolled back together). It does not detect a lost
+        later event of a lineage (the lineage then replays to an earlier, still scope-holding
+        phase), a lineage that was journalled but never published, or a rollback that took
+        the transport back as well. A bare ``Planner`` has no witness;
+      * the witness trusts the transport directory as much as the journal: anyone who can
+        write a WORK record there can stop every coordinator;
+      * one tick is not atomic. A crash between its steps is finished by the next tick;
+        history lost after the continuity step is noticed by the next operation or tick, not
+        necessarily before this tick's remaining dispatches;
+      * candidates are supplied by the caller (no mission decomposition) and are validated
+        before anything else happens. ``depends_on`` is accepted by that validation but
+        ``Planner.dispatch`` validates an item on its own, so a candidate with dependencies
+        is reported as refused;
+      * a halted status (``state: HALTED``) is written when continuity fails during a tick;
+        a failure of any other kind leaves the previous status in place;
+      * no leases and no executor assignment.
     """
 
     def __init__(
@@ -1355,6 +1403,15 @@ class Coordinator:
                 )
         if not isinstance(max_live, int) or isinstance(max_live, bool) or max_live < 1:
             raise PlannerError("max_live must be an integer >= 1")
+        self.status_path = Path(status_path)
+        where = self.status_path.resolve()
+        owned = [journal.root, journal.anchor, getattr(transport, "root", None)]
+        for directory in owned:
+            if directory is not None and where.is_relative_to(Path(directory).resolve()):
+                raise PlannerError(
+                    f"STATUS_PATH:{self.status_path} is inside {directory}; the status file "
+                    "must live outside the journal, the anchor and the transport"
+                )
         self.boundary = journal.boundary
         if self.boundary != SEPARATE_FILESYSTEM and not accept_same_filesystem:
             raise PlannerError(
@@ -1364,29 +1421,32 @@ class Coordinator:
                 "explicitly (accept_same_filesystem=True)"
             )
         self.journal = journal
-        self.status_path = Path(status_path)
         self.max_live = max_live
         self.planner = Planner(
             transport, identity=identity, verifier_identities=verifier_identities, journal=journal
         )
-        self._witness()
+        self._continuity()
 
-    def _witness(self) -> None:
-        """Every WORK record the transport holds must be a work the journal knows.
+    def _continuity(self) -> None:
+        """Replay, witness the transport, and re-read the whole journal against the anchor.
 
-        The journal is written before a record is published, so a published work the journal
-        does not know means the journal lost history (or this is another store's transport).
-        Independent of the anchor: it also catches journal and anchor rolled back together, as
-        long as the transport was not rolled back with them.
+        The transport is listed BEFORE the replay: a record is published only after its event
+        was acknowledged, so every work listed is in a journal read afterwards, and a work that
+        is still unknown then means the journal no longer has its event (or this is another
+        store's transport), never that another coordinator was merely faster. The full re-read
+        (``fleet_status``) makes a coordinator notice a lost or replaced event below its head,
+        which a planner's own replay does not look at.
         """
-        known = {w.seal for w in self.planner.state.works.values()}
         published = self.planner.transport.published(Channel.WORK)  # type: ignore[attr-defined]
+        self.planner.sync()
+        known = {w.seal for w in self.planner.state.works.values()}
         unknown = sorted(r.seal for r in published if r.seal not in known)
         if unknown:
             raise JournalCorrupt(
                 f"JOURNAL_BEHIND_TRANSPORT:{len(unknown)} published work record(s) are unknown "
                 f"to the journal, first {unknown[0]}"
             )
+        fleet_status(self.journal)
 
     def live(self) -> frozenset[str]:
         """Lineage roots that are executing or being verified (what ``max_live`` bounds)."""
@@ -1397,52 +1457,59 @@ class Coordinator:
     ) -> dict[str, Any]:
         """Run one coordination step and return the status that was written.
 
-        ``candidates`` are (queue item, sealed work fields) pairs the caller proposes; a
-        candidate refused for a scope collision or for contention is reported as deferred and
-        may simply be proposed again. Raises ``JournalCorrupt`` (nothing prepared, the status
-        file untouched) when continuity cannot be established.
+        ``candidates`` are (queue item, sealed work fields) pairs the caller proposes. They are
+        validated first; a malformed list raises before anything is read or written. A
+        candidate refused for a scope collision, a retained terminal scope, contention or its
+        own invalidity is reported under ``deferred`` and may be proposed again.
+
+        Raises ``JournalCorrupt`` when continuity cannot be established or is lost during the
+        tick; a ``HALTED`` status naming the reason is written first. Continuity is checked
+        before recover, pump and the first dispatch; if it fails there, nothing was appended
+        or published by this tick.
         """
+        items = [self._candidate(c) for c in candidates]
+        validate(item for item, _ in items)  # duplicate ids, cycles, malformed items
+        fields = dict((item.task_id, (item, work)) for item, work in items)
         p = self.planner
-        p.sync()
-        self._witness()
-        recovered = p.recover()
-        processed = p.pump()
-        fields = {item.task_id: (item, dict(work)) for item, work in candidates}
-        if len(fields) != len(candidates):
-            raise PlannerError("duplicate task id among the candidates")
-        admitted: list[str] = []
-        deferred: list[tuple[str, str]] = []
-        remaining = [item for item, _ in candidates]
-        while remaining and len(self.live()) < self.max_live:
-            sel = p.select(remaining)
-            if sel.selected is None:
-                break
-            item, work = fields[sel.selected.task_id]
-            remaining = [i for i in remaining if i.task_id != item.task_id]
-            try:
-                p.dispatch(item, live_limit=self.max_live, **work)
-            except JournalContended as exc:
-                deferred.append((item.task_id, str(exc).split(":")[0]))
-                break  # the journal is busy: leave the rest for the next tick
-            except JournalCorrupt:
-                raise
-            except PlannerError as exc:
-                reason = str(exc)
-                if reason.startswith("LIVE_LIMIT:"):
-                    break  # another coordinator filled the capacity since we looked
-                deferred.append(
-                    (
-                        item.task_id,
-                        reason if reason.startswith("SCOPE_COLLISION:") else f"REFUSED:{reason}",
-                    )
+        try:
+            self._continuity()
+            recovered = p.recover()
+            processed = p.pump()
+            admitted: list[str] = []
+            deferred: list[tuple[str, str]] = []
+            tried: set[str] = set()
+            while len(tried) < len(items) and len(self.live()) < self.max_live:
+                p.sync()
+                sel = select_next(
+                    [item for item, _ in items],
+                    completed=p.completed,
+                    blocked=p.blocked,
+                    in_flight=p.in_flight() | tried,
                 )
-                continue
-            admitted.append(item.task_id)
-        status = {
-            "v": STATUS_VERSION,
-            "store": self.journal.store_id,
-            "continuity_boundary": self.boundary,
-            "boundary_adequate_for_live_conflicting_work": self.boundary == SEPARATE_FILESYSTEM,
+                if sel.selected is None:
+                    break
+                item, work = fields[sel.selected.task_id]
+                tried.add(item.task_id)
+                try:
+                    p.dispatch(item, live_limit=self.max_live, retain_terminal_scopes=True, **work)
+                except JournalContended:
+                    deferred.append((item.task_id, "JOURNAL_CONTENDED"))
+                    break  # the journal is busy: leave the rest for the next tick
+                except JournalCorrupt:
+                    raise
+                except (PlannerError, ValueError) as exc:  # incl. ContractError, QueueError
+                    reason = str(exc)
+                    if reason.startswith("LIVE_LIMIT:"):
+                        break  # another coordinator filled the capacity since we looked
+                    kept = reason.startswith(("SCOPE_COLLISION:", "SCOPE_RETAINED:"))
+                    deferred.append((item.task_id, reason if kept else f"REFUSED:{reason}"))
+                    continue
+                admitted.append(item.task_id)
+            rows = fleet_status(self.journal)
+        except JournalCorrupt as exc:
+            self._write_status(self._header("HALTED") | {"reason": str(exc)})
+            raise
+        status = self._header("OK") | {
             "journal": {"seq": p.state.seq, "head": p.state.head},
             "max_live": self.max_live,
             "live": sorted(self.live()),
@@ -1452,16 +1519,44 @@ class Coordinator:
             "records_processed": processed,
             "records_deferred": len(p.deferred),
             "records_quarantined": len(p.quarantined),
-            "lineages": [dict(r) for r in fleet_status(self.journal)],
+            "lineages": [dict(r) for r in rows],
         }
         self._write_status(status)
         return status
 
+    _RESERVED_WORK_KEYS = frozenset({"live_limit", "retain_terminal_scopes", "execution_ordinal"})
+
+    def _candidate(self, c: object) -> tuple[QueueItem, dict[str, Any]]:
+        if not isinstance(c, tuple) or len(c) != 2:
+            raise PlannerError("a candidate is a (QueueItem, work fields) pair")
+        item, work = c
+        if not isinstance(item, QueueItem) or not isinstance(work, Mapping):
+            raise PlannerError("a candidate is a (QueueItem, work fields) pair")
+        if not all(isinstance(k, str) for k in work):
+            raise PlannerError("work field names must be strings")
+        clash = sorted(self._RESERVED_WORK_KEYS & set(work))
+        if clash:
+            raise PlannerError(f"work fields may not set {clash}")
+        return item, dict(work)
+
+    def _header(self, state: str) -> dict[str, Any]:
+        return {
+            "v": STATUS_VERSION,
+            "state": state,
+            "store": self.journal.store_id,
+            "continuity_boundary": self.boundary,
+            # one st_dev comparison is not an established boundary; nothing here claims one
+            "live_conflicting_work_boundary": "NOT_ESTABLISHED",
+        }
+
     def _write_status(self, status: dict[str, Any]) -> None:
         self.status_path.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp = tempfile.mkstemp(dir=self.status_path.parent, prefix=".tmp-status-")
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(json.dumps(status, sort_keys=True, indent=2) + "\n")
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp, self.status_path)  # atomic: a reader never sees a torn status
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(json.dumps(status, sort_keys=True, indent=2) + "\n")
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, self.status_path)  # atomic: a reader never sees a torn status
+        finally:
+            _drop_tmp(tmp)
