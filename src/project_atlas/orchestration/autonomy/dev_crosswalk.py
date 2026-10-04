@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -51,6 +52,7 @@ def derive_lease_id(work: WorkItem) -> str:
 
 
 _UNIQUE = ("execution_id", "dispatch_id", "lease_id", "work_seal")
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
 class Crosswalk:
@@ -220,16 +222,34 @@ class Crosswalk:
             }
         )
 
-    def bind_dispatch(self, work_seal: str, *, dispatched_at: str, payload_sha256: str) -> None:
-        """Write-ahead record: a work item is dispatched at most once (never re-dispatched)."""
-        self._append(
-            {
-                "event": "DISPATCH",
-                "work_seal": work_seal,
-                "dispatched_at": dispatched_at,
-                "payload_sha256": payload_sha256,
-            }
-        )
+    def bind_dispatch(
+        self,
+        work_seal: str,
+        *,
+        dispatched_at: str,
+        payload_sha256: str,
+        package_sha256: str | None = None,
+    ) -> None:
+        """Write-ahead record: a work item is dispatched at most once (never re-dispatched).
+
+        ``package_sha256`` (optional, ATLAS-DEVQ-0005) is the hash of the rendered package the
+        dispatched payload was bound to. The key is written only when given, so a dispatch
+        without a package keeps the exact three-key record and existing ledgers replay
+        unchanged. It records WHAT was bound, not approval: it is not a grant and proves no
+        owner decision. A second DISPATCH for the same seal is idempotent only on exact
+        equality, so a different or missing ``package_sha256`` is a conflict.
+        """
+        ev: dict[str, Any] = {
+            "event": "DISPATCH",
+            "work_seal": work_seal,
+            "dispatched_at": dispatched_at,
+            "payload_sha256": payload_sha256,
+        }
+        if package_sha256 is not None:
+            if not isinstance(package_sha256, str) or not _SHA256.fullmatch(package_sha256):
+                raise CrosswalkError("package_sha256 must be exactly 64 lowercase hex characters")
+            ev["package_sha256"] = package_sha256
+        self._append(ev)
 
     def bind_run(self, work_seal: str, *, run_id: int, run_attempt: int, branch: str) -> None:
         self._append(

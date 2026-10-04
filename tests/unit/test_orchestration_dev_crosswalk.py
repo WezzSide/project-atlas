@@ -240,3 +240,109 @@ def test_opening_a_ledger_read_only_never_modifies_it(tmp_path):
     Crosswalk(p)
     Crosswalk(p)
     assert p.read_bytes() == before and not (tmp_path / "xw.jsonl.torn").exists()
+
+
+# -- ATLAS-DEVQ-0005: optional package_sha256 on the DISPATCH record ------------------------
+
+PKG_SHA = "ab" * 32
+
+
+def test_dispatch_without_a_package_keeps_the_exact_legacy_record(tmp_path):
+    p = tmp_path / "xw.jsonl"
+    xw = Crosswalk(p)
+    w = work()
+    xw.bind_work(w)
+    xw.bind_dispatch(w.seal, dispatched_at=STAMP, payload_sha256=PSHA)
+    legacy = {"event": "DISPATCH", "dispatched_at": STAMP, "payload_sha256": PSHA}
+    assert xw.hop(w.seal, "DISPATCH") == legacy
+    xw.bind_dispatch(w.seal, dispatched_at=STAMP, payload_sha256=PSHA, package_sha256=None)
+    assert Crosswalk(p).hop(w.seal, "DISPATCH") == legacy
+    import json
+
+    # an identical re-bind is idempotent in the ledger state; as before this change it still
+    # appends an identical line, which replays as a no-op
+    written = [json.loads(x) for x in p.read_text().splitlines()[1:]]
+    assert written == [{**legacy, "work_seal": w.seal}] * 2
+
+
+def test_dispatch_with_a_package_records_its_hash_and_replays(tmp_path):
+    p = tmp_path / "xw.jsonl"
+    xw = Crosswalk(p)
+    w = work()
+    xw.bind_work(w)
+    xw.bind_dispatch(w.seal, dispatched_at=STAMP, payload_sha256=PSHA, package_sha256=PKG_SHA)
+    want = {
+        "event": "DISPATCH",
+        "dispatched_at": STAMP,
+        "payload_sha256": PSHA,
+        "package_sha256": PKG_SHA,
+    }
+    assert xw.hop(w.seal, "DISPATCH") == want
+    again = Crosswalk(p)
+    assert again.hop(w.seal, "DISPATCH") == want
+    again.bind_dispatch(w.seal, dispatched_at=STAMP, payload_sha256=PSHA, package_sha256=PKG_SHA)
+    assert Crosswalk(p).hop(w.seal, "DISPATCH") == want  # identical re-bind: no conflict
+    assert again.unbound_dispatches() == [(w.seal, STAMP)]
+
+
+@pytest.mark.parametrize("first", [None, PKG_SHA], ids=["legacy-first", "package-first"])
+def test_rebinding_a_dispatch_with_another_or_missing_package_hash_conflicts(tmp_path, first):
+    p = tmp_path / "xw.jsonl"
+    xw = Crosswalk(p)
+    w = work()
+    xw.bind_work(w)
+    xw.bind_dispatch(w.seal, dispatched_at=STAMP, payload_sha256=PSHA, package_sha256=first)
+    before = p.read_bytes()
+    for other in {None, PKG_SHA, "cd" * 32} - {first}:
+        with pytest.raises(CrosswalkError, match="conflicting second DISPATCH"):
+            xw.bind_dispatch(w.seal, dispatched_at=STAMP, payload_sha256=PSHA, package_sha256=other)
+    assert p.read_bytes() == before and Crosswalk(p).hop(w.seal, "DISPATCH") == xw.hop(
+        w.seal, "DISPATCH"
+    )
+
+
+@pytest.mark.parametrize("bad", ["", "a" * 63, "A" * 64, "g" * 64, "a" * 65, 5, b"a" * 64])
+def test_malformed_package_hash_is_refused_and_never_written(tmp_path, bad):
+    p = tmp_path / "xw.jsonl"
+    xw = Crosswalk(p)
+    w = work()
+    xw.bind_work(w)
+    before = p.read_bytes()
+    with pytest.raises(CrosswalkError, match="package_sha256"):
+        xw.bind_dispatch(w.seal, dispatched_at=STAMP, payload_sha256=PSHA, package_sha256=bad)
+    assert p.read_bytes() == before and xw.hop(w.seal, "DISPATCH") is None
+
+
+def test_a_ledger_written_before_the_package_field_still_loads(tmp_path):
+    import json
+
+    w = work()
+    p = tmp_path / "xw.jsonl"
+    lines = [
+        {
+            "event": "WORK",
+            "work_seal": w.seal,
+            "task_id": w.task_id,
+            "execution_id": w.execution_id,
+            "lineage_root": w.lineage_root,
+            "attempt": w.attempt,
+            "base_revision": w.base_revision,
+            "dispatch_id": derive_dispatch_id(w),
+            "lease_id": derive_lease_id(w),
+        },
+        {"event": "DISPATCH", "work_seal": w.seal, "dispatched_at": STAMP, "payload_sha256": PSHA},
+    ]
+    p.write_text("".join(json.dumps(x, sort_keys=True) + "\n" for x in lines))
+    before = p.read_bytes()
+    xw = Crosswalk(p)
+    assert xw.hop(w.seal, "DISPATCH") == {
+        "event": "DISPATCH",
+        "dispatched_at": STAMP,
+        "payload_sha256": PSHA,
+    }
+    assert p.read_bytes() == before  # opening never rewrites it
+    xw.bind_work(w)
+    xw.bind_dispatch(w.seal, dispatched_at=STAMP, payload_sha256=PSHA)  # same record: no conflict
+    with pytest.raises(CrosswalkError, match="conflicting second DISPATCH"):
+        xw.bind_dispatch(w.seal, dispatched_at=STAMP, payload_sha256=PSHA, package_sha256=PKG_SHA)
+    assert Crosswalk(p).hop(w.seal, "DISPATCH") == xw.hop(w.seal, "DISPATCH")
