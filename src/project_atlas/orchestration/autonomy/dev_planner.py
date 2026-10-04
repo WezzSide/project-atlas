@@ -108,10 +108,12 @@ Limits (what this is NOT):
     newest event's acknowledgement, when the event itself is still stored unchanged: by a
     planner that had seen it acknowledged (``RESTORED``, a definite loss) or, before it
     appends or publishes, by a planner that finds the newest event unacknowledged after a
-    short wait (``ADOPTED``: its writer died between append and acknowledgement, or the
-    acknowledgement was lost; not knowable). Either way a repair record is written to the
+    wait (``ADOPTED``: its writer died between append and acknowledgement, the
+    acknowledgement was lost, or a live writer took longer than the wait; not knowable). Either
+    way a repair record is written to the
     anchor BEFORE the acknowledgement and is never removed here; ``repairs()`` lists them and
-    a coordinator's status is ``DEGRADED`` from then on. An acknowledgement therefore either
+    a coordinator's healthy tick reports ``DEGRADED`` while a record exists. An acknowledgement
+    therefore either
     comes from the commit that appended its event or has a repair record next to it.
     Everything else fails closed: there is no other repair or re-anchoring tool, and nothing
     here clears a repair record; an operator has to restore the journal or judge the record;
@@ -247,12 +249,13 @@ _REPAIR_FILE = re.compile(r"[0-9]{12}\.repair")
 # An acknowledgement written by anyone but the commit that appended the event is a REPAIR of
 # acknowledgement continuity and leaves a durable record:
 RESTORED = "RESTORED"  # this planner had seen the acknowledgement; it was gone: a definite loss
-ADOPTED = "ADOPTED"  # no acknowledgement appeared for the newest event: its writer died between
-#                      append and acknowledgement, or the acknowledgement was lost (not knowable)
+ADOPTED = "ADOPTED"  # no acknowledgement appeared for the newest event within the wait: its
+#                      writer died, the acknowledgement was lost, or the writer is slower
+#                      than the wait (not knowable)
 ADOPT_GRACE_TRIES = 40  # how long a live writer gets to acknowledge its own event before
-ADOPT_GRACE_STEP = 0.05  # another planner adopts it: tries x seconds, 2 s. Far above the
-#                          append-to-acknowledgement gap of a live writer under load, so an
-#                          ADOPTED record means a writer that did not finish, not a slow one
+ADOPT_GRACE_STEP = 0.05  # another planner adopts it: tries x seconds, 2 s. A live writer
+#                          that needs longer than this between append and acknowledgement
+#                          is adopted too and leaves an ADOPTED record
 _DIGEST = re.compile(r"[0-9a-f]{64}")
 _REVISION = re.compile(r"[0-9a-f]{40}")
 _EXECUTING = frozenset({Phase.DISPATCHED, Phase.REPAIR_DISPATCHED})
@@ -565,13 +568,15 @@ class StoreJournal(DirJournal):
     (``attach``: both directories and both markers must exist and agree). Nothing here creates
     a directory or a marker implicitly, so a journal or anchor that went missing is never
     mistaken for, or re-created as, a fresh start:
-      * a missing or foreign anchor fails at attach and at every later read or
-        acknowledgement (``STORE_IDENTITY``), also for a journal of zero or one event and
+      * a missing or foreign anchor fails at attach and at every later read, append,
+        acknowledgement, repair record and repair listing (``STORE_IDENTITY``), also for a journal
+        of zero or one event and
         also for a planner that is already running;
       * an anchor of another store, or the plain ``DirJournal`` default sibling, cannot be
         attached by accident.
-    The identity is checked on every ``read`` (so on every replay), before every append and
-    before every acknowledgement. An identity lost between a commit's append and its
+    The identity is checked on every ``read`` (so on every replay), before every append,
+    before every acknowledgement, before a repair record is written and when the repair
+    records are listed. An identity lost between a commit's append and its
     acknowledgement leaves the event linked, unacknowledged and unpublished. A store whose
     creation was interrupted after the first marker can be neither attached nor re-created;
     an operator has to remove it. Like every seal here the marker is unkeyed: it guards
@@ -678,6 +683,14 @@ class StoreJournal(DirJournal):
     def acknowledge(self, seq: int, digest: str) -> None:
         self.check_store()
         super().acknowledge(seq, digest)
+
+    def record_repair(self, seq: int, digest: str, kind: str, by: str) -> None:
+        self.check_store()  # never into an anchor that is not this store's
+        super().record_repair(seq, digest, kind, by)
+
+    def repairs(self) -> tuple[dict[str, Any], ...]:
+        self.check_store()
+        return super().repairs()
 
 
 @dataclass
@@ -1630,8 +1643,11 @@ class Coordinator:
         written. Continuity is checked before recover, pump and the first dispatch; if it
         fails there, no event was appended and nothing was published by this tick (an
         acknowledgement repair, with its record, may have been written). An ``OSError`` from
-        the journal, the anchor, the transport listing, a publish or the status file is raised
-        as it is; one from the transport's ``claim`` is quarantined by ``pump``.
+        the journal, the anchor, the transport listing or a publish is raised as it is, after
+        a ``HALTED`` status naming it (``IO_ERROR``) was written if it can be written, so a
+        tick that did not finish never leaves an earlier ``OK`` standing; one from the status
+        file itself is raised as it is; one from the transport's ``claim`` is quarantined by
+        ``pump``.
         """
         items = [self._candidate(c) for c in candidates]
         validate(item for item, _ in items)  # duplicate ids, cycles, malformed items
@@ -1675,6 +1691,9 @@ class Coordinator:
             repairs = [dict(r) for r in self.journal.repairs()]
         except JournalCorrupt as exc:
             self._halted(exc)
+            raise
+        except OSError as exc:
+            self._halted(JournalCorrupt(f"IO_ERROR:{type(exc).__name__}: {exc}"))
             raise
         # acknowledgement continuity that had to be repaired stays visible: never plain OK
         status = self._header("DEGRADED" if repairs else "OK") | {

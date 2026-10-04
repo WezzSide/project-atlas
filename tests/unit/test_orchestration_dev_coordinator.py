@@ -329,7 +329,9 @@ def test_a_tick_that_died_between_journal_and_transport_is_finished_by_the_next(
     )
     with pytest.raises(OSError):
         c.tick([cand("A", "src/a")])
-    assert works(tmp_path) == [] and not (tmp_path / "status" / "status.json").exists()
+    assert works(tmp_path) == []
+    died = json.loads((tmp_path / "status" / "status.json").read_text())
+    assert died["state"] == "HALTED" and died["reason"].startswith("IO_ERROR:")  # never OK
     st = coordinator(tmp_path).tick()
     assert st["recovered"] == ["REPUBLISHED:A:WORK"] and len(works(tmp_path)) == 1
     assert coordinator(tmp_path).tick()["recovered"] == []
@@ -1013,3 +1015,51 @@ def test_unreadable_store_directories_at_construction_leave_a_halted_status(tmp_
         coordinator(tmp_path, attached, identity="coord-2")
     status = json.loads((tmp_path / "status" / "status.json").read_text())
     assert status["state"] == "HALTED" and status["continuity_boundary"] == "UNKNOWN"
+
+
+def test_an_anchor_directory_removed_under_a_running_coordinator_leaves_a_halted_status(tmp_path):
+    j = store(tmp_path)
+    c = coordinator(tmp_path, max_live=8)
+    assert c.tick([cand("A", "src/a")])["state"] == "OK"
+    for f in j.anchor.iterdir():
+        f.unlink()
+    j.anchor.rmdir()
+    before = tree(tmp_path)
+    with pytest.raises(JournalCorrupt, match="STORE_IDENTITY"):
+        c.tick([cand("N", "src/n")])
+    assert tree(tmp_path) == before and not j.anchor.exists()  # nothing appended or re-created
+    status = json.loads((tmp_path / "status" / "status.json").read_text())
+    assert status["state"] == "HALTED" and status["reason"].startswith("STORE_IDENTITY")
+
+
+def test_a_repair_record_that_cannot_be_written_never_leaves_an_ok_status(tmp_path, monkeypatch):
+    j = store(tmp_path)
+    c = coordinator(tmp_path, max_live=8)
+    assert c.tick([cand("A", "src/a")])["state"] == "OK"
+    ack = j.anchor / "000000000001.ack"
+    ack.unlink()
+
+    def read_only(self, seq, digest, kind, by):
+        raise OSError(30, "anchor is read-only")
+
+    monkeypatch.setattr(DirJournal, "record_repair", read_only)
+    before = tree(tmp_path)
+    with pytest.raises(OSError, match="read-only"):
+        c.tick([cand("N", "src/n")])
+    assert tree(tmp_path) == before and not ack.exists()  # no record, so no acknowledgement
+    status = json.loads((tmp_path / "status" / "status.json").read_text())
+    assert status["state"] == "HALTED" and status["reason"].startswith("IO_ERROR:OSError")
+
+
+def test_a_repair_record_is_never_written_into_an_anchor_of_another_store(tmp_path):
+    j = store(tmp_path)
+    coordinator(tmp_path).tick([cand("A", "src/a")])
+    digest = (j.anchor / "000000000001.ack").read_text()
+    other = StoreJournal.create(tmp_path / "o" / "journal", tmp_path / "o" / "anchor")
+    marker = j.anchor / "STORE.json"
+    marker.write_bytes((other.anchor / "STORE.json").read_bytes())  # the anchor is now foreign
+    with pytest.raises(JournalCorrupt, match="STORE_IDENTITY"):
+        j.record_repair(1, digest, "RESTORED", "coord-1")
+    with pytest.raises(JournalCorrupt, match="STORE_IDENTITY"):
+        j.repairs()
+    assert not list(j.anchor.glob("*.repair"))

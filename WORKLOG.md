@@ -16237,14 +16237,15 @@ Changes (existing modules only: `dev_planner.py`, `dev_spool_transport.py`; no n
 `WorkItem` field, no seal change, no adapter / crosswalk / workflow / CLI change). Existing
 tests changed in `test_orchestration_dev_planner_journal.py` for the acknowledgement repair
 described below (replay no longer writes acknowledgements): of main's 51 tests one changed in
-place and three were replaced under new names; seven were added (58 now):
+place and three were replaced under new names; nine were added (60 now):
 - `StoreJournal(DirJournal)`: `create(root, anchor)` makes a NEW store (both directories
   absent or empty, separate, not nested) and writes a `STORE.json` marker with one random
   store id into each; `attach(root, anchor)` creates nothing and requires both markers to
   exist and agree. The identity is re-checked on every `read` (every replay), before every
   append and before every acknowledgement, so a missing, re-created or foreign anchor or
   journal directory raises `JournalCorrupt` for a running planner as well as a new one, at
-  any journal length (`STORE_IDENTITY`; a running planner that already holds events and loses
+  any journal length; a repair record is written and the repair records are listed only
+  after the same check (`STORE_IDENTITY`; a running planner that already holds events and loses
   the journal directory gets `JOURNAL_DIVERGED` from its head check first). Checked at the
   replay that starts an operation, no event is appended; lost between a commit's append and its acknowledgement, the event
   stays linked, unacknowledged and unpublished. `boundary` reports `SAME_FILESYSTEM` or
@@ -16271,8 +16272,11 @@ place and three were replaced under new names; seven were added (58 now):
      `retain_terminal_scopes`, reporting scope collisions, retained scopes, contention and
      refused candidates under `deferred`;
   6. atomic status file: `state` (`OK`; `DEGRADED` when the anchor holds repair records;
-     `HALTED` with the reason when continuity failed in the constructor or a tick, best
-     effort, a status that cannot be written does not mask the continuity failure),
+     `HALTED` with the reason when continuity failed in the constructor or a tick, or when
+     a tick stopped on an `OSError` from the store or the transport (`IO_ERROR`), best
+     effort, a status that cannot be written does not mask the failure; a constructor refused
+     for configuration (`STORE_BOUNDARY`, `COORDINATOR_NEEDS_STORE`, transport, `max_live`,
+     status path) writes no status),
      `acknowledgement_continuity` (`INTACT` / `REPAIRED`) and the `repairs` list,
      store id, `continuity_boundary`, `live_conflicting_work_boundary: NOT_ESTABLISHED`,
      journal seq and head, live, admitted, deferred, recovered, record counts, `fleet_status`
@@ -16297,8 +16301,8 @@ restored a lost head acknowledgement silently and reported `OK`):
   name, kind, digest form, identity); it does not compare a record with the journal. A full
   open accepts `.repair` names in the anchor and does not count them as acknowledgements.
 - A coordinator whose anchor holds any repair record reports `state: DEGRADED`,
-  `acknowledgement_continuity: REPAIRED` and the records, on every tick, from every
-  coordinator, across restarts. `HALTED` statuses carry the records too. Nothing here clears
+  `acknowledgement_continuity: REPAIRED` and the records, on every tick that completes, from
+  every coordinator, across restarts. `HALTED` statuses carry the records too. Nothing here clears
   a record: there is no operator acknowledgement procedure yet, so a store stays `DEGRADED`.
 - Where continuity cannot be re-established it fails closed as before: a replaced head, an
   acknowledgement with another digest, a lost acknowledgement below the head
@@ -16352,8 +16356,9 @@ Limits:
   attached nor re-created.
 - One tick is not atomic: a crash between steps is finished by the next tick, and history
   lost after the continuity step is noticed by the next operation or tick.
-- A `HALTED` status is written only for a continuity failure; another failure leaves the
-  previous status in place. The status file is last-writer-wins and names no coordinator:
+- A `HALTED` status is written for a continuity failure and for an `OSError` that stops a
+  tick; any other exception leaves the previous status in place. A loss that happens after a
+  tick's last check is reported by the next tick, not by that one. The status file is last-writer-wins and names no coordinator:
   one that fails to start for a local reason overwrites a shared status with `HALTED` until a
   healthy tick rewrites it.
 - A repair record says that an acknowledgement did not come from its event's commit. A live
@@ -16365,9 +16370,8 @@ Limits:
   returns the status to `OK`. There is one record per sequence number and the first stands:
   a second loss of the same acknowledgement is restored without a new record. A bare
   `Planner` that is already at the head and neither appends nor publishes does not notice a
-  head acknowledgement that was replaced by another digest. A repair record that cannot be
-  written with a plain `OSError` leaves the previous status file in place (only a continuity
-  failure writes `HALTED`).
+  head acknowledgement that was replaced by another digest. A live writer that is adopted is not stopped: its own
+  tick completes.
 - Scope retention is per repository as `works_collide` compares it: a `.git` or URL spelling
   of the same repository counts as a different repository.
 - Under concurrent ticks a peer's `recover` can publish a record a second time while the
@@ -16383,10 +16387,10 @@ Limits:
   skipped where there is none.
 
 Commands and results (`PYTHONPATH=<worktree>/src`, `--no-cov -o addopts=""`):
-- `pytest tests/unit/test_orchestration_dev_coordinator.py` (new): 34 passed;
-  `test_orchestration_dev_planner_journal.py`: 58 passed; both files together 40 consecutive
-  runs, 92 passed each, the tests running with a shortened adoption wait (the production
-  values are pinned by a test that reads the module source) (on this host `/dev/shm` is a second filesystem,
+- `pytest tests/unit/test_orchestration_dev_coordinator.py` (new): 37 passed;
+  `test_orchestration_dev_planner_journal.py`: 60 passed; both files together 40 consecutive
+  runs, 97 passed each, the tests running with a shortened adoption wait (a test that reads
+  the module source pins the production product at >= 2 s, not the two values) (on this host `/dev/shm` is a second filesystem,
   so the boundary test ran). The first version of the coordinator file (14 tests) failed once
   in an independent verifier's 571 runs: the witness listed the transport after its replay
   and took a peer's fresh dispatch for lost history. The order was reversed;
@@ -16397,7 +16401,11 @@ Commands and results (`PYTHONPATH=<worktree>/src`, `--no-cov -o addopts=""`):
   record written after the acknowledgement; record overwritten instead of first-stands; no
   adoption wait; wrong-digest head acknowledgement accepted; `_anchor_head` trusting memory
   instead of the file; a repair record counted as an acknowledgement; status never `DEGRADED`;
-  repairs not validated in the continuity step; same-filesystem refusal not `HALTED`.
+  repairs not validated in the continuity step; unreadable store directories at construction
+  not `HALTED`; repair record or repair listing not store-checked; no `HALTED` on an
+  `OSError` tick; no check that the record exists after the write; no sequence or digest
+  check in `repairs()`. With production wait values an independent verifier ran 4 and 8
+  coordinator threads over one store (825 events) and found no repair record.
   Known survivors: removing the `except JournalCorrupt: raise` in the dispatch loop (the
   final `fleet_status` raises anyway); the `sync()` inside the dispatch loop; the method-name
   check on `published`.
@@ -16405,9 +16413,9 @@ Commands and results (`PYTHONPATH=<worktree>/src`, `--no-cov -o addopts=""`):
   collection (the imported names do not exist there).
 - `test_orchestration_dev_loop_contracts.py`, `_dev_queue.py`, `_dev_fabric_adapter.py`,
   `_dev_package.py`, `_dev_package_repair.py`, `_dev_crosswalk.py`, `_dev_spool_transport.py`,
-  `_dev_planner_journal.py`, `_dev_coordinator.py`: 852 passed.
+  `_dev_planner_journal.py`, `_dev_coordinator.py`: 857 passed.
 - `pytest tests/unit -k "orchestration_dev or dev_package or executor or agent_execute or
-  workflow or autonomy or global_foundation or github_port"`: 1550 passed, 5152 deselected.
+  workflow or autonomy or global_foundation or github_port"`: 1555 passed, 5152 deselected.
 - `ruff check .`: clean. `ruff format --check` on the four changed code files: clean.
   `mypy src`: no issues in 415 source files.
 - The full test suite was not run locally.

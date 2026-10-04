@@ -1733,3 +1733,30 @@ def test_repair_records_do_not_count_as_acknowledgements(tmp_path):
     j.record_repair(9, "0" * 64, "ADOPTED", "someone")  # a record far beyond the journal
     assert j.high_water(2, full=True) == 2  # not an acknowledged event: no truncation alarm
     assert planner(t, DirJournal(tmp_path / "j"), "plan-2").state.seq == 2
+
+
+def test_a_repair_record_that_is_not_there_after_the_write_stops_the_repair(tmp_path, monkeypatch):
+    _, p1 = _two_holders(tmp_path)
+    ack = tmp_path / "j.ack" / "000000000002.ack"
+    ack.unlink()
+
+    def phantom(src, dst, **kw):
+        raise FileExistsError(dst)  # claims the record exists; it does not
+
+    monkeypatch.setattr("os.link", phantom)
+    with pytest.raises(JournalCorrupt, match="repair record 2 could not be written"):
+        p1.select([qi("Z")])
+    assert not ack.exists()  # no record, so no acknowledgement
+
+
+def test_a_repair_record_must_name_its_own_sequence_number_and_a_digest(tmp_path):
+    _two_holders(tmp_path)
+    anchor = tmp_path / "j.ack"
+    digest = (anchor / "000000000002.ack").read_text()
+    good = {"v": 1, "seq": 2, "digest": digest, "kind": "RESTORED", "by": "plan-1"}
+    for bad in ({"seq": 1}, {"digest": "not-a-digest"}, {"kind": "FIXED"}, {"by": 7}):
+        (anchor / "000000000002.repair").write_text(json.dumps(good | bad))
+        with pytest.raises(JournalCorrupt, match=r"repair record 000000000002\.repair"):
+            DirJournal(tmp_path / "j").repairs()
+    (anchor / "000000000002.repair").write_text(json.dumps(good))
+    assert [r["seq"] for r in DirJournal(tmp_path / "j").repairs()] == [2]
