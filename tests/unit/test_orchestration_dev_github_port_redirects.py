@@ -56,7 +56,10 @@ class Server:
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.httpd.daemon_threads = True
         self.origin = f"http://127.0.0.1:{self.httpd.server_address[1]}"
-        self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+        # shutdown() blocks for up to one poll interval; the 0.5 s default cost ~1 s per test.
+        self.thread = threading.Thread(
+            target=self.httpd.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True
+        )
         self.thread.start()
 
     def close(self) -> None:
@@ -221,15 +224,29 @@ def _chain(exc: BaseException) -> list[BaseException]:
     return out
 
 
-def _assert_detached(exc: AdapterError, message: str, *secrets: str) -> None:
-    assert str(exc) == message
-    assert exc.__cause__ is None and exc.__context__ is None
+def _reachable_texts(e: BaseException) -> list[str]:
+    """Everything Option B counts as exposed on one exception of the chain."""
+    texts = [str(e), repr(e), repr(e.args), repr(vars(e))]
+    names = ("headers", "hdrs", "url", "filename", "fp", "reason", "msg", "object", "doc")
+    texts += [str(getattr(e, a, "")) for a in names]
+    headers = getattr(e, "headers", None)
+    if headers is not None:
+        texts += [f"{k}: {v}" for k, v in headers.items()]
+    return texts
+
+
+def _assert_unreachable(exc: BaseException, *secrets: str) -> None:
+    """The exposure property itself: no secret via message, cause, context or their attributes."""
     for e in _chain(exc):
-        attrs = [str(e), repr(e), repr(vars(e))]
-        attrs += [str(getattr(e, a, "")) for a in ("headers", "url", "filename", "fp", "reason")]
-        for text in attrs:
+        for text in _reachable_texts(e):
             for secret in (TOKEN, QUERY_SECRET, *secrets):
                 assert secret not in text
+
+
+def _assert_detached(exc: AdapterError, message: str, *secrets: str) -> None:
+    assert str(exc) == message
+    _assert_unreachable(exc, *secrets)
+    assert exc.__cause__ is None and exc.__context__ is None
 
 
 @pytest.mark.parametrize(
@@ -246,6 +263,8 @@ def test_non_http_location_scheme_is_refused_detached(servers, loc, message):
     api.routes["/repos/o/r/s"] = (302, {"Location": loc}, b"")
     with pytest.raises(AdapterError) as ei:
         _port()._request("GET", "/s")
+    # the exposure property first, independent of whether anything is chained at all
+    _assert_unreachable(ei.value, loc, "evil.invalid", "/etc/passwd")
     _assert_detached(ei.value, message, loc)
 
 
@@ -304,7 +323,9 @@ def test_plain_http_error_keeps_chained_cause(servers):
     api.routes["/repos/o/r/err"] = (502, {}, b"")
     with pytest.raises(AdapterError, match=r"^github GET /err -> 502$") as ei:
         _port()._request("GET", "/err")
-    assert isinstance(ei.value.__cause__, urllib.error.HTTPError)
+    cause = ei.value.__cause__
+    assert isinstance(cause, urllib.error.HTTPError)
+    cause.close()  # the chained error still owns the response socket
 
 
 def test_json_errors_unchanged(servers):
@@ -312,3 +333,135 @@ def test_json_errors_unchanged(servers):
     api.routes["/repos/o/r/bad"] = (200, {}, b"not json")
     with pytest.raises(json.JSONDecodeError):
         _port()._request("GET", "/bad")
+
+
+# --- ATLAS-DEVQ-0002 residual P2 notes -------------------------------------------------------
+
+
+def test_unsendable_token_is_not_labelled_invalid_url_and_stays_detached(servers):
+    # http.client refuses the header before anything is sent; its ValueError quotes the value.
+    with pytest.raises(AdapterError) as ei:
+        GitHubRestPort("o/r", TOKEN + "\n")._request("GET", "/x")
+    _assert_detached(ei.value, "github GET /x rejected invalid request")
+    assert servers[0].seen == []
+
+
+def test_non_ascii_path_is_not_labelled_invalid_url_and_stays_detached(servers):
+    with pytest.raises(AdapterError) as ei:
+        _port()._request("GET", "/caf\u00e9")
+    _assert_detached(ei.value, "github GET /caf\u00e9 rejected invalid request")
+    assert servers[0].seen == []
+
+
+@pytest.mark.parametrize("name", ["Location", "LOCATION", "Uri", "Content-Location", "LINK"])
+def test_url_header_detection_ignores_name_case_on_plain_mappings(monkeypatch, name):
+    loc = f"https://evil.invalid/x?sig={QUERY_SECRET}"
+
+    def fail(self, req, *a, **k):
+        # a plain dict is case-sensitive, unlike http.client.HTTPMessage
+        raise urllib.error.HTTPError(req.full_url, 500, "boom", {name: loc}, None)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(urllib.request.OpenerDirector, "open", fail)
+    with pytest.raises(AdapterError) as ei:
+        _port()._request("GET", "/x")
+    _assert_detached(ei.value, "github GET /x -> 500", loc, "evil.invalid")
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("Content-Location", f"https://other.invalid/alt?sig={QUERY_SECRET}"),
+        ("Link", f'<https://other.invalid/next?sig={QUERY_SECRET}>; rel="next"'),
+    ],
+)
+@pytest.mark.parametrize("status", (403, 500))
+def test_non_redirect_error_naming_a_url_is_detached(servers, name, value, status):
+    api, other = servers
+    api.routes["/repos/o/r/e"] = (status, {name: value}, b"")
+    with pytest.raises(AdapterError) as ei:
+        _port()._request("GET", "/e")
+    _assert_detached(ei.value, f"github GET /e -> {status}", value, "other.invalid")
+    assert other.seen == []
+
+
+class _ArtifactPort(GitHubRestPort):
+    def _request(self, method, path, body=None):
+        return 200, {"artifacts": [{"id": 7, "name": "n"}]}
+
+
+def _stub_artifact_api(monkeypatch, location):
+    """The API answers the artifact zip request with a 302 to ``location`` (no network)."""
+
+    class Opener:
+        def open(self, req, timeout=None):
+            hdrs = Message()
+            hdrs["Location"] = location
+            raise urllib.error.HTTPError(req.full_url, 302, "Found", hdrs, None)
+
+    monkeypatch.setattr(urllib.request, "build_opener", lambda *handlers: Opener())
+
+
+@pytest.mark.parametrize(
+    ("location", "message"),
+    [
+        (
+            f"https://evil.invalid/a.zip?sig={QUERY_SECRET}",
+            "artifact download redirect missing or untrusted",
+        ),
+        (
+            f"http://pipelines.blob.core.windows.net/a.zip?sig={QUERY_SECRET}",
+            "artifact download redirect missing or untrusted",
+        ),
+        (
+            f"https://[evil.invalid/a.zip?sig={QUERY_SECRET}",
+            "github port read_json_artifact failed: ValueError",
+        ),
+    ],
+)
+def test_artifact_untrusted_redirect_is_refused_detached(monkeypatch, location, message):
+    _stub_artifact_api(monkeypatch, location)
+
+    def no_download(*a, **k):
+        raise AssertionError("an untrusted Location must never be fetched")
+
+    monkeypatch.setattr(urllib.request, "urlopen", no_download)
+    with pytest.raises(AdapterError) as ei:
+        _ArtifactPort("o/r", TOKEN).read_json_artifact(1, "n", "m.json")
+    _assert_detached(ei.value, message, location)
+
+
+@pytest.mark.parametrize(
+    "make",
+    [
+        lambda url: urllib.error.HTTPError(url, 403, "Forbidden", Message(), None),
+        lambda url: urllib.error.URLError(f"cannot reach {url}"),
+        lambda url: ValueError(f"bad url {url}"),
+    ],
+    ids=["HTTPError", "URLError", "ValueError"],
+)
+def test_artifact_signed_url_is_unreachable_when_the_download_fails(monkeypatch, make):
+    signed = f"https://pipelines.blob.core.windows.net/a.zip?sig={QUERY_SECRET}"
+    _stub_artifact_api(monkeypatch, signed)
+    raised: list[BaseException] = []
+
+    def fail(url, timeout=None):
+        raised.append(make(url))
+        raise raised[0]
+
+    monkeypatch.setattr(urllib.request, "urlopen", fail)
+    with pytest.raises(AdapterError) as ei:
+        _ArtifactPort("o/r", TOKEN).read_json_artifact(1, "n", "m.json")
+    name = type(raised[0]).__name__
+    _assert_detached(ei.value, f"github port read_json_artifact failed: {name}", signed)
+
+
+def test_artifact_unsendable_token_is_unreachable(monkeypatch):
+    # closed local port: if http.client ever stopped refusing the header first, this would fail
+    # as "URLError" instead of reaching the network
+    monkeypatch.setattr(dev_github_port, "API", "http://127.0.0.1:9")
+    for var in ("http_proxy", "HTTP_PROXY", "all_proxy", "ALL_PROXY"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("no_proxy", "*")
+    with pytest.raises(AdapterError) as ei:
+        _ArtifactPort("o/r", TOKEN + "\n").read_json_artifact(1, "n", "m.json")
+    _assert_detached(ei.value, "github port read_json_artifact failed: ValueError")

@@ -69,6 +69,27 @@ class _SameOriginRedirect(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
+class _SawResponse(urllib.request.BaseHandler):
+    """Records that the server answered, so a later ValueError is known to be redirect handling."""
+
+    seen = False
+
+    def http_response(self, request: Any, response: Any) -> Any:
+        self.seen = True
+        return response
+
+    https_response = http_response
+
+
+# Response headers that can name another URL (redirect target, signed query, alternate location).
+_URL_HEADERS = frozenset({"location", "uri", "content-location", "link"})
+
+
+def _names_url(headers: Any) -> bool:
+    """True if any URL-bearing header is present, whatever the mapping type or name case."""
+    return headers is not None and any(str(k).lower() in _URL_HEADERS for k in headers)
+
+
 def _run(d: dict[str, Any]) -> RunInfo:
     return RunInfo(
         run_id=int(d["id"]),
@@ -107,9 +128,10 @@ class GitHubRestPort:
                 "Content-Type": "application/json",
             },
         )
-        opener = urllib.request.build_opener(_SameOriginRedirect)
-        # Errors that may carry a redirect Location are raised after the except block, detached
-        # (no __cause__/__context__), so neither the URL nor its query can leak via the chain.
+        answered = _SawResponse()
+        opener = urllib.request.build_opener(_SameOriginRedirect, answered)
+        # Errors that may carry a redirect Location (or the token) are raised after the except
+        # block, detached (no __cause__/__context__), so nothing can leak via the chain.
         detached: str | None = None
         try:
             with opener.open(req, timeout=30) as r:
@@ -119,16 +141,18 @@ class GitHubRestPort:
         except urllib.error.HTTPError as exc:
             if exc.code == 404:
                 return 404, None
-            hdrs = exc.headers
-            redirected = hdrs is not None and ("location" in hdrs or "uri" in hdrs)
-            if not redirected and exc.filename == req.full_url:
+            if not _names_url(exc.headers) and exc.filename == req.full_url:
                 raise AdapterError(f"github {method} {path} -> {exc.code}") from exc
             detached = f"github {method} {path} -> {exc.code}"
         except (urllib.error.URLError, TimeoutError) as exc:
             raise AdapterError(f"github {method} {path} unreachable: {exc}") from exc
         except ValueError:
-            # urllib rejects a malformed Location (e.g. invalid bracketed host) with ValueError.
-            detached = f"github {method} {path} rejected invalid URL"
+            # After a response, urllib is rejecting a malformed Location (e.g. invalid bracketed
+            # host). Before any response it is our own request that could not be sent (e.g. a
+            # token that is not a valid header value, a non-ASCII path); that ValueError can
+            # quote the Authorization value, so it is detached too and only the cause is named.
+            what = "URL" if answered.seen else "request"
+            detached = f"github {method} {path} rejected invalid {what}"
         if detached is not None:
             raise AdapterError(detached) from None
         return status, (json.loads(raw) if raw else None)
@@ -219,16 +243,37 @@ class GitHubRestPort:
             f"{API}/repos/{self.repo}/actions/artifacts/{art['id']}/zip",
             headers={"Authorization": f"Bearer {self._token}"},
         )
+        # Same rule as _request: an error that can carry the token (invalid header value), the
+        # signed Location or its query is raised after the except block, detached. The messages
+        # are the ones callers already saw (the last two are what _guarded produced).
+        loc: str | None = None
+        redirect = False
+        blob = b""
+        detached: str | None = None
         try:
             opener.open(req, timeout=30)
-            raise AdapterError("expected a redirect to artifact storage")
+            detached = "expected a redirect to artifact storage"
         except urllib.error.HTTPError as exc:
             loc = exc.headers.get("Location") if exc.code in (301, 302, 307) else None
-            host = urllib.parse.urlparse(loc or "").hostname or ""
-            if not loc or not loc.startswith("https://") or not host.endswith(_ARTIFACT_HOSTS):
-                raise AdapterError("artifact download redirect missing or untrusted") from exc
-        with urllib.request.urlopen(loc, timeout=60) as r:
-            blob = r.read(MAX_BLOB + 1)
+            redirect = True
+        except (ValueError, http.client.HTTPException) as exc:
+            detached = f"github port read_json_artifact failed: {type(exc).__name__}"
+        if redirect:  # validated outside the handler: a malformed Location raises ValueError
+            try:
+                host = urllib.parse.urlparse(loc or "").hostname or ""
+            except ValueError:
+                detached = "github port read_json_artifact failed: ValueError"
+            else:
+                if not loc or not loc.startswith("https://") or not host.endswith(_ARTIFACT_HOSTS):
+                    detached = "artifact download redirect missing or untrusted"
+        if detached is None and loc is not None:
+            try:
+                with urllib.request.urlopen(loc, timeout=60) as r:
+                    blob = r.read(MAX_BLOB + 1)
+            except (OSError, ValueError, http.client.HTTPException) as exc:
+                detached = f"github port read_json_artifact failed: {type(exc).__name__}"
+        if detached is not None:
+            raise AdapterError(detached) from None
         if len(blob) > MAX_BLOB:
             raise AdapterError("artifact too large")
         with zipfile.ZipFile(io.BytesIO(blob)) as z:

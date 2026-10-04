@@ -15676,3 +15676,78 @@ Closure notes for earlier work packages (no separate PR): ATLAS-DEVQ-0003 merged
 `15f27693734325514e7993544362f8997b441e77` (PR #1061); global contract v2 / OC-L and directive
 template v2 merged as `593fa1a3ae1b04a6fdf65dcb99e5afe0f8d022ee` (PR #1062); post-merge CI run
 `37191807277` on `593fa1a3` passed.
+
+## 2026-10-04 — ATLAS-DEVQ-0002 residual P2 notes (seven) + ftp test-semantics observation
+
+Scope: `dev_github_port.py` and its redirects test file only. Base `f17f5828` (main). Local
+commit; not pushed, not independently verified, not live-validated. Exposure standard unchanged
+(owner Option B: reachable from the raised `AdapterError` via message, `__cause__`,
+`__context__` or attributes of chained exceptions).
+
+Per item:
+1. FIXED — `_request` no longer labels every `ValueError` "rejected invalid URL". A small
+   response processor (`_SawResponse`) records whether the server answered. After a response the
+   label is unchanged (`rejected invalid URL`, malformed Location). Before any response it is
+   our own request that could not be sent and the label is `rejected invalid request`. Both
+   stay detached: http.client's `Invalid header value` error quotes the Authorization value.
+2. FIXED (behaviour change, judgement call) — a non-redirect HTTP error whose response carries
+   `Content-Location` or `Link` is now raised detached, like `Location`/`URI`. Both headers can
+   name another URL including a query. Error class, status mapping and message are unchanged;
+   only the chained `HTTPError` is dropped for those responses. Errors without such a header
+   keep their cause (existing test `test_plain_http_error_keeps_chained_cause` unchanged).
+3. FIXED — header detection (`_names_url`) lower-cases the names it iterates, so it does not
+   depend on the mapping type being case-insensitive.
+4. FIXED — `test_plain_http_error_keeps_chained_cause` closes the chained `HTTPError`.
+5. LEFT — raw `http.client.InvalidURL` and `json.JSONDecodeError` still escape `_request`.
+   The existing test `test_json_errors_unchanged` pins the raw `JSONDecodeError`, and every
+   public method is wrapped by `_guarded`, which already maps both to `AdapterError`
+   (`ValueError` and `http.client.HTTPException` are in its list). Wrapping inside `_request`
+   would change a pinned contract without making the public surface safer. What stays
+   reachable through `_guarded`'s chained cause: the request path (already in every message)
+   for `InvalidURL`, and the response body (`doc`) for `JSONDecodeError`; neither is the token
+   or a Location.
+6. FIXED — the file was slow because each test tears down two `ThreadingHTTPServer`s and
+   `shutdown()` waits for the 0.5 s default poll interval (slowest durations: 0.96 s per
+   teardown). `serve_forever(poll_interval=0.01)`. No test removed, no assertion changed.
+7. FIXED — `read_json_artifact` had real exposures on the base: (a) an untrusted redirect was
+   raised `from exc`, so `err.__cause__.headers["Location"]` held the refused URL and query;
+   (b) a failed blob download raised an error naming the signed URL, which `_guarded` chained;
+   (c) a malformed Location raised `ValueError` inside the handler, chaining the `HTTPError`;
+   (d) a token that is not a valid header value was quoted by the chained `ValueError`. All
+   four are now raised detached with the same message text as before (`artifact download
+   redirect missing or untrusted`, `github port read_json_artifact failed: <ErrorName>`).
+   Download semantics (no-redirect opener, bare URL without Authorization, host allow-list,
+   size caps) are untouched; `test_artifact_download_redirect_model_unchanged` is unchanged.
+8. DONE with a limit — the non-http Location test now asserts the exposure property directly
+   (`_assert_unreachable`: Location, its host and query not in message, args, vars, headers,
+   url/filename/reason of any exception in the chain) before the existing detached assertion,
+   and `_assert_detached` uses the same walk. Measured against the original pre-hardening
+   module (`5f01ccf`): the `file:` case fails on the new exposure assertion; the `ftp` case
+   fails on the message assertion (that code followed the ftp redirect and reported
+   `unreachable`), and its exposure assertion holds there. For `ftp` no Location was found
+   reachable on either version I ran, so no exposure assertion can fail for it.
+
+Commands and results (`PYTHONPATH=<worktree>/src`, `--no-cov -o addopts=""`):
+- Redirects test file, base source and base tests: 28 passed in 24.53s. This change: 46 passed
+  in 2.25s (18 new test cases). With `-W error::ResourceWarning
+  -W error::pytest.PytestUnraisableExceptionWarning`: 46 passed.
+- The new test file against base source `f17f5828`: 18 failed, 28 passed (the 18 are exactly
+  the new cases). Against this change: 46 passed.
+- `pytest` on the two github-port test files and `test_orchestration_dev_fabric_adapter.py`:
+  122 passed.
+- `pytest tests/unit -k "orchestration_dev or dev_package or github_port"`: 697 passed,
+  5773 deselected.
+- `ruff check`, `ruff format --check` on the module and both test files, `mypy` on the module:
+  clean.
+
+Not done / open:
+- Item 5 left as described above.
+- Not live-validated; no request was sent to GitHub. All tests are offline (local servers or
+  stubbed openers).
+- Messages still contain the caller-supplied request path including its own query (existing,
+  test-pinned message shape); only Location data and the token are kept out.
+- Other response headers on a chained non-redirect `HTTPError` (for example `Refresh`,
+  `Set-Cookie`) stay reachable; not assessed under this item.
+- The redirect response of the artifact API request is not explicitly closed (as on the base).
+- Owner/reviewer call: item 2 drops debugging context (the chained `HTTPError`) for error
+  responses that carry `Link` or `Content-Location`.
