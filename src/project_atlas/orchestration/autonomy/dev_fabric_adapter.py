@@ -14,6 +14,14 @@ VERIFIED alone != code acceptance (the result PR's CI on the exact head is requi
 nothing here merges, and nothing here reads or needs any secret value. All GitHub access goes
 through the injected ``GitHubPort`` (a fake in tests, ``GitHubRestPort`` live).
 
+Package binding (ATLAS-DEVQ-0005): ``dispatch_package`` (and ``dispatch`` when the adapter is
+constructed with ``package_source``) sends only the payload rebuilt from the sealed work item
+after ``dev_package.bind_package_to_work`` proved that the rendered package has the expected
+``package_sha256`` and describes exactly that work item; the ledger DISPATCH record then also
+carries ``package_sha256``. Binding is not a grant: it neither issues, consumes nor verifies an
+owner dispatch grant, never overrides a classifier or platform denial, and the recorded
+``package_sha256`` states what was bound, not that anyone approved it.
+
 Crash safety: DISPATCH is written ahead to the Crosswalk ledger, so a work item is dispatched at
 most once; run discovery is fail-closed on ambiguity.
 
@@ -111,6 +119,18 @@ class DispatchRefused(AdapterError):
 
     Terminal for this work item (the planner must replan); never a reason to stall other works.
     """
+
+
+class PackageBindingRefused(DispatchRefused):
+    """The rendered package could not be bound to the sealed work item (nothing written/sent).
+
+    ``reason`` is the stable ``PackageSpecError`` reason. Terminal for this work item like any
+    ``DispatchRefused``. The absence of this error is not a grant and permits nothing.
+    """
+
+    def __init__(self, reason: str, detail: str) -> None:
+        super().__init__(f"package binding refused: {reason}: {detail}")
+        self.reason = reason
 
 
 class DispatchDeferred(AdapterError):
@@ -288,13 +308,18 @@ class FabricAdapter:
         *,
         pending_dir: Path,
         clock: Callable[[], str],
-        task_statement: Callable[[WorkItem], tuple[str, tuple[str, ...]]],
+        task_statement: Callable[[WorkItem], tuple[str, tuple[str, ...]]] | None = None,
+        package_source: Callable[[WorkItem], tuple[str, str]] | None = None,
         executor_identity: str = EXECUTOR_IDENTITY,
         verifier_identity: str = VERIFIER_IDENTITY,
         required_checks: frozenset[str] = DEFAULT_REQUIRED_CHECKS,
         dispatch_deadline: timedelta = DISPATCH_DEADLINE,
     ) -> None:
         self.dispatch_deadline = dispatch_deadline
+        # Exactly one dispatch source. With ``package_source`` (rendered package text and its
+        # expected package sha256 per work item) every dispatch goes through package binding.
+        if (task_statement is None) == (package_source is None):
+            raise AdapterError("exactly one of task_statement and package_source is required")
         if not required_checks:
             raise AdapterError("a non-empty required check set is mandatory")
         self.required_checks = required_checks
@@ -303,6 +328,7 @@ class FabricAdapter:
         self.pending.mkdir(parents=True, exist_ok=True)
         self.clock = clock
         self.task_statement = task_statement
+        self.package_source = package_source
         self.executor_identity = executor_identity
         self.verifier_identity = verifier_identity
         self.works: dict[str, WorkItem] = {}  # seal -> work (in-flight in this process)
@@ -339,6 +365,24 @@ class FabricAdapter:
         return w
 
     def dispatch(self, work: WorkItem) -> DispatchPayload:
+        if self.package_source is not None:
+            # Package mode: only a bound package can be dispatched. A source that raises or
+            # returns anything but (rendered text, expected sha) fails closed before any write.
+            try:
+                sourced = self.package_source(work)
+            except Exception as exc:
+                raise DispatchRefused(
+                    f"package source failed: {type(exc).__name__}: {exc}"
+                ) from exc
+            if (
+                not isinstance(sourced, tuple)
+                or len(sourced) != 2
+                or not all(isinstance(x, str) for x in sourced)
+            ):
+                raise DispatchRefused("package source did not return (rendered, package_sha256)")
+            return self.dispatch_package(work, sourced[0], expected_package_sha256=sourced[1])
+        if self.task_statement is None:  # unreachable: the constructor requires one source
+            raise AdapterError("no dispatch source configured")
         work.verify_seal()
         self.xw.bind_work(work)
         if self.xw.hop(work.seal, "DISPATCH") is not None:
@@ -370,6 +414,72 @@ class FabricAdapter:
         # write-ahead: from here on this work item can never be dispatched again
         self.xw.bind_dispatch(
             work.seal, dispatched_at=self.clock(), payload_sha256=payload.sha256()
+        )
+        try:
+            self.port.dispatch_workflow(payload.workflow, payload.ref, dict(payload.inputs))
+        except AdapterError as exc:  # write-ahead already recorded: never retried, surfaced
+            raise RemoteExecutionFailed(f"dispatch failed: {exc}") from exc
+        return payload
+
+    def dispatch_package(
+        self, work: WorkItem, rendered: str, *, expected_package_sha256: str
+    ) -> DispatchPayload:
+        """Dispatch exactly the payload of a rendered package bound to ``work``, at most once.
+
+        Order: (1) the pure binder (``dev_package.bind_package_to_work``); a refusal raises
+        ``PackageBindingRefused`` and writes and sends nothing; (2) bind the work, refuse a
+        second dispatch, defer behind an unbound dispatch; (3) the branch comes from the
+        PACKAGE, constrained by its kind and never taken from ``work.attempt``: an
+        implementation package dispatches on the default branch, a repair package on exactly
+        the result branch the ledger knows for the sealed base revision; (4) that branch's head
+        must be the sealed base revision; (5) write-ahead DISPATCH with ``payload_sha256`` and
+        ``package_sha256``; (6) send a copy of the rebuilt payload's inputs.
+
+        Binding is not a grant: this neither issues, consumes nor verifies an owner dispatch
+        grant, the package's ``grant_required`` stays as it is, and passing these checks never
+        overrides a classifier or platform denial. The ledger ``package_sha256`` records what
+        was bound, not approval.
+        """
+        # Imported here: ``dev_package`` imports this module at import time.
+        from project_atlas.orchestration.autonomy.dev_package import (
+            PackageSpecError,
+            bind_package_to_work,
+        )
+
+        try:
+            binding = bind_package_to_work(
+                rendered, expected_package_sha256=expected_package_sha256, work=work
+            )
+        except PackageSpecError as exc:
+            raise PackageBindingRefused(exc.reason, exc.detail) from None
+        payload = binding.payload
+        self.xw.bind_work(work)
+        if self.xw.hop(work.seal, "DISPATCH") is not None:
+            raise AdapterError("work item already dispatched; refusing to dispatch twice")
+        if self._unbound_dispatches(exclude=work.seal):
+            raise DispatchDeferred("another dispatch has not been bound to a run yet")
+        base_branch = binding.base_branch
+        if binding.attempt_kind == "repair":
+            found = self.xw.branch_for_revision(work.base_revision)
+            if found is None:
+                raise DispatchRefused("repair base revision has no known result branch")
+            if found != base_branch:
+                raise DispatchRefused(
+                    "repair package names a branch that is not the known result branch of the "
+                    "sealed base revision"
+                )
+        elif binding.attempt_kind != "implementation" or base_branch != DEFAULT_BRANCH:
+            raise DispatchRefused(f"an implementation package dispatches on {DEFAULT_BRANCH}")
+        if payload.inputs.get("base_branch") != base_branch:
+            raise DispatchRefused("bound payload does not check out the package branch")
+        if self.port.branch_head(base_branch) != work.base_revision:
+            raise DispatchRefused(f"{base_branch} is not at the sealed base revision")
+        # write-ahead: from here on this work item can never be dispatched again
+        self.xw.bind_dispatch(
+            work.seal,
+            dispatched_at=self.clock(),
+            payload_sha256=payload.sha256(),
+            package_sha256=binding.package_sha256,
         )
         try:
             self.port.dispatch_workflow(payload.workflow, payload.ref, dict(payload.inputs))

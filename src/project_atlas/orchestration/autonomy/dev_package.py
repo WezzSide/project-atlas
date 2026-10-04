@@ -33,6 +33,13 @@ Properties:
   * Secrets are never inspected and never asserted present.
 
 Nothing here dispatches, ingests, merges or reads any secret; it only produces a document.
+
+``bind_package_to_work`` (ATLAS-DEVQ-0005) is the pure half of binding a reviewed package to a
+dispatch: it proves that a rendered document is the reviewed one (by its ``package_sha256``) and
+that it describes exactly one sealed work item, and it returns the payload REBUILT from that
+work item. Binding is not a grant: it neither issues, consumes nor verifies an owner dispatch
+grant, ``grant_required`` stays as rendered, and a successful binding never permits a dispatch
+and never overrides a classifier or platform denial.
 """
 
 from __future__ import annotations
@@ -68,8 +75,10 @@ __all__ = [
     "BUILDER_ID",
     "FORBIDDEN_FLOOR",
     "OWNER_SCOPABLE_AUTONOMY_MODULES",
+    "PackageBinding",
     "PackageSpec",
     "PackageSpecError",
+    "bind_package_to_work",
     "build_package",
     "build_work",
     "effective_statement",
@@ -988,6 +997,26 @@ def verify_checkout_ref(package: Mapping[str, Any], resolved_sha: object) -> Non
     a forged but self-consistent document passes. The trust anchor is the reviewed
     ``package_sha256`` of the rendered package; verify that first, then call this.
     """
+    branch, required = _check_package_consistency(package)
+    if not isinstance(resolved_sha, str) or not _SHA.fullmatch(resolved_sha):
+        raise _fail(
+            "CHECKOUT_SHA_INVALID", "resolved sha must be exactly 40 lowercase hex characters"
+        )
+    if resolved_sha != required:
+        raise _fail(
+            "CHECKOUT_REF_MISMATCH",
+            f"{branch} resolves to {resolved_sha}, not the sealed base revision {required}",
+        )
+
+
+def _check_package_consistency(package: Mapping[str, Any]) -> tuple[str, str]:
+    """Internal-consistency checks that need no resolved sha; returns (branch, base revision).
+
+    Shared by ``verify_checkout_ref`` and ``bind_package_to_work``: well-formed checkout fields,
+    current builder id, recorded inputs digest, base-branch shape, the sealed ``base_revision``
+    input, and the repair/implementation branch rules. Reason codes and raise order are those
+    ``verify_checkout_ref`` has always had. A forged but self-consistent document passes.
+    """
     inputs = package.get("workflow_inputs")
     required = package.get("base_revision")
     kind = package.get("attempt_kind")
@@ -1012,7 +1041,7 @@ def verify_checkout_ref(package: Mapping[str, Any], resolved_sha: object) -> Non
     recorded = DispatchPayload(workflow=workflow, ref=ref, inputs=inputs).sha256()
     if package.get("workflow_inputs_sha256") != recorded:
         raise _fail("CHECKOUT_PACKAGE_INVALID", "workflow_inputs do not match their sha256")
-    branch = inputs["base_branch"]
+    branch: str = inputs["base_branch"]
     _check_base_branch(branch)
     if inputs.get(BASE_REVISION_INPUT) != required:
         raise _fail(
@@ -1043,16 +1072,219 @@ def verify_checkout_ref(package: Mapping[str, Any], resolved_sha: object) -> Non
         raise _fail(
             "CHECKOUT_PACKAGE_INVALID", f"an implementation package checks out {BASE_BRANCH!r}"
         )
-    if not isinstance(resolved_sha, str) or not _SHA.fullmatch(resolved_sha):
-        raise _fail(
-            "CHECKOUT_SHA_INVALID", "resolved sha must be exactly 40 lowercase hex characters"
-        )
-    if resolved_sha != required:
-        raise _fail(
-            "CHECKOUT_REF_MISMATCH",
-            f"{branch} resolves to {resolved_sha}, not the sealed base revision {required}",
-        )
+    return branch, required
 
 
 def package_sha256(rendered: str) -> str:
     return hashlib.sha256(rendered.encode()).hexdigest()
+
+
+# -- binding a reviewed package to its sealed work item (ATLAS-DEVQ-0005) -------------------
+
+
+@dataclass(frozen=True)
+class PackageBinding:
+    """What ``bind_package_to_work`` established. A statement of identity, NOT a grant.
+
+    ``package_sha256`` is the reviewed hash the rendered document was checked against;
+    ``payload`` was rebuilt from the sealed work item (never copied from the package) and was
+    required to equal the package's recorded workflow, ref and inputs exactly. Holding a
+    ``PackageBinding`` permits nothing: it neither issues, consumes nor verifies an owner
+    dispatch grant.
+    """
+
+    package_sha256: str
+    work_seal: str
+    attempt_kind: str
+    base_branch: str
+    payload: DispatchPayload
+
+
+# A statement placeholder that differs from the first character of the prompt's fixed tail
+# (a newline), used only to locate where the statement sits in the assembled prompt.
+_STATEMENT_PROBE = "\x00"
+
+
+def _recover_statement(
+    work: WorkItem, *, base_branch: str, commands: tuple[str, ...], prompt: str
+) -> str | None:
+    """The one statement for which the canonical builder yields ``prompt``, or None.
+
+    The assembled prompt is ``<head><statement><tail>`` where head and tail are fixed strings
+    determined by the work item and the commands alone. Both are obtained from the canonical
+    builder itself (built once with an empty statement and once with a one-character probe;
+    the first differing index is the end of the head), so no prompt layout is duplicated here.
+    For a given work item and command tuple the split is unique: at most one statement
+    reproduces a prompt, and it is returned only if the prompt has exactly that head and tail.
+    """
+    empty = build_sealed_dispatch_payload(
+        work, base_branch=base_branch, task_statement="", acceptance_commands=commands
+    ).inputs["task_prompt"]
+    probed = build_sealed_dispatch_payload(
+        work,
+        base_branch=base_branch,
+        task_statement=_STATEMENT_PROBE,
+        acceptance_commands=commands,
+    ).inputs["task_prompt"]
+    at = next((i for i, (a, b) in enumerate(zip(empty, probed, strict=False)) if a != b), None)
+    if at is None or probed[at] != _STATEMENT_PROBE or probed[:at] + probed[at + 1 :] != empty:
+        return None
+    head, tail = empty[:at], empty[at:]
+    if (
+        len(prompt) < len(head) + len(tail)
+        or not prompt.startswith(head)
+        or not prompt.endswith(tail)
+    ):
+        return None
+    return prompt[len(head) : len(prompt) - len(tail)]
+
+
+def bind_package_to_work(
+    rendered: str, *, expected_package_sha256: str, work: WorkItem
+) -> PackageBinding:
+    """Bind a rendered package to one sealed work item, or refuse. Pure.
+
+    No network, ledger, port, subprocess or secret access. Proves, in this order, each failure
+    raising ``PackageSpecError`` with a stable reason:
+
+      1. ``BINDING_PACKAGE_SHA_INVALID``  the expected hash is not 64 lowercase hex characters;
+      2. ``BINDING_PACKAGE_SHA_MISMATCH`` ``rendered`` is not the document with that hash;
+      3. ``BINDING_PACKAGE_UNPARSEABLE``  it is not a strict JSON object;
+      4. the package's internal consistency (the reason codes of ``verify_checkout_ref`` that
+         need no resolved sha, e.g. ``PACKAGE_BUILDER_UNSUPPORTED``, ``CHECKOUT_PACKAGE_INVALID``);
+      5. ``BINDING_WORK_INVALID``         the work item's seal does not verify;
+      6. ``BINDING_WORK_SEAL_MISMATCH``   the package names another work seal;
+      7. ``BINDING_IDENTITY_MISMATCH``    task, execution, repository or base revision differ;
+      8. ``BINDING_KIND_MISMATCH``        the package is a repair iff the work has a parent;
+      9. ``BINDING_INSTRUCTIONS_MISMATCH`` the statement recovered from the recorded prompt,
+         with the recorded acceptance commands, does not reproduce the instructions digest
+         sealed in the work item's acceptance contract;
+      10. ``BINDING_PAYLOAD_MISMATCH``    the payload rebuilt from the sealed work item is not
+         exactly the package's workflow, ref and inputs (and their recorded digest).
+
+    The returned payload is the REBUILT one. The reviewed hash is supplied by the caller: this
+    function cannot know whether anyone reviewed that document.
+
+    Binding is not a grant. It neither issues, consumes nor verifies an owner dispatch grant;
+    ``grant_required`` stays exactly as rendered; a successful binding never permits a dispatch
+    and never overrides a classifier or platform denial.
+    """
+    if not isinstance(expected_package_sha256, str) or not _SEAL.fullmatch(expected_package_sha256):
+        raise _fail(
+            "BINDING_PACKAGE_SHA_INVALID",
+            "expected package sha256 must be exactly 64 lowercase hex characters",
+        )
+    if not isinstance(rendered, str):
+        raise _fail("BINDING_PACKAGE_SHA_MISMATCH", "rendered package must be text")
+    try:
+        actual = package_sha256(rendered)
+    except UnicodeError:
+        actual = ""
+    if actual != expected_package_sha256:
+        raise _fail(
+            "BINDING_PACKAGE_SHA_MISMATCH",
+            "rendered package does not hash to the expected package sha256",
+        )
+    try:
+        package = json.loads(
+            rendered, object_pairs_hook=_no_duplicates, parse_constant=_reject_constant
+        )
+    except (PackageSpecError, ValueError, RecursionError) as exc:
+        raise _fail("BINDING_PACKAGE_UNPARSEABLE", str(exc)) from exc
+    if not isinstance(package, dict):
+        raise _fail("BINDING_PACKAGE_UNPARSEABLE", "package must be a JSON object")
+    branch, required = _check_package_consistency(package)
+    try:
+        work.verify_seal()
+    except ContractError as exc:
+        raise _fail("BINDING_WORK_INVALID", str(exc)) from exc
+    if package.get("work_seal") != work.seal:
+        raise _fail(
+            "BINDING_WORK_SEAL_MISMATCH", "package was rendered for a different sealed work item"
+        )
+    for key, want in (
+        ("task_id", work.task_id),
+        ("execution_id", work.execution_id),
+        ("repository", work.repository),
+        ("base_revision", work.base_revision),
+    ):
+        if package.get(key) != want:
+            raise _fail("BINDING_IDENTITY_MISMATCH", f"package {key} differs from the work item")
+    kind: str = package["attempt_kind"]
+    if (kind == "repair") != (work.parent_task_id is not None):
+        raise _fail(
+            "BINDING_KIND_MISMATCH",
+            "a repair package requires a work item with a parent, and only such a work item",
+        )
+    acceptance = package.get("acceptance")
+    raw_commands = acceptance.get("commands") if isinstance(acceptance, dict) else None
+    if not isinstance(raw_commands, list) or not all(isinstance(c, str) for c in raw_commands):
+        raise _fail(
+            "BINDING_INSTRUCTIONS_MISMATCH", "package acceptance.commands is not a string list"
+        )
+    commands = tuple(raw_commands)
+    sealed = [c for c in work.acceptance_contract if c.startswith(INSTRUCTIONS_PREFIX)]
+    if len(sealed) != 1:
+        raise _fail(
+            "BINDING_INSTRUCTIONS_MISMATCH",
+            f"the work item must seal exactly one {INSTRUCTIONS_PREFIX!r} contract entry",
+        )
+    prompt: str = package["workflow_inputs"].get("task_prompt", "")
+    try:
+        statement = _recover_statement(work, base_branch=branch, commands=commands, prompt=prompt)
+    except ContractError as exc:
+        raise _fail("BINDING_PAYLOAD_MISMATCH", str(exc)) from exc
+    if statement is None:
+        raise _fail(
+            "BINDING_INSTRUCTIONS_MISMATCH",
+            "the recorded task_prompt is not the canonical prompt for this work item and "
+            "these acceptance commands",
+        )
+    # The sealed digest is always the implementation form over the UNSUFFIXED statement
+    # (``sealed_instructions_sha256``); a repair prompt carries exactly one REPAIR_SUFFIX.
+    if kind == "repair":
+        if not statement.endswith(REPAIR_SUFFIX):
+            raise _fail(
+                "BINDING_INSTRUCTIONS_MISMATCH",
+                "a repair prompt must end its statement with the fixed repair suffix",
+            )
+        sealed_statement = statement[: -len(REPAIR_SUFFIX)]
+    else:
+        sealed_statement = statement
+    digest = _canonical_sha256(
+        {
+            "attempt_kind": "implementation",
+            "statement": sealed_statement,
+            "acceptance_commands": list(commands),
+        }
+    )
+    if sealed[0] != INSTRUCTIONS_PREFIX + digest:
+        raise _fail(
+            "BINDING_INSTRUCTIONS_MISMATCH",
+            "the package's statement and acceptance commands do not reproduce the instructions "
+            "digest sealed in the work item",
+        )
+    try:
+        payload = build_sealed_dispatch_payload(
+            work, base_branch=branch, task_statement=statement, acceptance_commands=commands
+        )
+    except ContractError as exc:
+        raise _fail("BINDING_PAYLOAD_MISMATCH", str(exc)) from exc
+    if (
+        (payload.workflow, payload.ref, payload.inputs)
+        != (package["workflow"], package["workflow_ref"], package["workflow_inputs"])
+        or payload.sha256() != package.get("workflow_inputs_sha256")
+        or required != work.base_revision
+    ):
+        raise _fail(
+            "BINDING_PAYLOAD_MISMATCH",
+            "the payload rebuilt from the sealed work item is not the package's recorded "
+            "workflow, ref and inputs",
+        )
+    return PackageBinding(
+        package_sha256=expected_package_sha256,
+        work_seal=work.seal,
+        attempt_kind=kind,
+        base_branch=branch,
+        payload=payload,
+    )

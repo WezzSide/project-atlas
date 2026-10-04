@@ -15727,3 +15727,90 @@ Commands and results:
 - `ruff check .`, `ruff format --check` on changed files, `mypy src`: clean.
 
 Not done: no dispatch; no live validation; the adapter is still constructed only in tests.
+
+## 2026-10-04 — ATLAS-DEVQ-0005 / HARDEN-DEVLOOP-004: bind a rendered package to the dispatch (trust surface)
+
+Why: since #1063 a package's `workflow_inputs_sha256` equals the ledger `payload_sha256` for the
+same work item, branch, statement and commands, but nothing forced a live dispatch to use the
+reviewed package: `FabricAdapter.dispatch` built its payload from a free-form `task_statement`
+callback. This change adds a mechanical binding between a rendered package and the dispatch.
+
+**Binding is not a grant.** It proves "this payload is the document with this `package_sha256`,
+for this sealed work item". It neither issues, consumes nor verifies an owner dispatch grant;
+`grant_required` stays `ONE_WORKFLOW_DISPATCH_GRANT` in every package; passing the binding never
+permits a dispatch and never overrides a classifier or platform denial; the ledger
+`package_sha256` records what was bound, not that anyone approved it. The expected hash is
+supplied by the caller: the code cannot know whether a human reviewed that document.
+
+Change per module (no new module file):
+- `dev_package.py`: `PackageBinding` and the pure `bind_package_to_work(rendered, *,
+  expected_package_sha256, work)`. Checks in order, each a stable `PackageSpecError` reason:
+  `BINDING_PACKAGE_SHA_INVALID`, `BINDING_PACKAGE_SHA_MISMATCH`, `BINDING_PACKAGE_UNPARSEABLE`
+  (strict JSON: duplicate keys and NaN/Infinity refused), the internal-consistency checks shared
+  with `verify_checkout_ref` (unchanged reasons, e.g. `PACKAGE_BUILDER_UNSUPPORTED`,
+  `CHECKOUT_PACKAGE_INVALID`), `BINDING_WORK_INVALID`, `BINDING_WORK_SEAL_MISMATCH`,
+  `BINDING_IDENTITY_MISMATCH`, `BINDING_KIND_MISMATCH`, `BINDING_INSTRUCTIONS_MISMATCH`,
+  `BINDING_PAYLOAD_MISMATCH`. The returned payload is rebuilt from the sealed work item with
+  `build_sealed_dispatch_payload`, never copied from the package.
+  Instructions binding: the statement is recovered from `workflow_inputs.task_prompt` as the
+  text between the prompt's fixed head and fixed tail. Head and tail are obtained from the
+  canonical builder itself (built with an empty statement and with a one-character probe), so
+  the prompt layout is not duplicated; for one work item and one command tuple at most one
+  statement reproduces a prompt. The recovered statement (minus exactly one `REPAIR_SUFFIX` for
+  a repair) and `acceptance.commands` must reproduce the single `instructions_sha256=` entry
+  sealed in the work item's acceptance contract. A work item that seals no such entry (not
+  built by `dev_package`) is refused.
+  `verify_checkout_ref` now calls the extracted `_check_package_consistency` and then performs
+  its resolved-sha checks; the checks, reasons and their order are the same lines as before.
+- `dev_crosswalk.py`: `bind_dispatch(..., package_sha256=None)`. The key is written only when
+  given (64 lowercase hex, else `CrosswalkError`), so a dispatch without a package keeps the
+  three-key record and existing ledgers replay as before. Replay semantics are untouched: a
+  second DISPATCH for one seal is accepted only on exact equality, so a different or missing
+  `package_sha256` is a conflict. Replay does not validate the shape of a stored
+  `package_sha256` (only `bind_dispatch` does).
+- `dev_fabric_adapter.py`: `PackageBindingRefused(DispatchRefused)` with `.reason`;
+  `FabricAdapter.dispatch_package(work, rendered, *, expected_package_sha256)` (binder first,
+  nothing written or sent on refusal; then bind work, double-dispatch refusal, deferral; branch
+  from the package constrained by kind: implementation on `main`, repair on exactly the
+  ledger's result branch for the sealed base; branch head must be the sealed base; write-ahead
+  with both hashes; send a copy of the inputs). Constructor: `task_statement` is now optional
+  and `package_source` is new; exactly one is required. With `package_source`, `dispatch`
+  (and therefore `tick`) delegates to `dispatch_package`; a source that raises or returns
+  anything but two strings is refused (`DispatchRefused`, terminal for that lineage in `tick`)
+  before any write. Without it, `dispatch` runs the same statements as before.
+
+Identity effects (measured): none. `package_sha256(render_package(build_package(spec)))` is
+equal on base `e40b28ad` and on this change for the implementation goldens
+(`ad6d27a5…f07f`, `7893199d…dff1`) and the repair fixture of `test_orchestration_dev_package.py`
+(`72ccd873…6570`); every existing golden-pin test passes unmodified. `BUILDER_ID`,
+`FORBIDDEN_FLOOR`, `AUTONOMY_FLOOR_MODULES`, `build_package` and `render_package` are untouched.
+Existing test bodies are untouched (test files: additions only).
+
+Commands and results (measured, `PYTHONPATH=src`, `--no-cov -o addopts=""`):
+- `pytest` on the fabric-adapter, package, package-repair, first-run, sealed-base-assert and
+  crosswalk test files: 608 passed (546 before; 62 new test cases).
+- `pytest tests/unit -k "orchestration_dev or dev_package or executor or agent_execute or
+  workflow or autonomy or global_foundation or github_port"`: 1365 passed, 5152 deselected.
+- New tests against the base versions of the three source modules (adapter, package and
+  crosswalk test files): 61 failed, 390 passed. The one new case that passes on base is the
+  regression guard that a callback-mode dispatch still writes the three-key record.
+- `ruff check .`, `ruff format --check` on the six changed Python files, `mypy src`: clean.
+
+Not done / open:
+- No dispatch, no live validation, no workflow run. Tests use the `FakeGitHub` fake only.
+- The adapter is still constructed only in tests; nothing constructs it with `package_source`.
+- The callback mode (`task_statement`) is kept and not deprecated: an adapter constructed that
+  way still dispatches an unreviewed statement exactly as before. Binding is enforced only for
+  adapters constructed with `package_source` and for direct `dispatch_package` calls.
+- The F2 dispatch authority (owner grant issue/consume/verify) is not built. Nothing here
+  checks that the expected `package_sha256` was reviewed or granted by anyone.
+- The instructions check (step 9) is implemented for every package `dev_package` renders.
+  It deliberately refuses work items without exactly one sealed `instructions_sha256=` entry.
+  It does not re-run the spec-level statement/command validation (`_check_statement`,
+  `_check_command`): those are bound indirectly, through the sealed digest.
+- `package_source` failures are terminal for the lineage, including ones that may be transient
+  (e.g. a package file not yet present). Chosen to fail closed; a deferral would be a change.
+- Observed, not changed: an identical second `bind_dispatch` is a no-op in ledger state but
+  still appends an identical line (pre-existing behaviour, same with and without the new key).
+- Two choices the owner adopts by merging: (1) the optional `package_sha256` field on the
+  ledger DISPATCH record; (2) keeping the callback path next to the package path.
