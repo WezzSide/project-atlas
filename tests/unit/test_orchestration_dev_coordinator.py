@@ -356,7 +356,9 @@ def test_published_work_the_journal_does_not_know_stops_every_coordinator(tmp_pa
         "store",
         "continuity_boundary",
         "live_conflicting_work_boundary",
+        "repairs",
     }
+    assert status["repairs"] == []
     # contrast: the planner alone, without the witness, admits over the lost lineage
     p = Planner(
         SpoolTransport(tmp_path / "spool"),
@@ -705,19 +707,55 @@ def test_blocked_and_caller_released_scopes_stay_closed_to_the_coordinator(tmp_p
     assert st2["deferred"] == [["XB", "SCOPE_RETAINED:B:src/b/x|src/b"]]
 
 
-def test_a_lost_head_acknowledgement_is_restored_before_anything_is_prepared(tmp_path):
+def test_a_repaired_acknowledgement_keeps_every_later_status_degraded(tmp_path):
+    """Loss of acknowledged continuity stays observable: recovered, never plain OK again."""
     j = store(tmp_path)
     c = coordinator(tmp_path, max_live=8)
-    c.tick([cand("A", "src/a"), cand("B", "src/b")])
-    (j.anchor / "000000000002.ack").unlink()  # only the head's acknowledgement file
+    healthy = c.tick([cand("A", "src/a"), cand("B", "src/b")])
+    assert healthy["state"] == "OK" and healthy["acknowledgement_continuity"] == "INTACT"
+    assert healthy["repairs"] == []
+    digest = (j.anchor / "000000000002.ack").read_text()
+    (j.anchor / "000000000002.ack").unlink()  # only the head's acknowledgement file is lost
     st = c.tick([cand("Z", "src/z")])
-    assert st["state"] == "OK" and st["admitted"] == ["Z"]
-    assert sorted(a.name for a in j.anchor.iterdir() if a.suffix == ".ack") == [
-        "000000000001.ack",
-        "000000000002.ack",
-        "000000000003.ack",
-    ]
-    assert coordinator(tmp_path, identity="coord-2").tick()["journal"]["seq"] == 3
+    # continuity could be re-established (the event is unchanged), so the tick proceeds ...
+    assert st["admitted"] == ["Z"] and st["journal"]["seq"] == 3
+    # ... and says what happened
+    assert st["state"] == "DEGRADED" and st["acknowledgement_continuity"] == "REPAIRED"
+    assert st["repairs"] == [{"seq": 2, "kind": "RESTORED", "by": "coord-1", "digest": digest}]
+    assert (j.anchor / "000000000002.repair").is_file()
+    assert (j.anchor / "000000000002.ack").read_text() == digest
+    # durable: later ticks, other coordinators and restarts all still report it
+    assert c.tick()["state"] == "DEGRADED"
+    again = coordinator(tmp_path, identity="coord-2").tick()
+    assert again["state"] == "DEGRADED" and again["repairs"] == st["repairs"]
+    on_disk = json.loads((tmp_path / "status" / "status.json").read_text())
+    assert on_disk["acknowledgement_continuity"] == "REPAIRED" and on_disk != healthy
+
+
+def test_a_new_coordinator_adopting_an_unacknowledged_head_reports_it(tmp_path):
+    j = store(tmp_path)
+    coordinator(tmp_path).tick([cand("A", "src/a")])
+    (j.anchor / "000000000001.ack").unlink()
+    # a coordinator that never saw the acknowledgement cannot tell loss from a writer that
+    # died before acknowledging; either way the acknowledgement it writes is a repair
+    st = coordinator(tmp_path, identity="coord-2").tick([cand("B", "src/b")])
+    assert st["state"] == "DEGRADED" and st["admitted"] == ["B"]
+    assert [(r["seq"], r["kind"], r["by"]) for r in st["repairs"]] == [(1, "ADOPTED", "coord-2")]
+
+
+def test_continuity_that_cannot_be_reestablished_halts_and_keeps_the_repair_evidence(tmp_path):
+    j = store(tmp_path)
+    c = coordinator(tmp_path, max_live=8)
+    c.tick([cand("A", "src/a"), cand("B", "src/b"), cand("C", "src/c")])
+    for lost in ("000000000002.ack", "000000000003.ack"):
+        (j.anchor / lost).unlink()
+    before = works(tmp_path)
+    with pytest.raises(JournalCorrupt, match="JOURNAL_UNANCHORED:event 2"):
+        c.tick([cand("Z", "src/z")])
+    status = json.loads((tmp_path / "status" / "status.json").read_text())
+    # the head's acknowledgement was restored (recorded), the one below it cannot be: halt
+    assert status["state"] == "HALTED" and [r["seq"] for r in status["repairs"]] == [3]
+    assert works(tmp_path) == before and not (j.root / "000000000004.json").exists()
 
 
 def test_a_continuity_failure_in_the_constructor_also_leaves_a_halted_status(tmp_path):
@@ -775,6 +813,7 @@ def test_a_malformed_candidate_list_raises_before_anything_is_read_or_written(tm
         ([(item, {**fields, "retain_terminal_scopes": False})], "work fields may not set"),
         ([(item, {**fields, "execution_ordinal": 5})], "work fields may not set"),
         ([(item, {**fields, "item": 1})], "work fields may not set"),
+        ([(item, {**fields, "self": 1})], "work fields may not set"),
         ([(item, fields), (item, fields)], "duplicate task_id"),
         ([cand("Z", "src/z", severity=9)], "severity out of range"),
         (
@@ -872,3 +911,55 @@ def test_the_status_file_may_not_live_inside_the_store_or_the_transport(tmp_path
                 accept_same_filesystem=True,
             )
     assert json.loads((j.root / STORE_MARKER).read_text())["store"] == j.store_id
+
+
+def test_a_continuity_failure_during_preparation_halts_instead_of_being_reported_as_refused(
+    tmp_path,
+):
+    class LosesHead(StoreJournal):
+        armed = False
+
+        def append(self, seq, data):
+            if self.armed:  # the head is replaced after the tick's continuity step
+                self.armed = False
+                prev = self._path(seq - 1)
+                prev.write_bytes(prev.read_bytes().replace(b"coord-1", b"coord-9"))
+            return super().append(seq, data)
+
+    base = store(tmp_path)
+    j = LosesHead(base.root, base.anchor, base.store_id)
+    c = coordinator(tmp_path, j, max_live=8)
+    c.tick([cand("A", "src/a")])
+    j.armed = True
+    with pytest.raises(JournalCorrupt, match="JOURNAL_DIVERGED:event 1"):
+        c.tick([cand("B", "src/b"), cand("C", "src/c")])
+    status = json.loads((tmp_path / "status" / "status.json").read_text())
+    assert status["state"] == "HALTED" and len(works(tmp_path)) == 1  # B was not published
+
+
+def test_a_capacity_filled_by_a_peer_ends_the_preparation_step_quietly(tmp_path):
+    store(tmp_path)
+    c = coordinator(tmp_path, max_live=1)
+    peer = coordinator(tmp_path, identity="coord-2", max_live=1)
+    peer.tick([cand("P", "src/p")])
+    c.live = lambda: frozenset()  # this coordinator's view is stale: it still sees capacity
+    st = c.tick([cand("A", "src/a"), cand("B", "src/b")])
+    # the journal commit refused with LIVE_LIMIT; that is not a property of the candidate
+    assert st["admitted"] == [] and st["deferred"] == [] and st["journal"]["seq"] == 1
+
+
+def test_published_lists_only_records_that_belong_to_the_channel(tmp_path):
+    store(tmp_path)
+    c = coordinator(tmp_path)
+    c.tick([cand("A", "src/a")])
+    implement(tmp_path)
+    c.tick()  # A's verification request is now in the spool; A's WORK record is in claimed/
+    spool = SpoolTransport(tmp_path / "spool")
+    work_dir = tmp_path / "spool" / "WORK"
+    real = next((work_dir / "claimed").glob("[0-9a-f]*[0-9a-f].json"))
+    (work_dir / ("0" * 64 + ".json")).write_bytes(real.read_bytes())  # name is not its seal
+    (work_dir / "junk.json").write_text("{not json")
+    request = next((tmp_path / "spool" / "VERIFICATION").glob("*.json"))
+    (work_dir / request.name).write_bytes(request.read_bytes())  # a record of another channel
+    assert [r.task_id for r in spool.published(Channel.WORK)] == ["A"]
+    assert c.tick()["state"] == "OK"  # none of these is a published work unknown to the journal

@@ -16234,8 +16234,9 @@ journal and anchor together was invisible to a new planner. This increment adds 
 driver step without activating anything. Base: main `370da0ad` (PR #1068 merged).
 
 Changes (existing modules only: `dev_planner.py`, `dev_spool_transport.py`; no new module, no
-`WorkItem` field, no seal change, no adapter / crosswalk / workflow / CLI change; no existing
-test changed):
+`WorkItem` field, no seal change, no adapter / crosswalk / workflow / CLI change). Existing
+tests changed: five in `test_orchestration_dev_planner_journal.py`, for the acknowledgement
+repair described below (replay no longer writes acknowledgements):
 - `StoreJournal(DirJournal)`: `create(root, anchor)` makes a NEW store (both directories
   absent or empty, separate, not nested) and writes a `STORE.json` marker with one random
   store id into each; `attach(root, anchor)` creates nothing and requires both markers to
@@ -16258,20 +16259,51 @@ test changed):
   accept_same_filesystem=)` and `Coordinator.tick(candidates)`:
   1. candidates are validated (shape, reserved keys, duplicate ids, queue validation) before
      anything is read or written;
-  2. continuity: list the transport's WORK records, replay, put the head's acknowledgement
-     back if only that file is missing, require every listed record to be a work the journal
-     knows (`JOURNAL_BEHIND_TRANSPORT`), then re-read the whole journal against the anchor
-     (so a lost event below the coordinator's head is noticed too);
+  2. continuity: list the transport's WORK records, replay (which restores a lost head
+     acknowledgement only together with a repair record, see below), require every listed
+     record to be a work the journal knows (`JOURNAL_BEHIND_TRANSPORT`), then re-read the
+     whole journal against the anchor (so a lost event below the coordinator's head is
+     noticed too);
   3. `recover()`; 4. `pump()`;
   5. dispatch of the next admissible candidates into the transport, with `live_limit` and
      `retain_terminal_scopes`, reporting scope collisions, retained scopes, contention and
      refused candidates under `deferred`;
-  6. atomic status file: `state` (`OK`, or `HALTED` with the reason when continuity failed
-     in the constructor or a tick; best effort, a status that cannot be written does not mask
-     the continuity failure),
+  6. atomic status file: `state` (`OK`; `DEGRADED` when the anchor holds repair records;
+     `HALTED` with the reason when continuity failed in the constructor or a tick, best
+     effort, a status that cannot be written does not mask the continuity failure),
+     `acknowledgement_continuity` (`INTACT` / `REPAIRED`) and the `repairs` list,
      store id, `continuity_boundary`, `live_conflicting_work_boundary: NOT_ESTABLISHED`,
      journal seq and head, live, admitted, deferred, recovered, record counts, `fleet_status`
      rows; no wall-clock value.
+
+Loss of acknowledged continuity stays observable (owner hold on head `a498805d`, which
+restored a lost head acknowledgement silently and reported `OK`):
+- An acknowledgement is written either by the commit that appended its event, or as a REPAIR
+  with a durable record `<anchor>/<seq:012d>.repair` (`seq`, event digest, kind, planner
+  identity), created exclusively BEFORE the acknowledgement and never removed by this code.
+- `RESTORED`: a planner that had seen its head acknowledged finds that acknowledgement gone
+  while the event is still stored unchanged. A definite loss. Detected at every replay
+  (`Planner.sync`), recorded, then restored.
+- `ADOPTED`: a planner about to append or publish finds the newest event unacknowledged and
+  no acknowledgement appears within a short wait (5 x 10 ms). Its writer died between append
+  and acknowledgement, or the acknowledgement was lost; the planner cannot tell which. It
+  records that and acknowledges the event it validated on replay.
+- `replay` itself no longer writes anything (it used to acknowledge what it replayed).
+  `DirJournal.repairs()` lists the records; a full open accepts and validates them.
+- A coordinator whose anchor holds any repair record reports `state: DEGRADED`,
+  `acknowledgement_continuity: REPAIRED` and the records, on every tick, from every
+  coordinator, across restarts. `HALTED` statuses carry the records too. Nothing here clears
+  a record: there is no operator acknowledgement procedure yet, so a store stays `DEGRADED`.
+- Where continuity cannot be re-established it fails closed as before: a replaced head, an
+  acknowledgement with another digest, a lost acknowledgement below the head
+  (`JOURNAL_UNANCHORED`), a repair record that cannot be written (no acknowledgement is
+  written then).
+- Tested: lost head acknowledgement under a running coordinator -> tick proceeds, `DEGRADED`
+  with a `RESTORED` record, still `DEGRADED` for a second coordinator and after restart; a new
+  coordinator on the same loss -> `ADOPTED`; a writer that died before acknowledging ->
+  `ADOPTED` by the next planner, only when it publishes; the record exists when the process
+  dies between record and acknowledgement; two acknowledgements lost -> `HALTED`, the record
+  for the head kept; a healthy commit sequence leaves no record.
 
 Activation boundaries, as implemented:
 - No fallback: the coordinator refuses a journal that is not a `StoreJournal` (no
@@ -16315,8 +16347,18 @@ Limits:
 - One tick is not atomic: a crash between steps is finished by the next tick, and history
   lost after the continuity step is noticed by the next operation or tick.
 - A `HALTED` status is written only for a continuity failure; another failure leaves the
-  previous status in place. A continuity check may itself write acknowledgements (for the
-  newest event, or the head's lost acknowledgement).
+  previous status in place. The status file is last-writer-wins and names no coordinator:
+  one that fails to start for a local reason overwrites a shared status with `HALTED` until a
+  healthy tick rewrites it.
+- A repair record says that an acknowledgement did not come from its event's commit; under
+  load a slow but live writer can be adopted after the wait, which also leaves a record.
+  `ADOPTED` cannot distinguish a dead writer from a lost acknowledgement. Records are unkeyed
+  files in the anchor and are lost with it.
+- Scope retention is per repository as `works_collide` compares it: a `.git` or URL spelling
+  of the same repository counts as a different repository.
+- Under concurrent ticks a peer's `recover` can publish a record a second time while the
+  dispatcher's own publish is in flight; the spool parks the duplicate and a claimer sees a
+  `TransportError` for it (observed by a verifier; existing spool behaviour).
 - The status path guard covers the journal, the anchor and a transport that exposes `root`;
   the path is resolved once at construction.
 - `max_live` is enforced per commit against the journal; coordinators configured with
@@ -16327,21 +16369,26 @@ Limits:
   skipped where there is none.
 
 Commands and results (`PYTHONPATH=<worktree>/src`, `--no-cov -o addopts=""`):
-- `pytest tests/unit/test_orchestration_dev_coordinator.py` (new): 27 passed; 120
-  consecutive runs under a hang detector, 27 passed each (on this host `/dev/shm` is a second
-  filesystem, so the boundary test ran). The first version of this file (14 tests) failed
-  once in an independent verifier's 571 runs: the witness listed the transport after its
-  replay and took a peer's fresh dispatch for lost history. The order was reversed;
+- `pytest tests/unit/test_orchestration_dev_coordinator.py` (new): 32 passed;
+  `test_orchestration_dev_planner_journal.py`: 54 passed; both files together 40 consecutive
+  runs under a hang detector, 86 passed each (on this host `/dev/shm` is a second filesystem,
+  so the boundary test ran). The first version of the coordinator file (14 tests) failed once
+  in an independent verifier's 571 runs: the witness listed the transport after its replay
+  and took a peer's fresh dispatch for lost history. The order was reversed;
   `test_another_coordinators_dispatch_is_never_mistaken_for_lost_history` fails when it is
-  reversed back (checked on a scratch copy: 1 failed, 26 passed).
+  reversed back (checked on a scratch copy at an earlier head: 1 failed, 26 passed).
+- Scratch mutants of the repair logic, each against both files: no `RESTORED` record 6
+  failed; no `ADOPTED` record 3 failed; status never `DEGRADED` 2 failed; restore skipped 6
+  failed; no adoption before publishing 1 failed; no adoption before appending 3 failed;
+  repairs left out of the status 2 failed.
 - The same file against main's `dev_planner.py` and `dev_spool_transport.py`: 1 error during
   collection (the imported names do not exist there).
 - `test_orchestration_dev_loop_contracts.py`, `_dev_queue.py`, `_dev_fabric_adapter.py`,
   `_dev_package.py`, `_dev_package_repair.py`, `_dev_crosswalk.py`, `_dev_spool_transport.py`,
-  `_dev_planner_journal.py`, `_dev_coordinator.py`: 838 passed.
+  `_dev_planner_journal.py`, `_dev_coordinator.py`: 846 passed.
 - `pytest tests/unit -k "orchestration_dev or dev_package or executor or agent_execute or
-  workflow or autonomy or global_foundation or github_port"`: 1536 passed, 5152 deselected.
-- `ruff check .`: clean. `ruff format --check` on the three changed code files: clean.
+  workflow or autonomy or global_foundation or github_port"`: 1544 passed, 5152 deselected.
+- `ruff check .`: clean. `ruff format --check` on the four changed code files: clean.
   `mypy src`: no issues in 415 source files.
 - The full test suite was not run locally.
 

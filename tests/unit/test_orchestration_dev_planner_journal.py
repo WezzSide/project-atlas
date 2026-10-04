@@ -456,8 +456,8 @@ def test_a_well_chained_event_that_is_not_a_legal_transition_is_refused(tmp_path
     # control: a legal event at the same position is accepted, so the refusals above are real
     _forge(j, n + 1, head, event="DISPATCH", root="B", work=encode(w("B", ("src/q",))))
     assert _open(tmp_path).in_flight() == {"A", "B", "Z"}
-    (j / f"{n + 1:012d}.json").unlink()
-    (tmp_path / "j.ack" / f"{n + 1:012d}.ack").unlink()  # the control event was acknowledged
+    (j / f"{n + 1:012d}.json").unlink()  # replay acknowledged nothing: no ack to remove
+    assert not (tmp_path / "j.ack" / f"{n + 1:012d}.ack").exists()
     # a record whose seal does not verify
     wire = json.loads(encode(w("B", ("src/q",))))
     wire["body"]["allowed_paths"] = ["src/x"]
@@ -1365,7 +1365,9 @@ def test_an_acknowledgement_is_created_exclusively_and_never_overwritten(tmp_pat
     assert [a.name for a in (tmp_path / "j.ack").iterdir()] == ["000000000001.ack"]
 
 
-def test_only_planners_acknowledge_and_they_acknowledge_what_they_replay(tmp_path):
+def test_an_acknowledgement_not_written_by_the_events_own_commit_is_a_recorded_repair(
+    tmp_path,
+):
     class DiesAfterLink(DirJournal):
         die = False
 
@@ -1378,6 +1380,7 @@ def test_only_planners_acknowledge_and_they_acknowledge_what_they_replay(tmp_pat
     j = DiesAfterLink(tmp_path / "j")
     p = planner(t, j, "plan-1")
     p.dispatch(qi("A"), **FIELDS)
+    assert j.repairs() == ()  # an ordinary commit acknowledges its own event: no repair
     j.die = True
     with pytest.raises(KeyboardInterrupt):
         p.dispatch(qi("B"), **fields("src/y"))
@@ -1385,9 +1388,99 @@ def test_only_planners_acknowledge_and_they_acknowledge_what_they_replay(tmp_pat
     assert not ack2.exists() and len(_published(tmp_path)) == 1
     rows = fleet_status(DirJournal(tmp_path / "j"))  # a projection reads it and writes nothing
     assert [r["lineage_root"] for r in rows] == ["A", "B"] and not ack2.exists()
-    q = planner(t, DirJournal(tmp_path / "j"), "plan-2")  # a planner adopts the surviving event
-    assert ack2.exists() and q.in_flight() == {"A", "B"} and len(_published(tmp_path)) == 1
+    jq = DirJournal(tmp_path / "j")
+    q = planner(t, jq, "plan-2")  # replaying writes nothing either
+    assert q.in_flight() == {"A", "B"} and not ack2.exists() and jq.repairs() == ()
+    # before it publishes for B (or appends after it) the planner adopts the event: it cannot
+    # know whether B's writer died or B's acknowledgement was lost, so it says so, durably
     assert q.recover() == ["REPUBLISHED:B:WORK"] and len(_published(tmp_path)) == 2
+    digest = hashlib.sha256((tmp_path / "j" / "000000000002.json").read_bytes()).hexdigest()
+    assert jq.repairs() == ({"seq": 2, "kind": "ADOPTED", "by": "plan-2", "digest": digest},)
+    assert ack2.read_text() == digest
+    assert q.recover() == [] and len(jq.repairs()) == 1  # recorded once
+    # the record survives restarts and later commits, and does not stop anything
+    r = planner(t, DirJournal(tmp_path / "j"), "plan-3")
+    r.dispatch(qi("C"), **fields("src/c"))
+    assert [x["seq"] for x in DirJournal(tmp_path / "j").repairs()] == [2]
+
+
+def test_a_lost_acknowledgement_of_the_head_is_restored_only_with_a_repair_record(tmp_path):
+    _t, p1 = _two_holders(tmp_path)
+    j = p1.journal
+    ack2 = tmp_path / "j.ack" / "000000000002.ack"
+    digest = ack2.read_text()
+    ack2.unlink()  # p1 had seen this acknowledgement: for p1 this is a definite loss
+    p1.select([qi("Z")])
+    assert j.repairs() == ({"seq": 2, "kind": "RESTORED", "by": "plan-1", "digest": digest},)
+    assert ack2.read_text() == digest
+    p1.dispatch(qi("D"), **fields("src/d"))  # continuity re-established: it goes on
+    assert len(j.repairs()) == 1
+    # a replaced head is not repaired: nothing is recorded, nothing acknowledged
+    ev3 = tmp_path / "j" / "000000000003.json"
+    (tmp_path / "j.ack" / "000000000003.ack").unlink()
+    ev3.write_bytes(ev3.read_bytes().replace(b"plan-1", b"plan-9"))
+    with pytest.raises(JournalCorrupt, match="JOURNAL_DIVERGED:event 3 is not the event this"):
+        p1.select([qi("Z")])
+    assert len(j.repairs()) == 1 and not (tmp_path / "j.ack" / "000000000003.ack").exists()
+
+
+def test_the_repair_record_is_written_before_the_acknowledgement(tmp_path):
+    class DiesBeforeAck(DirJournal):
+        armed = False
+
+        def acknowledge(self, seq, digest):
+            if self.armed:
+                raise KeyboardInterrupt  # dies after the record, before the acknowledgement
+            super().acknowledge(seq, digest)
+
+    t = SpoolTransport(tmp_path / "spool")
+    j = DiesBeforeAck(tmp_path / "j")
+    p = planner(t, j, "plan-1")
+    p.dispatch(qi("A"), **FIELDS)
+    ack1 = tmp_path / "j.ack" / "000000000001.ack"
+    ack1.unlink()
+    j.armed = True
+    with pytest.raises(KeyboardInterrupt):
+        p.select([qi("Z")])
+    assert not ack1.exists() and [r["kind"] for r in j.repairs()] == ["RESTORED"]
+    j.armed = False
+    p.select([qi("Z")])  # finished later; the first record stands, no second one
+    assert ack1.exists() and len(j.repairs()) == 1
+
+    class NoRecord(DirJournal):
+        def record_repair(self, seq, digest, kind, by):
+            raise OSError("anchor is read-only")
+
+    t2 = SpoolTransport(tmp_path / "spool2")
+    j2 = NoRecord(tmp_path / "j2")
+    p2 = planner(t2, j2, "plan-1")
+    p2.dispatch(qi("A"), **FIELDS)
+    ack = tmp_path / "j2.ack" / "000000000001.ack"
+    ack.unlink()
+    with pytest.raises(OSError):  # no record, so no acknowledgement and no further step
+        p2.dispatch(qi("B"), **fields("src/y"))
+    assert not ack.exists() and len(list((tmp_path / "j2").iterdir())) == 1
+
+
+def test_repair_records_are_part_of_the_anchor_and_are_validated(tmp_path):
+    t, p1 = _two_holders(tmp_path)
+    (tmp_path / "j.ack" / "000000000002.ack").unlink()
+    p1.select([qi("Z")])
+    anchor = tmp_path / "j.ack"
+    assert sorted(a.name for a in anchor.iterdir()) == [
+        "000000000001.ack",
+        "000000000002.ack",
+        "000000000002.repair",
+    ]
+    assert planner(t, DirJournal(tmp_path / "j"), "plan-2").state.seq == 2  # a full open accepts it
+    (anchor / "000000000009.repair").write_text("{}")
+    with pytest.raises(JournalCorrupt, match=r"repair record 000000000009\.repair"):
+        DirJournal(tmp_path / "j").repairs()
+    (anchor / "000000000009.repair").unlink()
+    (anchor / "000000000002.repair.bak").write_text("x")
+    with pytest.raises(JournalCorrupt, match="anchor holds something else"):
+        fleet_status(DirJournal(tmp_path / "j"))
+    assert MemoryJournal().repairs() == ()
 
 
 def test_a_memory_journal_that_changes_under_its_planner_stops_it():
@@ -1444,32 +1537,42 @@ def test_limit_a_failed_commit_leaves_an_event_that_the_next_replay_adopts(tmp_p
     with pytest.raises(JournalCorrupt, match="JOURNAL_DIVERGED:event 2"):
         p.dispatch(qi("B"), **fields("src/y"))
     assert set(p.lineages) == {"A"} and len(_published(tmp_path)) == 1
-    p.select([qi("Z")])  # the same planner's next replay validates and acknowledges it
+    p.select([qi("Z")])  # the same planner's next replay validates and applies it
     assert p.lineages["B"].dispatched_by == "plan-9" and p.state.seq == 2
-    assert (tmp_path / "j.ack" / "000000000002.ack").exists()
+    assert not (tmp_path / "j.ack" / "000000000002.ack").exists()  # replay writes nothing
     assert p.pump() == 0 and len(_published(tmp_path)) == 1  # not published by replay or pump
     with pytest.raises(PlannerError, match="already in use"):
         p.dispatch(qi("B"), **fields("src/y"))
+    # that refused dispatch was a commit attempt: it adopted the event it would have built on
+    assert [(r["seq"], r["kind"], r["by"]) for r in j.repairs()] == [(2, "ADOPTED", "plan-1")]
+    assert (tmp_path / "j.ack" / "000000000002.ack").exists()
     assert p.recover() == ["REPUBLISHED:B:WORK"] and len(_published(tmp_path)) == 2
 
 
-def test_limit_a_running_planner_does_not_notice_the_loss_of_the_anchor_alone(tmp_path):
-    """Pinned, outside the model: only a full open sees an emptied anchor."""
+def test_the_loss_of_the_anchor_alone_under_a_running_planner_leaves_a_repair_record(tmp_path):
+    """Outside the model. The planner at the head goes on, but the loss is on record."""
     t, p1 = _two_holders(tmp_path)
     for a in (tmp_path / "j.ack").iterdir():
         a.unlink()
     p1.dispatch(qi("D"), **fields("src/d"))  # continues, against its complete replica
-    assert [a.name for a in (tmp_path / "j.ack").iterdir()] == ["000000000003.ack"]
+    # ... but not silently: it had seen its head acknowledged, so it records the loss
+    assert sorted(a.name for a in (tmp_path / "j.ack").iterdir()) == [
+        "000000000002.ack",
+        "000000000002.repair",
+        "000000000003.ack",
+    ]
+    assert [r["kind"] for r in p1.journal.repairs()] == ["RESTORED"]
     with pytest.raises(PlannerError, match=r"^SCOPE_COLLISION:A:"):
         p1.dispatch(qi("E"), **FIELDS)
     with pytest.raises(JournalCorrupt, match="JOURNAL_UNANCHORED:event 1"):
         planner(t, DirJournal(tmp_path / "j"), "plan-2")
-    # an anchor that cannot be written fails closed with an OSError: linked, not published
-    (tmp_path / "j.ack" / "000000000003.ack").unlink()
+    # an anchor that cannot be written fails closed with an OSError: nothing published
+    for a in (tmp_path / "j.ack").iterdir():
+        a.unlink()
     (tmp_path / "j.ack").rmdir()
     with pytest.raises(OSError):
         p1.dispatch(qi("F"), **fields("src/f"))
-    assert _events(tmp_path)[-1] == "000000000004.json" and len(_published(tmp_path)) == 3
+    assert _events(tmp_path)[-1] == "000000000003.json" and len(_published(tmp_path)) == 3
     assert "F" not in p1.lineages
 
 
