@@ -15706,7 +15706,11 @@ Identity effects (measured):
 
 Historical reproducibility (nothing historical is rewritten; stored packages, hashes, evidence
 and commits are untouched):
-- A `dev_package/1` repair package is today's package with the old builder id and nothing else.
+- The LAST `dev_package/1` repair shape (rendered from #1057 onward) is today's package with the
+  old builder id and nothing else. Earlier `/1` repair packages (rendered between #1055 and
+  #1057: three inputs, no sealed-revision abort condition, shorter `checkout.rule`) are NOT
+  covered by that statement or by a test; the superseded, never dispatched E2-R2 v1 and v2
+  packages on `devq/atlas-devq-0002-e2-r2-package` have that shape.
   Tested on the fixture, and measured on the real reviewed ATLAS-DEVQ-0002-E2-R2 v4 package:
   rebuilt from its stored spec and re-labelled `dev_package/1`, it is byte-equal to the stored
   copy (`b449999a1801456c9e9bcaa49c40410e85965e316b852ee569e8fd56338a6835`). Its `/2` rendering

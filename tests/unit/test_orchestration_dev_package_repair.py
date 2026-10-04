@@ -868,8 +868,10 @@ V1_SEALED_IMPLEMENTATION_PACKAGE_SHA256 = {
 
 
 def test_i_repair_package_differs_from_the_v1_package_only_in_the_builder_id(repair: Any) -> None:
-    """Historical reproducibility: a dev_package/1 repair package is this package with the old
-    builder id. The /1 hash below was pinned from main 593fa1a3 and never changed."""
+    """Historical reproducibility of the LAST dev_package/1 repair shape (rendered from #1057
+    through main f17f5828): it is this package with the old builder id. The /1 hash below was
+    pinned from main 593fa1a3. Repair packages rendered before #1057 had a different shape
+    (three inputs) and are not covered here."""
     pkg = build_package(load_spec(json.dumps(repair[2])))
     assert pkg["provenance"]["builder"] == "dev_package/2"
     assert (
