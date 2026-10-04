@@ -16,6 +16,7 @@ from project_atlas.orchestration.autonomy.dev_fabric_adapter import (
     FabricAdapter,
     RunInfo,
     build_dispatch_payload,
+    build_sealed_dispatch_payload,
 )
 from project_atlas.orchestration.autonomy.dev_planner import Phase, Planner
 from project_atlas.orchestration.autonomy.dev_queue import Category, QueueItem
@@ -1049,8 +1050,8 @@ def test_sealed_revision_is_sent_even_if_the_branch_moves_after_the_pre_dispatch
     assert inputs["base_revision"] == work.base_revision == BASE != moved
 
 
-def test_live_dispatch_differs_from_the_builder_payload_by_exactly_base_revision(tmp_path):
-    """Explicit, not silent: package/builder inputs and live adapter inputs are NOT identical."""
+def test_live_dispatch_is_exactly_the_canonical_sealed_payload(tmp_path):
+    """One payload identity: what the adapter sends is build_sealed_dispatch_payload's output."""
     from pathlib import Path
 
     from project_atlas.orchestration.autonomy import dev_fabric_adapter, dev_package
@@ -1060,16 +1061,125 @@ def test_live_dispatch_differs_from_the_builder_payload_by_exactly_base_revision
     ad.tick()
     (work,) = ad.works.values()
     text, commands = statement(work)
-    built = build_dispatch_payload(
+    canonical = build_sealed_dispatch_payload(
         work, base_branch="main", task_statement=text, acceptance_commands=commands
     )
-    assert "base_revision" not in built.inputs  # builder (and so implementation packages) unchanged
     workflow, ref, inputs = gh.dispatches[-1]
-    assert (workflow, ref) == (built.workflow, built.ref)
-    assert inputs == {**built.inputs, "base_revision": work.base_revision}
-    assert _ledger_payload_sha(xw, work.seal) != built.sha256()
-    assert dev_fabric_adapter.BASE_REVISION_INPUT == dev_package.BASE_REVISION_INPUT
+    assert (workflow, ref, inputs) == (canonical.workflow, canonical.ref, canonical.inputs)
+    assert _ledger_payload_sha(xw, work.seal) == canonical.sha256()
+    # the legacy builder (frozen DEVQ-0001 first-run package only) lacks exactly that one input
+    legacy = build_dispatch_payload(
+        work, base_branch="main", task_statement=text, acceptance_commands=commands
+    )
+    assert "base_revision" not in legacy.inputs
+    assert canonical.inputs == {**legacy.inputs, "base_revision": work.base_revision}
+    assert legacy.sha256() != canonical.sha256()
+    assert dev_package.BASE_REVISION_INPUT == dev_fabric_adapter.BASE_REVISION_INPUT
+    # single definition: dev_package imports the name and never assigns it (an identity check
+    # would pass for an equal-valued re-definition because strings are interned)
+    package_source = Path(dev_package.__file__).read_text(encoding="utf-8")
+    assert "    BASE_REVISION_INPUT,\n" in package_source
+    assert "BASE_REVISION_INPUT =" not in package_source
     wf = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "atlas-agent-execute.yml"
     declared = wf.read_text(encoding="utf-8")
     assert f"      {dev_fabric_adapter.BASE_REVISION_INPUT}:\n" in declared
     assert "BASE_REVISION: ${{ inputs.base_revision }}" in declared
+
+
+def test_package_and_live_dispatch_share_one_payload_identity(tmp_path):
+    """HARDEN-DEVLOOP-003: a package's workflow_inputs_sha256 IS the ledger payload_sha256.
+
+    The package builder and the adapter are given the same sealed work item, statement and
+    commands; the adapter's write-ahead ledger hash and the inputs it sends must equal what the
+    package recorded, so a dispatch authority can bind a reviewed package to a live dispatch.
+    """
+    import json
+
+    from project_atlas.orchestration.autonomy import dev_package
+
+    spec = dev_package.load_spec(
+        json.dumps(
+            {
+                "task_id": "DEVQ-ID-1",
+                "execution_ordinal": 1,
+                "lineage_root": "DEVQ-ID-1",
+                "repository": "WezzSide/project-atlas",
+                "base_revision": BASE,
+                "authority_ref": "AUTH-1",
+                "allowed_paths": ["src/project_atlas/example.py", "tests/unit/"],
+                "forbidden_paths": list(dev_package.FORBIDDEN_FLOOR),
+                "expected_outputs": ["dedicated atlas/agent-* branch with exact HEAD/TREE"],
+                "acceptance_contract": ["example behaviour fixed"],
+                "statement": "Fix the synthetic example defect in src/project_atlas/example.py.",
+                "acceptance_commands": ["pytest tests/unit/x.py -q"],
+                "attempt": 1,
+                "max_attempts": 3,
+                "attempt_kind": "implementation",
+            }
+        )
+    )
+    pkg = dev_package.build_package(spec)
+    work = dev_package.build_work(spec)
+    gh = FakeGitHub()
+    xw = Crosswalk(tmp_path / "xw.jsonl")
+    ad = FabricAdapter(
+        gh,
+        SpoolTransport(tmp_path / "spool"),
+        xw,
+        pending_dir=tmp_path / "pending",
+        clock=lambda: "2026-09-30T15:59:00Z",
+        task_statement=lambda w: (dev_package.effective_statement(spec), spec.acceptance_commands),
+        required_checks=frozenset({"quality"}),
+    )
+    payload = ad.dispatch(work)
+    workflow, ref, inputs = gh.dispatches[-1]
+    assert (workflow, ref, inputs) == (pkg["workflow"], pkg["workflow_ref"], pkg["workflow_inputs"])
+    assert payload.sha256() == pkg["workflow_inputs_sha256"]
+    assert _ledger_payload_sha(xw, work.seal) == pkg["workflow_inputs_sha256"]
+    dev_package.verify_checkout_ref(pkg, BASE)
+
+
+def test_a_port_that_mutates_its_inputs_cannot_change_the_recorded_payload(tmp_path):
+    class MutatingGitHub(FakeGitHub):
+        def dispatch_workflow(self, workflow, ref, inputs):
+            super().dispatch_workflow(workflow, ref, dict(inputs))
+            inputs["base_revision"] = "9" * 40
+            inputs["injected"] = "x"
+
+    gh = MutatingGitHub()
+    xw = Crosswalk(tmp_path / "xw.jsonl")
+    ad = FabricAdapter(
+        gh,
+        SpoolTransport(tmp_path / "spool"),
+        xw,
+        pending_dir=tmp_path / "pending",
+        clock=lambda: "2026-09-30T15:59:00Z",
+        task_statement=statement,
+        required_checks=frozenset({"quality"}),
+    )
+    work = make_work(task_id="T", execution_id="T-E1", lineage_root="T", **FIELDS)
+    payload = ad.dispatch(work)
+    assert "injected" not in payload.inputs
+    assert payload.inputs["base_revision"] == work.base_revision
+    assert payload.sha256() == _ledger_payload_sha(xw, work.seal)
+    sent = gh.dispatches[-1][2]
+    assert sent == payload.inputs and sent is not payload.inputs
+
+
+def test_the_legacy_unsealed_builder_has_no_caller_but_first_run_and_the_wrapper():
+    """Guards against a future caller silently packaging or dispatching the unsealed shape."""
+    import re
+    from pathlib import Path
+
+    src = Path(__file__).resolve().parents[2] / "src"
+    callers = sorted(
+        path.relative_to(src).as_posix()
+        for path in src.rglob("*.py")
+        if re.search(r"(?<![A-Za-z_])build_dispatch_payload\(", path.read_text(encoding="utf-8"))
+    )
+    assert callers == [
+        "project_atlas/orchestration/autonomy/dev_fabric_adapter.py",  # definition + wrapper
+        "project_atlas/orchestration/autonomy/dev_first_run.py",  # frozen DEVQ-0001 package
+    ]
+    adapter = (src / callers[0]).read_text(encoding="utf-8")
+    assert len(re.findall(r"(?<![A-Za-z_])build_dispatch_payload\(", adapter)) == 2

@@ -65,10 +65,19 @@ PARENT_SPEC: dict[str, Any] = {
     "attempt_kind": "implementation",
 }
 
-# Pinned from the UNMODIFIED builder at main d9a36c922eb5411ca19816445cd8fcd2e5beece7
-# (tests/unit/test_orchestration_dev_package.py BASE_SPEC; second row: attempt=2,
-# execution_ordinal=2). Columns: package_sha256, work_seal, spec_sha256, workflow_inputs_sha256.
-PRE_CHANGE_GOLDEN = {
+# Implementation-package identities. Columns: package_sha256, work_seal, spec_sha256,
+# workflow_inputs_sha256 (tests/unit/test_orchestration_dev_package.py BASE_SPEC; second row:
+# attempt=2, execution_ordinal=2).
+#
+# History, kept so the change stays auditable:
+#   * LEGACY_GOLDEN was pinned from the unmodified builder at main
+#     d9a36c922eb5411ca19816445cd8fcd2e5beece7 and held through main
+#     593fa1a3ae1b04a6fdf65dcb99e5afe0f8d022ee: implementation packages carried three workflow
+#     inputs and no ``base_revision``.
+#   * CANONICAL_GOLDEN is the current identity (HARDEN-DEVLOOP-003): the canonical dispatch
+#     payload carries the sealed ``base_revision``, so ``package_sha256`` and
+#     ``workflow_inputs_sha256`` changed. ``work_seal`` and ``spec_sha256`` did NOT change.
+LEGACY_GOLDEN = {
     "attempt-1": (
         "6289f1ce5e9101370dabf76a0788803cc23b5e3670f11d946e82c80f292484cc",
         "d2a7642602ea4d3ae46f612552a20aef62a76c4feeb98c74e883edce6c379d49",
@@ -80,6 +89,20 @@ PRE_CHANGE_GOLDEN = {
         "b57299b219be3994a4e2f13898003b445f8c3b2c17ab6a7620ab883081b468a3",
         "7c641ba3d028b26d9e81b7b45a47c3177e23e83fd9339ffb9dec8925cf6fa54b",
         "fa662943859a047889303febfb51192b7ad6f1515ff134239ff5da2465751c19",
+    ),
+}
+CANONICAL_GOLDEN = {
+    "attempt-1": (
+        "d6360a78152c02fb57a241345ee62384c305d86da0dac1c869a75c343ddf41f3",
+        "d2a7642602ea4d3ae46f612552a20aef62a76c4feeb98c74e883edce6c379d49",
+        "23981d51ab1e073b0ec5614d0fce3b3869ea387ba0266dba11d347ca64a1efad",
+        "33dcf5d297cc7273d63d173e5e88b10c4ff215f09d01078fd7aa927e1fdc2026",
+    ),
+    "attempt-2": (
+        "e6878dd8ee381b48c6dfa986ff730bb8c23cc1e8c663b9b4e4cbcecf9201d652",
+        "b57299b219be3994a4e2f13898003b445f8c3b2c17ab6a7620ab883081b468a3",
+        "7c641ba3d028b26d9e81b7b45a47c3177e23e83fd9339ffb9dec8925cf6fa54b",
+        "14349e5c401e8def0b391a9ab3081ecb7b3ad0756fd2d6f6c610e9b81d8693b2",
     ),
 }
 
@@ -503,16 +526,14 @@ def test_e_chained_repair_of_a_repair_is_also_seal_identical() -> None:
     )
 
 
-# -- F. implementation packages are unchanged ----------------------------------------------
+# -- F. implementation package identity is pinned -------------------------------------------
 
 
 @pytest.mark.parametrize(
     ("key", "over"),
     [("attempt-1", {"attempt": 1, "execution_ordinal": 1}), ("attempt-2", {})],
 )
-def test_f_implementation_package_bytes_unchanged_since_d9a36c92(
-    key: str, over: dict[str, Any]
-) -> None:
+def test_f_implementation_package_identity_is_pinned(key: str, over: dict[str, Any]) -> None:
     # identical to BASE_SPEC of test_orchestration_dev_package.py at d9a36c92
     golden_commands = [
         "pytest tests/unit/x.py -q",
@@ -528,7 +549,21 @@ def test_f_implementation_package_bytes_unchanged_since_d9a36c92(
         pkg["work_seal"],
         spec_sha256(spec),
         pkg["workflow_inputs_sha256"],
-    ) == PRE_CHANGE_GOLDEN[key]
+    ) == CANONICAL_GOLDEN[key]
+    # the seal and the spec digest are untouched by the payload change; only the two digests
+    # that cover workflow_inputs moved
+    legacy = LEGACY_GOLDEN[key]
+    assert (pkg["work_seal"], spec_sha256(spec)) == (legacy[1], legacy[2])
+    assert package_sha256(rendered) != legacy[0] and pkg["workflow_inputs_sha256"] != legacy[3]
+    # dropping the sealed-revision input reproduces the legacy inputs digest exactly: that
+    # input is the ONLY difference in the dispatched payload
+    from project_atlas.orchestration.autonomy.dev_fabric_adapter import DispatchPayload
+
+    without = {k: v for k, v in pkg["workflow_inputs"].items() if k != "base_revision"}
+    assert (
+        DispatchPayload(workflow=pkg["workflow"], ref=pkg["workflow_ref"], inputs=without).sha256()
+        == legacy[3]
+    )
     assert pkg["workflow_inputs"]["base_branch"] == "main"
     assert not {"checkout", "parent_task_id", "parent_execution_id", "lineage_root"} & set(pkg)
     assert build_work(spec).parent_task_id is None
@@ -811,12 +846,38 @@ def test_i_repair_package_emits_the_sealed_base_revision_input(repair: Any) -> N
     assert verify_checkout_ref(pkg, RESULT_REVISION) is None
 
 
-def test_i_implementation_package_carries_no_base_revision_input() -> None:
+def test_i_repair_package_bytes_unchanged_by_the_canonical_payload_move(repair: Any) -> None:
+    """Pinned from main 593fa1a3 (before base_revision moved into the canonical builder)."""
+    pkg = build_package(load_spec(json.dumps(repair[2])))
+    assert (
+        package_sha256(render_package(pkg)),
+        pkg["workflow_inputs_sha256"],
+        pkg["work_seal"],
+    ) == (
+        "da0b36a1893680deb6857a04abcfa23de529ef941c700189853479ca47416474",
+        "ad5892719d11420a33080324baa83586ae47571d38184ef89cc88127d4f629b2",
+        "6b646b48d475302a11b06990b65db05151753ac12c076c191b90fc2df8974565",
+    )
+
+
+def test_i_implementation_package_emits_the_sealed_base_revision_input() -> None:
     pkg = build_package(load_spec(json.dumps(PARENT_SPEC)))
-    assert set(pkg["workflow_inputs"]) == {"task_prompt", "base_branch", "agent_type"}
-    assert len(pkg["abort_conditions"]) == 5
-    assert not any("workflow_inputs.base_revision" in c for c in pkg["abort_conditions"])
+    inputs = pkg["workflow_inputs"]
+    assert set(inputs) == {"task_prompt", "base_branch", "agent_type", "base_revision"}
+    assert inputs["base_revision"] == pkg["base_revision"] == MAIN_REVISION
+    assert inputs["base_branch"] == "main" and "checkout" not in pkg
+    assert len(pkg["abort_conditions"]) == 6
+    assert "workflow_inputs.base_revision" in pkg["abort_conditions"][1]
     assert verify_checkout_ref(pkg, MAIN_REVISION) is None
+
+
+def test_i_implementation_package_without_base_revision_input_is_refused() -> None:
+    """Also covers a package rendered before the input joined the canonical payload."""
+    pkg = build_package(load_spec(json.dumps(PARENT_SPEC)))
+    del pkg["workflow_inputs"]["base_revision"]
+    assert _verify_reason(pkg, MAIN_REVISION) == "CHECKOUT_PACKAGE_INVALID"  # stale digest
+    _rehash(pkg)
+    assert _verify_reason(pkg, MAIN_REVISION) == "CHECKOUT_PACKAGE_INVALID"  # still refused
 
 
 @pytest.mark.parametrize(
@@ -838,7 +899,7 @@ def test_i_repair_without_matching_base_revision_input_is_refused(
     assert _verify_reason(pkg, RESULT_REVISION) == "CHECKOUT_PACKAGE_INVALID"
 
 
-def test_i_implementation_base_revision_input_if_present_must_be_the_sealed_base() -> None:
+def test_i_implementation_base_revision_input_must_be_the_sealed_base() -> None:
     pkg = build_package(load_spec(json.dumps(PARENT_SPEC)))
     pkg["workflow_inputs"]["base_revision"] = OTHER_REVISION
     _rehash(pkg)

@@ -165,8 +165,13 @@ def test_package_structure_matches_first_run_plus_provenance() -> None:
     assert set(pkg) == set(ref) | {"provenance", "attempt_kind"}
     assert pkg["attempt_kind"] == "implementation"
     for k in ref:
-        if k != "secrets":
+        if k not in ("secrets", "workflow_inputs"):
             assert _keys(pkg[k]) == _keys(ref[k]), k
+    # the frozen DEVQ-0001 package keeps the legacy three inputs; every package built here
+    # carries the sealed base revision as a fourth (the canonical dispatch payload)
+    assert set(ref["workflow_inputs"]) == {"task_prompt", "base_branch", "agent_type"}
+    assert set(pkg["workflow_inputs"]) == set(ref["workflow_inputs"]) | {"base_revision"}
+    assert pkg["workflow_inputs"]["base_revision"] == pkg["base_revision"]
     assert pkg["workflow"] == "atlas-agent-execute.yml" and pkg["workflow_ref"] == "main"
     assert pkg["workflow_inputs"]["base_branch"] == "main"
     assert pkg["acceptance"]["commands"] == BASE_SPEC["acceptance_commands"]
