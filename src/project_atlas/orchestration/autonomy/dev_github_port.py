@@ -81,8 +81,9 @@ class _SawResponse(urllib.request.BaseHandler):
     https_response = http_response
 
 
-# Response headers that can name another URL (redirect target, signed query, alternate location).
-_URL_HEADERS = frozenset({"location", "uri", "content-location", "link"})
+# Response headers that can name another URL (redirect target, signed query, alternate location,
+# or a ``Refresh: 0; url=...`` meta-redirect).
+_URL_HEADERS = frozenset({"location", "uri", "content-location", "link", "refresh"})
 
 
 def _names_url(headers: Any) -> bool:

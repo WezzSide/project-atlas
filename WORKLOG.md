@@ -15677,10 +15677,62 @@ Closure notes for earlier work packages (no separate PR): ATLAS-DEVQ-0003 merged
 template v2 merged as `593fa1a3ae1b04a6fdf65dcb99e5afe0f8d022ee` (PR #1062); post-merge CI run
 `37191807277` on `593fa1a3` passed.
 
+## 2026-10-04 — ATLAS-DEVQ-0004 follow-up: builder identity `dev_package/2` (owner decision, trust surface)
+
+Owner steering: `provenance.builder` is a builder-version identity, and #1063 changed what the
+builder renders, so it must not keep presenting itself as `dev_package/1`. The steering asked
+for the bump on #1063 before merge; #1063 had already been merged (owner account,
+`f17f582846493a5e6edde07b59bc0169c7a7390f`, 2026-10-04T10:43:39Z) when it arrived, so the bump
+is this separate follow-up on top of that merge. Between that merge and this change, `main`
+renders the canonical sealed payload under the old id `dev_package/1`.
+
+Change (`dev_package.py` only, plus tests and docs):
+- `BUILDER_ID = "dev_package/2"`, with a version history comment. Under `dev_package/1` the
+  rendered shape changed more than once without a bump (#1055, #1057, #1063), so that id does
+  not identify one shape.
+- `verify_checkout_ref` refuses any package whose `provenance.builder` is not the current
+  `BUILDER_ID` (new stable reason `PACKAGE_BUILDER_UNSUPPORTED`), including a missing or
+  malformed `provenance`. A package from an earlier builder version must be re-rendered from
+  its spec before it can be dispatched. This is stricter than before, never looser.
+- No production code path renders `dev_package/1` packages.
+
+Identity effects (measured):
+- Every rendered package's `package_sha256` changes, because `provenance.builder` is part of the
+  rendered document. `work_seal`, `spec_sha256` and `workflow_inputs_sha256` do NOT change, so
+  the canonical package/live-dispatch payload identity from #1063 is untouched.
+- Repair fixture: `da0b36a1…6474` -> `0d5349a8b2faf58a2dbd14130224e4304a3535e125d8cec27c48c145c36f4557`.
+  Implementation goldens: `d6360a78…41f3` -> `ad6d27a55c30537d5c2df837e07299faa7b81f1705c6295c11fd226f4deaf07f`
+  and `e6878dd8…d652` -> `7893199decf5a4322c99a965e377a74ffc27b34788b0d60cb7c30b903d5edff1`.
+
+Historical reproducibility (nothing historical is rewritten; stored packages, hashes, evidence
+and commits are untouched):
+- The LAST `dev_package/1` repair shape (rendered from #1057 onward) is today's package with the
+  old builder id and nothing else. Earlier `/1` repair packages (rendered between #1055 and
+  #1057: three inputs, no workflow-asserted sealed-revision abort condition, shorter `checkout.rule`) are NOT
+  covered by that statement or by a test; the superseded, never dispatched E2-R2 v1 and v2
+  packages on `devq/atlas-devq-0002-e2-r2-package` have that shape.
+  Tested on the fixture, and measured on the real reviewed ATLAS-DEVQ-0002-E2-R2 v4 package:
+  rebuilt from its stored spec and re-labelled `dev_package/1`, it is byte-equal to the stored
+  copy (`b449999a1801456c9e9bcaa49c40410e85965e316b852ee569e8fd56338a6835`). Its `/2` rendering
+  is `53d897c3fe24eca1f78e6c5bae90712389301fb1e6378299ede2e923b77476fc`.
+- Both earlier implementation identities are reproduced in tests by exact, stated derivations
+  from today's package: old builder id only (the #1063 identity), and additionally without the
+  `base_revision` input and its abort condition (the original three-input identity,
+  `LEGACY_GOLDEN`).
+- The frozen `dev_first_run` module and the committed ATLAS-DEVQ-0001 package are unaffected.
+
+Commands and results:
+- `pytest` on the fabric-adapter, package, package-repair, first-run, sealed-base-assert and
+  crosswalk test files: 546 passed.
+- `ruff check .`, `ruff format --check` on changed files, `mypy src`: clean.
+
+Not done: no dispatch; no live validation; the adapter is still constructed only in tests.
+
 ## 2026-10-04 — ATLAS-DEVQ-0002 residual P2 notes (seven) + ftp test-semantics observation
 
-Scope: `dev_github_port.py` and its redirects test file only. Base `f17f5828` (main). Local
-commit; not pushed, not independently verified, not live-validated. Exposure standard unchanged
+Scope: `dev_github_port.py` and its redirects test file only. First rendered on base `f17f5828`,
+then reconciled onto main `e40b28ad` (merge of #1064; no conflict outside `WORKLOG.md`). Not
+live-validated; independent verification is recorded on the PR, not in this entry. Exposure standard unchanged
 (owner Option B: reachable from the raised `AdapterError` via message, `__cause__`,
 `__context__` or attributes of chained exceptions).
 
@@ -15691,8 +15743,9 @@ Per item:
    our own request that could not be sent and the label is `rejected invalid request`. Both
    stay detached: http.client's `Invalid header value` error quotes the Authorization value.
 2. FIXED (behaviour change, judgement call) — a non-redirect HTTP error whose response carries
-   `Content-Location` or `Link` is now raised detached, like `Location`/`URI`. Both headers can
-   name another URL including a query. Error class, status mapping and message are unchanged;
+   `Content-Location`, `Link` or `Refresh` is now raised detached, like `Location`/`URI`. Each
+   can name another URL including a query (`Refresh: 0; url=...` was found reachable by the
+   independent verification of the first candidate and added in the reconciliation). Error class, status mapping and message are unchanged;
    only the chained `HTTPError` is dropped for those responses. Errors without such a header
    keep their cause (existing test `test_plain_http_error_keeps_chained_cause` unchanged).
 3. FIXED — header detection (`_names_url`) lower-cases the names it iterates, so it does not
@@ -15728,14 +15781,14 @@ Per item:
    reachable on either version I ran, so no exposure assertion can fail for it.
 
 Commands and results (`PYTHONPATH=<worktree>/src`, `--no-cov -o addopts=""`):
-- Redirects test file, base source and base tests: 28 passed in 24.53s. This change: 46 passed
-  in 2.25s (18 new test cases). With `-W error::ResourceWarning
-  -W error::pytest.PytestUnraisableExceptionWarning`: 46 passed.
-- The new test file against base source `f17f5828`: 18 failed, 28 passed (the 18 are exactly
-  the new cases). Against this change: 46 passed.
+- Redirects test file, base source and base tests (first candidate, on `f17f5828`): 28 passed
+  in 24.53s. This change: 50 passed in 2.66s (22 new test cases). With
+  `-W error::ResourceWarning -W error::pytest.PytestUnraisableExceptionWarning`: 50 passed.
+- The new test file against the `dev_github_port.py` of main `e40b28ad`: 22 failed, 28 passed.
+  Against this change: 50 passed.
 - `pytest` on the two github-port test files and `test_orchestration_dev_fabric_adapter.py`:
-  122 passed.
-- `pytest tests/unit -k "orchestration_dev or dev_package or github_port"`: 697 passed,
+  126 passed.
+- `pytest tests/unit -k "orchestration_dev or dev_package or github_port"`: 704 passed,
   5773 deselected.
 - `ruff check`, `ruff format --check` on the module and both test files, `mypy` on the module:
   clean.
@@ -15746,8 +15799,13 @@ Not done / open:
   stubbed openers).
 - Messages still contain the caller-supplied request path including its own query (existing,
   test-pinned message shape); only Location data and the token are kept out.
-- Other response headers on a chained non-redirect `HTTPError` (for example `Refresh`,
-  `Set-Cookie`) stay reachable; not assessed under this item.
+- On a chained non-redirect `HTTPError` without a URL-bearing header, the remaining response
+  headers (for example `Set-Cookie`) and the response body stay reachable through the cause.
+  Neither is the token or a redirect target; left as is.
+- `read_json_artifact` now raises three further first-request paths detached, beyond the four
+  exposure classes of item 7: a non-redirect API error (401/403/404/500), an
+  `http.client.HTTPException`, and the "expected a redirect" case. Messages are unchanged; the
+  chained cause (debugging context) is no longer available there.
 - The redirect response of the artifact API request is not explicitly closed (as on the base).
 - Owner/reviewer call: item 2 drops debugging context (the chained `HTTPError`) for error
   responses that carry `Link` or `Content-Location`.

@@ -353,7 +353,9 @@ def test_non_ascii_path_is_not_labelled_invalid_url_and_stays_detached(servers):
     assert servers[0].seen == []
 
 
-@pytest.mark.parametrize("name", ["Location", "LOCATION", "Uri", "Content-Location", "LINK"])
+@pytest.mark.parametrize(
+    "name", ["Location", "LOCATION", "Uri", "Content-Location", "LINK", "Refresh", "REFRESH"]
+)
 def test_url_header_detection_ignores_name_case_on_plain_mappings(monkeypatch, name):
     loc = f"https://evil.invalid/x?sig={QUERY_SECRET}"
 
@@ -372,6 +374,7 @@ def test_url_header_detection_ignores_name_case_on_plain_mappings(monkeypatch, n
     [
         ("Content-Location", f"https://other.invalid/alt?sig={QUERY_SECRET}"),
         ("Link", f'<https://other.invalid/next?sig={QUERY_SECRET}>; rel="next"'),
+        ("Refresh", f"0; url=https://other.invalid/r?sig={QUERY_SECRET}"),
     ],
 )
 @pytest.mark.parametrize("status", (403, 500))
