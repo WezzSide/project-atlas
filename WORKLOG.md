@@ -16039,3 +16039,87 @@ Not done / open:
 - Durable scope holders, a release on merge, cross-process exclusion.
 - No adapter or workflow wiring; no live run.
 - Independent verification and exact-head CI are recorded on the PR, not here.
+
+## 2026-10-04 — ATLAS-DEVQ-0007: planner coordination journal (durable scope ownership, restart reconstruction, cross-planner admission)
+
+What / why: after ATLAS-DEVQ-0006 scope ownership lived in one planner object's memory. A
+restart forgot every holder, two planner processes could each admit a colliding lineage, fleet
+state was one process's view, and the public `fail_execution` could release the scope of an
+INTEGRATION_READY lineage. Base: main `160844e1`.
+
+Design (all in the existing `dev_planner.py`; no new module, no `WorkItem` field, no seal
+change, no adapter / crosswalk / transport / workflow change):
+- Every planner state change is exactly ONE event in an append-only journal: DISPATCH, RESULT,
+  READY, REPAIR, TERMINAL, RELEASE. An event carries `v`, `seq`, `prev` (sha256 of the previous
+  event's bytes), the writing planner identity and the sealed records it refers to (the full
+  wire form, so seals are re-verified on replay). No wall-clock value is written.
+- The planner's in-memory state (`lineages`, `_by_task`, `_works`, `completed`, `blocked`,
+  `issued`) is a replica built only by applying journal events through one function,
+  `_transition`, used for replay and for the event a live planner is about to append. An event
+  that could not be replayed is not written.
+- `MemoryJournal` (default) is volatile and per planner: behaviour as before for callers that
+  pass no journal. `DirJournal(root)` stores one immutable file per event,
+  `<root>/<seq:012d>.json`, written to a temp file, fsynced and created with `os.link`, which
+  never overwrites.
+- Admission across planners: a commit replays to the journal head, decides against that state
+  and appends event `seq+1`; if another writer created that name first nothing was written, and
+  the commit replays and decides again, at most `MAX_COMMIT_RETRIES` (16) times, then raises
+  `JOURNAL_CONTENDED`.
+- Write-ahead: the event is appended before the matching record is published. `recover()`
+  re-publishes the current work of executing lineages and the issued request of verifying ones
+  (publishing is idempotent) and re-feeds RESULT / VERDICT records this identity had claimed
+  from a transport that keeps them (`claimed_records`, i.e. the spool) but that are not in the
+  journal.
+- Replay is fail-closed: a non-contiguous directory, a broken chain, an unknown version or
+  event, a bad seal, a second holder over a held scope, a repair that changes the lineage's
+  repository or `allowed_paths`, a TERMINAL on a terminal lineage, a RELEASE without a 40-hex
+  revision all raise `PlannerError`; `Planner(...)` then does not construct.
+- `fleet_status(journal)` returns one row per lineage (phase, reason, current task / execution
+  id, work seal, repository, base revision, allowed paths, holds_scope, scope_released,
+  dispatched_by, last_seq) from the journal alone, without a planner object.
+- `fail_execution(task_id, reason)` is refused unless `task_id` is the current work of a
+  lineage in DISPATCHED or REPAIR_DISPATCHED.
+- `release_scope(root, merged_revision=<40-hex>)` releases the scope of an INTEGRATION_READY
+  lineage. The phase stays INTEGRATION_READY, the task id stays used.
+- `dev_queue.select_next` rejects a bare string or non-string ids as `in_flight`.
+
+Behaviour changes for existing callers:
+- `Planner.dispatch` records the lineage before it publishes. If `transport.publish` raises,
+  the lineage exists as DISPATCHED and holds its scope; before, nothing was recorded.
+- `fail_execution` now raises for a VERIFYING, INTEGRATION_READY, terminal or superseded task.
+- `Planner.select`, `dispatch` and `pump` start with a journal replay.
+- No existing test was edited.
+
+Limits:
+- Nothing in `src` constructs a `DirJournal`; with the default journal nothing is durable and
+  two planners share nothing.
+- `DirJournal` needs a directory with atomic `link`. Tested on one host with threads; no
+  multi-process or multi-host run, no network file system.
+- A deleted tail of the journal cannot be detected from the journal alone.
+- `release_scope` records a revision the caller asserts; the planner does not check that it is
+  a merge of the candidate.
+- No leases, heartbeats, executor assignment or reassignment: a holder whose executor died
+  stays a holder until `fail_execution` or a verdict moves the lineage.
+- A record whose commit fails with `JOURNAL_CONTENDED` inside `pump` is quarantined like any
+  other refused record; with the spool it is picked up again by `recover()`, with the
+  in-memory transport it is lost.
+- The quarantine list is not journalled. The journal grows without bound; no compaction.
+- Path overlap only; the fabric adapter's serial-dispatch rule is untouched.
+- This is not multi-agent delivery: no live run has exercised two lineages.
+
+Commands and results (`PYTHONPATH=<worktree>/src`, `--no-cov -o addopts=""`):
+- `pytest tests/unit/test_orchestration_dev_planner_journal.py` (new): 22 passed; five
+  consecutive runs, 22 passed each.
+- The same file against main's `dev_planner.py`: 1 error during collection (the imported
+  names do not exist there).
+- `test_orchestration_dev_loop_contracts.py`, `_dev_queue.py`, `_dev_fabric_adapter.py`,
+  `_dev_package.py`, `_dev_package_repair.py`, `_dev_crosswalk.py`: 749 passed.
+- Those six plus `_dev_spool_transport.py` and `_dev_planner_journal.py`: 782 passed.
+- `pytest tests/unit -k "orchestration_dev or dev_package or executor or agent_execute or
+  workflow or autonomy or global_foundation or github_port"`: 1480 passed, 5152 deselected.
+- `ruff check .`: clean. `ruff format --check` on the four changed code files: clean.
+  `mypy src`: no issues in 415 source files.
+- The full test suite was not run locally.
+
+Not done / open: see the backlog section "Multi-agent autonomous delivery (governed)".
+Independent verification and exact-head CI are recorded on the PR, not here.

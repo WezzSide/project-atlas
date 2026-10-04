@@ -11,26 +11,55 @@ Not a merge actor: INTEGRATION_READY means "verified candidate exists"; governan
 Write-scope admission (ATLAS-DEVQ-0006): ``select`` skips tasks that are in flight, and
 ``dispatch`` always refuses a new lineage whose sealed ``allowed_paths`` overlap those of a
 lineage that still holds its scope (``SCOPE_HOLDING``); there is no switch to turn the check
-off. This is admission control, not authority: it grants nothing and it is not a concurrency
-guarantee. Limits:
-  * in-memory only: a planner restart forgets every holder;
-  * one planner process: nothing is guaranteed across processes or hosts;
-  * path overlap only: no semantic conflict detection (a generated file two lineages both rewrite,
-    a whole-suite acceptance command);
-  * the planner cannot observe a merge, so an INTEGRATION_READY lineage holds its scope for the
-    lifetime of this planner object; no transition releases it (the pre-existing, unguarded
-    ``fail_execution`` would move it to BLOCKED and so drop it; nothing in ``src`` calls that);
-  * it does not lift the fabric adapter's serial-dispatch rule.
+off. This is admission control, not authority: it grants nothing.
+
+Coordination journal (ATLAS-DEVQ-0007): every state change of the planner is ONE event in an
+append-only journal, and the planner's in-memory state is only a replica obtained by replaying
+it. The journal is the single source of truth for lineage phase and scope ownership; there is no
+second record of it. Properties:
+  * write-ahead: the event is appended (and, for ``DirJournal``, fsynced) before the matching
+    record is published; ``recover`` re-publishes what a crash left unpublished (publishing is
+    idempotent) and re-feeds records this identity had claimed but not yet journalled;
+  * linearisable admission: event ``n`` exists only by EXCLUSIVE CREATION of its name
+    (``os.link``, the primitive the spool uses); a writer first replays everything up to
+    ``n - 1``, decides against that state, and loses with no effect if another writer created
+    ``n`` first, after which it replays and decides again. Two planner processes sharing the
+    journal directory therefore cannot both admit colliding scopes;
+  * reconstructable: a new ``Planner`` on the same journal replays to the same lineages, scope
+    holders, issued requests, completed and blocked sets; ``fleet_status`` derives the fleet
+    view from the journal alone, without a planner object;
+  * tamper-evident, fail-closed: events are hash-chained (``prev``) and carry the sealed records
+    they refer to; a gap, a broken chain, a bad seal or an event that is not a legal transition
+    makes replay raise, and the planner then does nothing.
+Limits (what this is NOT):
+  * the default ``MemoryJournal`` is per-process and volatile; durability and cross-process
+    admission exist only with a ``DirJournal`` on a directory that offers atomic ``link``;
+  * a deleted TAIL of the journal is undetectable from the journal alone (no external anchor);
+  * path overlap only: no semantic conflict detection (a generated file two lineages both
+    rewrite, a whole-suite acceptance command);
+  * the planner cannot observe a merge: an INTEGRATION_READY lineage holds its scope until
+    ``release_scope`` is called with the merge revision, which the CALLER asserts; the planner
+    does not verify it. Releasing a scope grants nothing;
+  * no leases, heartbeats or executor assignment: a holder whose executor died stays a holder
+    until its lineage reaches a releasing phase;
+  * the quarantine list is evidence in memory only and is not journalled;
+  * it does not lift the fabric adapter's serial-dispatch rule, and no live run has exercised
+    two lineages.
 """
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import json
+import os
 import re
+import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any
+from pathlib import Path
+from typing import Any, Protocol
 
 from project_atlas.orchestration.autonomy.dev_contracts import (
     ContractError,
@@ -48,7 +77,13 @@ from project_atlas.orchestration.autonomy.dev_contracts import (
     works_collide,
 )
 from project_atlas.orchestration.autonomy.dev_queue import QueueItem, Selection, select_next
-from project_atlas.orchestration.autonomy.dev_transport import Channel, DevTransport
+from project_atlas.orchestration.autonomy.dev_transport import (
+    Channel,
+    DevTransport,
+    Record,
+    decode,
+    encode,
+)
 
 
 class Phase(StrEnum):
@@ -79,6 +114,9 @@ class LineageState:
     result: ResultRecord | None = None
     history: list[str] = field(default_factory=list)
     reason: str = ""
+    scope_released: str = ""  # merge revision the caller asserted in ``release_scope``
+    dispatched_by: str = ""  # planner identity that journalled the DISPATCH
+    last_seq: int = 0  # journal sequence number of the lineage's latest event
 
 
 class PlannerError(ContractError):
@@ -90,6 +128,302 @@ MAX_RAISES_PER_PASS = 64  # a transport that keeps raising without consuming mus
 _REPAIR_SUFFIX = re.compile(r"-R[0-9]+$")  # reserved for planner-materialised repair tasks
 
 
+JOURNAL_VERSION = 1
+MAX_COMMIT_RETRIES = 16  # lost exclusive-create races before a commit gives up (never spins)
+_EVENT_FILE = re.compile(r"^[0-9]{12}\.json$")
+_REVISION = re.compile(r"^[0-9a-f]{40}$")
+_EXECUTING = frozenset({Phase.DISPATCHED, Phase.REPAIR_DISPATCHED})
+
+
+class Journal(Protocol):
+    def read(self, after: int) -> list[bytes]:
+        """Raw events with sequence number > ``after``, contiguous and in order."""
+
+    def append(self, seq: int, data: bytes) -> bool:
+        """Create event ``seq`` iff it is the next one; False when it already exists."""
+
+
+class MemoryJournal:
+    """Volatile, single-process journal (the default). Same contract, no durability."""
+
+    def __init__(self) -> None:
+        self._events: list[bytes] = []
+
+    def read(self, after: int) -> list[bytes]:
+        return self._events[after:]
+
+    def append(self, seq: int, data: bytes) -> bool:
+        if seq != len(self._events) + 1:
+            return False
+        self._events.append(data)
+        return True
+
+
+class DirJournal:
+    """Durable journal: one immutable file per event, ``<root>/<seq:012d>.json``.
+
+    ``append`` writes a temp file, fsyncs it and creates the final name with ``os.link``, which
+    never overwrites: of several processes appending the same sequence number exactly one
+    succeeds. Needs a directory with atomic ``link`` (local disk, a mounted volume).
+    """
+
+    def __init__(self, root: Path) -> None:
+        self.root = Path(root)
+        self.root.mkdir(parents=True, exist_ok=True)
+
+    def _path(self, seq: int) -> Path:
+        return self.root / f"{seq:012d}.json"
+
+    def read(self, after: int) -> list[bytes]:
+        if after == 0:  # full open: the directory must hold exactly events 1..k
+            names = sorted(p.name for p in self.root.iterdir() if not p.name.startswith(".tmp-"))
+            expected = [f"{n:012d}.json" for n in range(1, len(names) + 1)]
+            if names != expected:
+                odd = sorted(set(names) ^ set(expected))[:3]
+                raise PlannerError(f"JOURNAL_CORRUPT:directory is not events 1..k: {odd}")
+        out: list[bytes] = []
+        seq = after + 1
+        while True:
+            try:
+                out.append(self._path(seq).read_bytes())
+            except FileNotFoundError:
+                return out
+            seq += 1
+
+    def append(self, seq: int, data: bytes) -> bool:
+        final = self._path(seq)
+        if final.exists() or (seq > 1 and not self._path(seq - 1).exists()):
+            return False
+        fd, tmp = tempfile.mkstemp(dir=self.root, prefix=".tmp-")
+        try:
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(data)
+                fh.flush()
+                os.fsync(fh.fileno())
+            try:
+                os.link(tmp, final)  # atomic, refuses to overwrite: the linearisation point
+            except FileExistsError:
+                return False
+        finally:
+            os.unlink(tmp)
+        with contextlib.suppress(OSError):  # directory fsync is best effort (not on Windows)
+            dfd = os.open(self.root, os.O_RDONLY)
+            try:
+                os.fsync(dfd)
+            finally:
+                os.close(dfd)
+        return True
+
+
+@dataclass
+class FleetState:
+    """Replica of the journal: everything here is derived by replay, nothing is authoritative."""
+
+    seq: int = 0
+    head: str = ""  # sha256 of the latest event's bytes ("" before the first event)
+    lineages: dict[str, LineageState] = field(default_factory=dict)
+    by_task: dict[str, str] = field(default_factory=dict)  # task_id -> lineage_root
+    works: dict[str, WorkItem] = field(default_factory=dict)
+    completed: set[str] = field(default_factory=set)
+    blocked: dict[str, str] = field(default_factory=dict)
+    issued: dict[str, VerificationRequest] = field(default_factory=dict)
+    seals: set[str] = field(default_factory=set)  # result/verdict seals already journalled
+
+
+def holds_scope(st: LineageState) -> bool:
+    return st.phase in SCOPE_HOLDING and not st.scope_released
+
+
+def _record[T: Record](ev: dict[str, Any], key: str, kind: type[T]) -> T:
+    rec = decode(ev[key])  # verifies the seal
+    if not isinstance(rec, kind):
+        raise PlannerError(f"journal field {key} is not a {kind.__name__}")
+    return rec
+
+
+def _transition(state: FleetState, ev: dict[str, Any], raw: bytes) -> Callable[[], None]:
+    """Validate one journal event against ``state``; return the thunk that applies it.
+
+    Everything is checked BEFORE the thunk exists, so a refused event changes nothing. Used both
+    for replay and, before the append, for the event a live planner is about to write: an event
+    that could not be replayed is never written.
+    """
+    if ev.get("v") != JOURNAL_VERSION:
+        raise PlannerError(f"unsupported journal version {ev.get('v')!r}")
+    if ev.get("seq") != state.seq + 1 or ev.get("prev") != state.head:
+        raise PlannerError("journal sequence or hash chain is broken")
+    kind, root, planner = ev["event"], ev["root"], ev["planner"]
+    if not isinstance(root, str) or not isinstance(planner, str):
+        raise PlannerError("journal event root/planner must be strings")
+    seq, head = state.seq + 1, hashlib.sha256(raw).hexdigest()
+    steps: list[Callable[[], None]] = []
+    st = state.lineages.get(root)
+
+    def note(line: str) -> None:
+        assert st is not None
+        st.history.append(line)
+        st.last_seq = seq
+
+    if kind == "DISPATCH":
+        work = _record(ev, "work", WorkItem)
+        if work.lineage_root != root or work.task_id != root:
+            raise PlannerError("DISPATCH work is not the root work of its lineage")
+        if root in state.lineages or root in state.by_task:
+            raise PlannerError("lineage/task id already in use")
+        for other in sorted(state.lineages):
+            holder = state.lineages[other]
+            if holds_scope(holder):
+                pairs = works_collide(work, holder.work)
+                if pairs:
+                    raise PlannerError(
+                        f"SCOPE_COLLISION:{other}:" + ",".join(f"{a}|{b}" for a, b in pairs)
+                    )
+
+        def do_dispatch() -> None:
+            state.lineages[root] = LineageState(
+                root,
+                Phase.DISPATCHED,
+                work,
+                history=[f"DISPATCHED:{work.task_id}"],
+                dispatched_by=planner,
+                last_seq=seq,
+            )
+            state.by_task[work.task_id] = root
+            state.works[work.task_id] = work
+
+        steps.append(do_dispatch)
+    elif st is None:
+        raise PlannerError(f"{kind} for an unknown lineage {root}")
+    elif kind == "RESULT":
+        res = _record(ev, "result", ResultRecord)
+        req = _record(ev, "request", VerificationRequest)
+        if st.phase not in _EXECUTING or res.work_seal != st.work.seal:
+            raise PlannerError("RESULT does not answer the lineage's dispatched work")
+        if req.result_seal != res.seal or req.task_id != res.task_id:
+            raise PlannerError("RESULT request does not cover the journalled result")
+
+        def do_result() -> None:
+            state.issued[res.task_id] = req
+            state.seals.add(res.seal)
+            st.result = res
+            st.phase = Phase.VERIFYING
+            note(f"VERIFYING:{res.task_id}:{req.verifier_identity}")
+
+        steps.append(do_result)
+    elif kind in ("READY", "REPAIR"):
+        ver = _record(ev, "verdict", VerdictRecord)
+        issued = state.issued.get(ver.task_id)
+        if st.phase is not Phase.VERIFYING or issued is None or ver.request_seal != issued.seal:
+            raise PlannerError(f"{kind} without the outstanding verification it answers")
+        if kind == "READY":
+            if ver.verdict is not Verdict.PASS:
+                raise PlannerError("READY needs a PASS verdict")
+
+            def do_ready() -> None:
+                state.seals.add(ver.seal)
+                st.phase = Phase.INTEGRATION_READY
+                note(f"INTEGRATION_READY:{ver.task_id}")
+                state.completed.add(root)
+
+            steps.append(do_ready)
+        else:
+            rw = _record(ev, "work", WorkItem)
+            if rw.lineage_root != root or rw.task_id in state.by_task:
+                raise PlannerError("REPAIR work is foreign or its task id is already in use")
+            if (rw.repository, rw.allowed_paths) != (st.work.repository, st.work.allowed_paths):
+                raise PlannerError("REPAIR work may not change the lineage's repository or scope")
+
+            def do_repair() -> None:
+                state.seals.add(ver.seal)
+                state.works[rw.task_id] = rw
+                state.by_task[rw.task_id] = root
+                st.work, st.result = rw, None
+                st.phase = Phase.REPAIR_DISPATCHED
+                note(f"REPAIR_DISPATCHED:{rw.task_id}")
+
+            steps.append(do_repair)
+    elif kind == "TERMINAL":
+        phase, reason = Phase(ev["phase"]), ev["reason"]
+        if phase not in (Phase.BLOCKED, Phase.OWNER_REQUIRED) or not isinstance(reason, str):
+            raise PlannerError("TERMINAL must be BLOCKED or OWNER_REQUIRED with a reason")
+        if st.phase in TERMINAL:
+            raise PlannerError(f"lineage {root} is already terminal ({st.phase.value})")
+        evidence = ev.get("evidence", "")
+
+        def do_terminal() -> None:
+            if evidence:
+                state.seals.add(evidence)
+            st.phase, st.reason = phase, reason
+            note(f"{phase.value}:{reason}")
+            state.blocked[root] = f"{phase.value}:{reason}"
+
+        steps.append(do_terminal)
+    elif kind == "RELEASE":
+        revision = ev["evidence"]
+        if st.phase is not Phase.INTEGRATION_READY or st.scope_released:
+            raise PlannerError("only an unreleased INTEGRATION_READY lineage can release scope")
+        if not isinstance(revision, str) or not _REVISION.match(revision):
+            raise PlannerError("RELEASE needs the 40-hex merge revision as evidence")
+
+        def do_release() -> None:
+            st.scope_released = revision
+            note(f"SCOPE_RELEASED:{revision}")
+
+        steps.append(do_release)
+    else:
+        raise PlannerError(f"unknown journal event {kind!r}")
+
+    def apply() -> None:
+        for step in steps:
+            step()
+        state.seq, state.head = seq, head
+
+    return apply
+
+
+def replay(journal: Journal, state: FleetState) -> int:
+    """Apply every journal event ``state`` has not seen; returns how many. Fail-closed."""
+    n = 0
+    for raw in journal.read(state.seq):
+        try:
+            ev = json.loads(raw)
+            if not isinstance(ev, dict):
+                raise PlannerError("event is not an object")
+            _transition(state, ev, raw)()
+        except (ValueError, KeyError, TypeError, RecursionError) as exc:
+            raise PlannerError(f"JOURNAL_CORRUPT:event {state.seq + 1}: {exc}") from exc
+        n += 1
+    return n
+
+
+def fleet_status(journal: Journal) -> tuple[dict[str, Any], ...]:
+    """Fleet view derived from the journal alone: one row per lineage, ordered by root.
+
+    A read-only projection for observation. It is not authority and not a scheduler; a row's
+    ``holds_scope`` is what ``dispatch`` will compare a new work item against.
+    """
+    state = FleetState()
+    replay(journal, state)
+    return tuple(
+        {
+            "lineage_root": root,
+            "phase": st.phase.value,
+            "reason": st.reason,
+            "task_id": st.work.task_id,
+            "execution_id": st.work.execution_id,
+            "work_seal": st.work.seal,
+            "repository": st.work.repository,
+            "base_revision": st.work.base_revision,
+            "allowed_paths": st.work.allowed_paths,
+            "holds_scope": holds_scope(st),
+            "scope_released": st.scope_released,
+            "dispatched_by": st.dispatched_by,
+            "last_seq": st.last_seq,
+        }
+        for root, st in sorted(state.lineages.items())
+    )
+
+
 class Planner:
     def __init__(
         self,
@@ -97,6 +431,7 @@ class Planner:
         *,
         identity: str,
         verifier_identities: tuple[str, ...],
+        journal: Journal | None = None,
     ) -> None:
         if not verifier_identities or not isinstance(verifier_identities, tuple | list):
             raise PlannerError("at least one verifier identity is required (as a tuple)")
@@ -118,29 +453,97 @@ class Planner:
         self.transport = transport
         self.identity = identity
         self.verifiers = tuple(verifier_identities)  # own copy: later mutation cannot bypass checks
-        self.lineages: dict[str, LineageState] = {}
-        self._by_task: dict[str, str] = {}  # task_id -> lineage_root
-        self._works: dict[str, WorkItem] = {}
-        self.completed: set[str] = set()
-        self.blocked: dict[str, str] = {}
-        self.issued: dict[str, VerificationRequest] = {}  # task_id -> the request we issued
+        self.journal: Journal = MemoryJournal() if journal is None else journal
+        self.state = FleetState()
+        # the replica's containers, under their established names (same objects, never rebound)
+        self.lineages = self.state.lineages
+        self._by_task = self.state.by_task
+        self._works = self.state.works
+        self.completed = self.state.completed
+        self.blocked = self.state.blocked
+        self.issued = self.state.issued  # task_id -> the request issued for it
         self.quarantined: list[tuple[str, str, str]] = []  # (channel, seal, reason)
+        self.sync()  # a restarted planner starts from what the journal says, or not at all
+
+    # -- journal ---------------------------------------------------------------------------
+    def sync(self) -> int:
+        """Replay journal events written since the last look (by this or another planner)."""
+        return replay(self.journal, self.state)
+
+    def _commit(self, decide: Callable[[], dict[str, Any]]) -> dict[str, Any]:
+        """Decide against the current journal state and append the ONE resulting event.
+
+        ``decide`` runs after a fresh replay and raises to refuse. If another writer takes the
+        sequence number first, nothing was written: replay and decide again, a bounded number
+        of times. In-memory state changes only by applying the event that was appended.
+        """
+        for _ in range(MAX_COMMIT_RETRIES):
+            self.sync()
+            ev = {
+                "v": JOURNAL_VERSION,
+                "seq": self.state.seq + 1,
+                "prev": self.state.head,
+                "planner": self.identity,
+                **decide(),
+            }
+            raw = json.dumps(ev, sort_keys=True).encode()
+            apply = _transition(self.state, ev, raw)
+            if self.journal.append(ev["seq"], raw):
+                apply()
+                return ev
+        raise PlannerError("JOURNAL_CONTENDED: could not append after bounded retries")
+
+    def fleet_status(self) -> tuple[dict[str, Any], ...]:
+        """``fleet_status`` of this planner's journal (derived from the journal, not from self)."""
+        return fleet_status(self.journal)
+
+    def recover(self) -> list[str]:
+        """After a restart: finish what a crash may have left between journal and transport.
+
+        Re-publishes the current work of every executing lineage and the issued request of every
+        verifying one (idempotent: an already published record is a no-op), then re-feeds RESULT
+        and VERDICT records this identity had claimed from a transport that keeps them
+        (``claimed_records``) but that are not in the journal yet. Returns what it did.
+        """
+        self.sync()
+        done: list[str] = []
+        for root, st in sorted(self.lineages.items()):
+            rec: Record | None = None
+            if st.phase in _EXECUTING:
+                rec = st.work
+            elif st.phase is Phase.VERIFYING:
+                rec = self.issued.get(st.work.task_id)
+            if rec is not None and self.transport.publish(rec):
+                done.append(f"REPUBLISHED:{root}:{rec.KIND.value}")
+        claimed = getattr(self.transport, "claimed_records", None)
+        if claimed is not None:
+            handlers: tuple[tuple[Channel, Callable[[Any], None]], ...] = (
+                (Channel.RESULT, self._on_result),
+                (Channel.VERDICT, self._on_verdict),
+            )
+            for channel, handler in handlers:
+                for rec in claimed(channel, identity=self.identity):
+                    if rec.seal in self.state.seals:
+                        continue
+                    before = self.state.seq
+                    self._guarded(channel.value, rec.seal, handler, rec)
+                    if self.state.seq != before:
+                        done.append(f"REPLAYED:{channel.value}:{rec.seal}")
+        return done
 
     # -- selection / dispatch -------------------------------------------------------------
     def in_flight(self) -> frozenset[str]:
         """Lineage roots (task ids) whose phase is scope-holding (see ``SCOPE_HOLDING``)."""
-        return frozenset(r for r, st in self.lineages.items() if st.phase in SCOPE_HOLDING)
+        return frozenset(r for r, st in self.lineages.items() if holds_scope(st))
 
     def scope_holders(self) -> tuple[WorkItem, ...]:
         """The CURRENT sealed work of every scope-holding lineage, ordered by lineage root.
 
         For a lineage in repair this is its current repair work, which carries the lineage's
-        original ``allowed_paths`` (``materialize_repair`` never changes scope). In-memory view
-        of this planner object only.
+        original ``allowed_paths`` (a journalled repair may not change scope). The replica as of
+        the last ``sync``.
         """
-        return tuple(
-            st.work for _, st in sorted(self.lineages.items()) if st.phase in SCOPE_HOLDING
-        )
+        return tuple(st.work for _, st in sorted(self.lineages.items()) if holds_scope(st))
 
     def select(self, items: list[QueueItem]) -> Selection:
         """Next ranked admissible item, skipping tasks that are in flight (``IN_FLIGHT``).
@@ -148,6 +551,7 @@ class Planner:
         Selection does not look at write scopes (a ``QueueItem`` carries none); a selected item
         can still be refused by ``dispatch`` with ``SCOPE_COLLISION``.
         """
+        self.sync()
         return select_next(
             items, completed=self.completed, blocked=self.blocked, in_flight=self.in_flight()
         )
@@ -163,17 +567,13 @@ class Planner:
         colliding holder in lineage-root order, with all of its colliding pairs as normalised
         comparison keys in sorted order. Nothing is published, no state changes, and the task id
         stays usable for a later dispatch. A holder whose seal no longer verifies is an error.
-        See the module docstring for what this check does not cover.
+        The decision is taken against the journal and committed as its next event, so it also
+        holds against other planners on the same journal. The DISPATCH event is written before
+        the work is published; if publishing fails the lineage is DISPATCHED and ``recover``
+        publishes it. See the module docstring for what this check does not cover.
         """
-        # admission as before ATLAS-DEVQ-0006 (no in-flight filter here), so a repeated dispatch
-        # of a live task id keeps its existing refusal below
-        sel = select_next([item], completed=self.completed, blocked=self.blocked)
-        if sel.selected is None:
-            raise PlannerError(f"task not admissible: {sel.skipped}")
         if execution_ordinal < 1:
             raise PlannerError("execution_ordinal must be >= 1")
-        if item.task_id in self.lineages or item.task_id in self._by_task:
-            raise PlannerError("lineage/task id already in use")
         if _REPAIR_SUFFIX.search(item.task_id):
             raise PlannerError("task id suffix -R<n> is reserved for repair tasks")
         reserved = {
@@ -185,32 +585,45 @@ class Planner:
         } & set(work_fields)
         if reserved:
             raise PlannerError(f"work_fields may not override reserved keys: {sorted(reserved)}")
-        work = make_work(
-            task_id=item.task_id,
-            execution_id=f"{item.task_id}-E{execution_ordinal}",
-            lineage_root=item.task_id,
-            required_role=Role.IMPLEMENTER,
-            max_attempts=item.max_attempts,
-            **work_fields,
-        )
-        for holder in self.scope_holders():
-            pairs = works_collide(work, holder)
-            if pairs:
-                raise PlannerError(
-                    f"SCOPE_COLLISION:{holder.lineage_root}:"
-                    + ",".join(f"{a}|{b}" for a, b in pairs)
-                )
+
+        def decide() -> dict[str, Any]:
+            # no in-flight filter here, so a repeated dispatch of a live task id keeps its
+            # existing refusal below
+            sel = select_next([item], completed=self.completed, blocked=self.blocked)
+            if sel.selected is None:
+                raise PlannerError(f"task not admissible: {sel.skipped}")
+            if item.task_id in self.lineages or item.task_id in self._by_task:
+                raise PlannerError("lineage/task id already in use")
+            work = make_work(
+                task_id=item.task_id,
+                execution_id=f"{item.task_id}-E{execution_ordinal}",
+                lineage_root=item.task_id,
+                required_role=Role.IMPLEMENTER,
+                max_attempts=item.max_attempts,
+                **work_fields,
+            )
+            for holder in self.scope_holders():
+                pairs = works_collide(work, holder)
+                if pairs:
+                    raise PlannerError(
+                        f"SCOPE_COLLISION:{holder.lineage_root}:"
+                        + ",".join(f"{a}|{b}" for a, b in pairs)
+                    )
+            return {"event": "DISPATCH", "root": item.task_id, "work": encode(work)}
+
+        self._commit(decide)
+        work = self.lineages[item.task_id].work
         self.transport.publish(work)
-        self.lineages[item.task_id] = LineageState(
-            item.task_id, Phase.DISPATCHED, work, history=[f"DISPATCHED:{work.task_id}"]
-        )
-        self._by_task[work.task_id] = item.task_id
-        self._works[work.task_id] = work
         return work
 
     # -- pump -------------------------------------------------------------------------------
     def pump(self) -> int:
-        """Consume every available result and verdict once; returns records processed."""
+        """Consume every available result and verdict once; returns records processed.
+
+        Starts with a journal replay, so a corrupt journal raises here instead of turning every
+        claimed record into a quarantine entry.
+        """
+        self.sync()
         n = 0
         for channel, handler in (
             (Channel.RESULT, self._on_result),
@@ -252,82 +665,124 @@ class Planner:
         return self.lineages[root]
 
     def _on_result(self, res: ResultRecord) -> None:
-        st = self._lineage_for(res.task_id)
-        work = st.work
-        if (
-            st.phase not in (Phase.DISPATCHED, Phase.REPAIR_DISPATCHED)
-            or res.task_id != work.task_id
-        ):
-            raise PlannerError("result is not expected in this phase / for the current work")
-        if res.work_seal != work.seal:
-            raise PlannerError("result does not answer the dispatched work")
-        if (res.execution_id, res.repository, res.base_revision) != (
-            work.execution_id,
-            work.repository,
-            work.base_revision,
-        ):
-            raise PlannerError("result identity/repository/base does not match the dispatched work")
-        others = [v for v in self.verifiers if not same_identity(v, res.executor_identity)]
-        if not others:
-            self._terminal(st, Phase.BLOCKED, "NO_INDEPENDENT_VERIFIER")
-            return
-        # deterministic (no PYTHONHASHSEED dependence): stable index from the task id digest
-        verifier = others[int(hashlib.sha256(res.task_id.encode()).hexdigest(), 16) % len(others)]
-        req = make_verification_request(work, res, verifier_identity=verifier)
-        self.transport.publish(req)
-        self.issued[res.task_id] = req
-        st.result = res
-        st.phase = Phase.VERIFYING
-        st.history.append(f"VERIFYING:{res.task_id}:{verifier}")
+        def decide() -> dict[str, Any]:
+            st = self._lineage_for(res.task_id)
+            work = st.work
+            if st.phase not in _EXECUTING or res.task_id != work.task_id:
+                raise PlannerError("result is not expected in this phase / for the current work")
+            if res.work_seal != work.seal:
+                raise PlannerError("result does not answer the dispatched work")
+            if (res.execution_id, res.repository, res.base_revision) != (
+                work.execution_id,
+                work.repository,
+                work.base_revision,
+            ):
+                raise PlannerError(
+                    "result identity/repository/base does not match the dispatched work"
+                )
+            others = [v for v in self.verifiers if not same_identity(v, res.executor_identity)]
+            if not others:
+                return self._terminal(st, Phase.BLOCKED, "NO_INDEPENDENT_VERIFIER", res.seal)
+            # deterministic (no PYTHONHASHSEED dependence): stable index from the task id digest
+            verifier = others[
+                int(hashlib.sha256(res.task_id.encode()).hexdigest(), 16) % len(others)
+            ]
+            req = make_verification_request(work, res, verifier_identity=verifier)
+            return {
+                "event": "RESULT",
+                "root": st.lineage_root,
+                "result": encode(res),
+                "request": encode(req),
+            }
+
+        ev = self._commit(decide)
+        if ev["event"] == "RESULT":
+            self.transport.publish(self.issued[res.task_id])
 
     def _on_verdict(self, ver: VerdictRecord) -> None:
-        st = self._lineage_for(ver.task_id)
-        work = self._works[ver.task_id]
-        res = st.result
-        if res is None or st.phase is not Phase.VERIFYING:
-            raise PlannerError("verdict without an outstanding verification")
-        if ver.task_id != st.work.task_id:
-            raise PlannerError("verdict is for a superseded work item of this lineage")
-        req = self.issued.get(ver.task_id)
-        if req is None or ver.request_seal != req.seal or req.result_seal != res.seal:
-            raise PlannerError("verdict does not answer the issued verification request")
-        if ver.verifier_identity != req.verifier_identity or same_identity(
-            ver.verifier_identity, res.executor_identity
-        ):
-            raise PlannerError("verdict is not from the assigned independent verifier")
-        if ver.execution_id != req.execution_id:
-            raise PlannerError("verdict execution identity mismatch")
-        if ver.result_revision != res.result_revision or ver.result_tree != res.result_tree:
-            raise PlannerError("verdict judged a different artifact")
-        if ver.verdict is Verdict.PASS:
-            st.phase = Phase.INTEGRATION_READY
-            st.history.append(f"INTEGRATION_READY:{ver.task_id}")
-            self.completed.add(st.lineage_root)
-            return
-        decision = materialize_repair(work, ver, result=res)
-        if decision.action == "REPAIR":
-            assert decision.repair_work is not None
-            rw = decision.repair_work
-            if rw.task_id in self._by_task:
-                self._terminal(st, Phase.BLOCKED, "REPAIR_TASK_ID_COLLISION")
-                return
-            self.transport.publish(rw)
-            self._works[rw.task_id] = rw
-            self._by_task[rw.task_id] = st.lineage_root
-            st.work, st.result = rw, None
-            st.phase = Phase.REPAIR_DISPATCHED
-            st.history.append(f"REPAIR_DISPATCHED:{rw.task_id}")
-        elif decision.action == "OWNER_REQUIRED":
-            self._terminal(st, Phase.OWNER_REQUIRED, decision.reason)
-        else:
-            self._terminal(st, Phase.BLOCKED, decision.reason)
+        def decide() -> dict[str, Any]:
+            st = self._lineage_for(ver.task_id)
+            work = self._works[ver.task_id]
+            res = st.result
+            if res is None or st.phase is not Phase.VERIFYING:
+                raise PlannerError("verdict without an outstanding verification")
+            if ver.task_id != st.work.task_id:
+                raise PlannerError("verdict is for a superseded work item of this lineage")
+            req = self.issued.get(ver.task_id)
+            if req is None or ver.request_seal != req.seal or req.result_seal != res.seal:
+                raise PlannerError("verdict does not answer the issued verification request")
+            if ver.verifier_identity != req.verifier_identity or same_identity(
+                ver.verifier_identity, res.executor_identity
+            ):
+                raise PlannerError("verdict is not from the assigned independent verifier")
+            if ver.execution_id != req.execution_id:
+                raise PlannerError("verdict execution identity mismatch")
+            if ver.result_revision != res.result_revision or ver.result_tree != res.result_tree:
+                raise PlannerError("verdict judged a different artifact")
+            root = st.lineage_root
+            if ver.verdict is Verdict.PASS:
+                return {"event": "READY", "root": root, "verdict": encode(ver)}
+            decision = materialize_repair(work, ver, result=res)
+            if decision.action == "REPAIR":
+                assert decision.repair_work is not None
+                rw = decision.repair_work
+                if rw.task_id in self._by_task:
+                    return self._terminal(st, Phase.BLOCKED, "REPAIR_TASK_ID_COLLISION", ver.seal)
+                return {
+                    "event": "REPAIR",
+                    "root": root,
+                    "verdict": encode(ver),
+                    "work": encode(rw),
+                }
+            phase = Phase.OWNER_REQUIRED if decision.action == "OWNER_REQUIRED" else Phase.BLOCKED
+            return self._terminal(st, phase, decision.reason, ver.seal)
+
+        ev = self._commit(decide)
+        if ev["event"] == "REPAIR":
+            self.transport.publish(self.lineages[ev["root"]].work)
 
     def fail_execution(self, task_id: str, reason: str) -> None:
-        """The remote execution itself failed (no result): block that lineage only."""
-        st = self._lineage_for(task_id)
-        self._terminal(st, Phase.BLOCKED, f"EXECUTION_FAILED:{reason}")
+        """The remote execution itself failed (no result): block that lineage only.
 
-    def _terminal(self, st: LineageState, phase: Phase, reason: str) -> None:
-        st.phase, st.reason = phase, reason
-        st.history.append(f"{phase.value}:{reason}")
-        self.blocked[st.lineage_root] = f"{phase.value}:{reason}"
+        Only for the CURRENT work of a lineage that is executing (DISPATCHED or
+        REPAIR_DISPATCHED). A lineage that already has a result, is INTEGRATION_READY or is
+        terminal is refused: its scope is not released by a late or mistaken failure report.
+        """
+
+        def decide() -> dict[str, Any]:
+            st = self._lineage_for(task_id)
+            if st.phase not in _EXECUTING or task_id != st.work.task_id:
+                raise PlannerError(
+                    f"fail_execution refused: {task_id} is not the executing work of its "
+                    f"lineage (phase {st.phase.value}, current work {st.work.task_id})"
+                )
+            return self._terminal(st, Phase.BLOCKED, f"EXECUTION_FAILED:{reason}")
+
+        self._commit(decide)
+
+    def release_scope(self, lineage_root: str, *, merged_revision: str) -> None:
+        """Release the scope of an INTEGRATION_READY lineage whose candidate was merged.
+
+        ``merged_revision`` (40-hex) is recorded as the evidence the CALLER asserts; the planner
+        cannot observe a merge and does not verify it. This is not a merge, grants nothing and
+        changes no phase: it only stops the lineage from holding its write scope.
+        """
+
+        def decide() -> dict[str, Any]:
+            if lineage_root not in self.lineages:
+                raise PlannerError(f"unknown lineage {lineage_root}")
+            return {"event": "RELEASE", "root": lineage_root, "evidence": merged_revision}
+
+        self._commit(decide)
+
+    @staticmethod
+    def _terminal(
+        st: LineageState, phase: Phase, reason: str, evidence: str = ""
+    ) -> dict[str, Any]:
+        return {
+            "event": "TERMINAL",
+            "root": st.lineage_root,
+            "phase": phase.value,
+            "reason": reason,
+            "evidence": evidence,
+        }

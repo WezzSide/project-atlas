@@ -198,13 +198,19 @@ def select_next(
     A blocked task, a blocked lane, an unsatisfied dependency (including a dependency that is itself
     blocked) only removes that item from consideration; the scheduler continues with the rest.
     An ``in_flight`` task id (default: none) is skipped the same way, with reason ``IN_FLIGHT``;
-    an in-flight task does NOT satisfy a dependency (only ``completed`` does).
+    an in-flight task does NOT satisfy a dependency (only ``completed`` does). ``in_flight`` must
+    be a collection of string task ids; a bare string or a non-string id raises ``QueueError``.
     """
     ordered = rank(items)
     done = frozenset(completed)
     blk = dict(blocked or {})
     lanes = frozenset(blocked_lanes)
-    flying = frozenset(in_flight)
+    if isinstance(in_flight, str | bytes):  # a bare string would be read as its characters
+        raise QueueError("in_flight must be a collection of task ids, not a string")
+    ids = list(in_flight)
+    if not all(isinstance(i, str) for i in ids):
+        raise QueueError("in_flight task ids must be strings")
+    flying = frozenset(ids)
     skipped: list[tuple[str, str]] = []
     chosen: QueueItem | None = None
     for it in ordered:

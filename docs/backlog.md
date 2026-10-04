@@ -843,7 +843,9 @@ Historical roadmaps are classified as inputs and are not erased._
 No multi-agent capability is proven by anything in this section.
 
 - [x] ATLAS-DEVQ-0006: write-scope collision admission in the DEVQ planner — in-flight exclusion in `select_next`/`Planner.select`, `scope_overlap`/`works_collide`, and an always-on dispatch refusal `SCOPE_COLLISION` (no off switch). In-memory, single process, path overlap only; admission control, not authority. Lands with the PR that carries this entry.
-- [ ] `Planner.fail_execution` phase guard (it is unguarded: on INTEGRATION_READY or on a DISPATCHED lineage with a live run it releases the scope); validate the `in_flight` argument of `select_next`.
-- [ ] Ledger-derived fleet/mission status with durable scope holders (survives a planner restart; release on observed merge).
+- [x] ATLAS-DEVQ-0007: planner coordination journal — every planner state change is one hash-chained event; `DirJournal` makes scope ownership durable and admission linearisable across planner processes on one directory (exclusive creation per sequence number); restart reconstruction, `recover`, `fleet_status` derived from the journal alone, guarded `fail_execution` (executing work only), explicit `release_scope` with a caller-asserted merge revision, `in_flight` validation. Local tests only; no live run. Lands with the PR that carries this entry.
+- [ ] Leases / heartbeats and executor assignment and reassignment in the journal (a holder whose executor died stays a holder today).
+- [ ] Wire a durable journal into a driver (nothing in `src` constructs a `DirJournal` yet) and release scope from observed merge evidence instead of a caller assertion.
+- [ ] Mission identity and parent/child decomposition recorded in the journal.
 - [ ] Exact run correlation token + enforced single writer (needs a workflow change and an owner dispatch grant to prove).
 - [ ] Live evidence of two lineages in flight.
