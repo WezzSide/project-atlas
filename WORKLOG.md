@@ -16134,15 +16134,15 @@ Limits:
 - This is not multi-agent delivery: no live run has exercised two lineages.
 
 Commands and results (`PYTHONPATH=<worktree>/src`, `--no-cov -o addopts=""`):
-- `pytest tests/unit/test_orchestration_dev_planner_journal.py` (new): 47 passed; twenty
-  consecutive runs, 47 passed each.
+- `pytest tests/unit/test_orchestration_dev_planner_journal.py` (new): 51 passed; twenty
+  consecutive runs, 51 passed each.
 - The same file against main's `dev_planner.py`: 1 error during collection (the imported
   names do not exist there).
 - `test_orchestration_dev_loop_contracts.py`, `_dev_queue.py`, `_dev_fabric_adapter.py`,
   `_dev_package.py`, `_dev_package_repair.py`, `_dev_crosswalk.py`: 749 passed.
-- Those six plus `_dev_spool_transport.py` and `_dev_planner_journal.py`: 807 passed.
+- Those six plus `_dev_spool_transport.py` and `_dev_planner_journal.py`: 811 passed.
 - `pytest tests/unit -k "orchestration_dev or dev_package or executor or agent_execute or
-  workflow or autonomy or global_foundation or github_port"`: 1505 passed, 5152 deselected.
+  workflow or autonomy or global_foundation or github_port"`: 1509 passed, 5152 deselected.
 - `ruff check .`: clean. `ruff format --check` on the four changed code files: clean.
   `mypy src`: no issues in 415 source files.
 - The full test suite was not run locally.
@@ -16163,8 +16163,11 @@ conflicting admissions against divergent histories):
   has a successor must have an acknowledgement (`JOURNAL_UNANCHORED`; a writer acknowledges
   all it replayed before it appends, so only the newest event can be unacknowledged); the
   journal may not end below an acknowledged event, the highest one on a full open
-  (`JOURNAL_TRUNCATED`). Mismatches are `JOURNAL_DIVERGED`. All are `JournalCorrupt`: nothing
-  is published and the replica does not change. A planner acknowledges the events it replays;
+  (`JOURNAL_TRUNCATED`). Mismatches are `JOURNAL_DIVERGED`. All are `JournalCorrupt` (an
+  unreadable or unwritable anchor or journal surfaces as `OSError`): nothing is published for
+  the failing event and the replica does not advance past the last event that passed the
+  checks; a replay applies the events before the failing one, and a `pump` may have published
+  for records handled earlier in the same pass. A planner acknowledges the events it replays;
   `fleet_status` only checks and writes nothing.
 - The reported case, as tested: planner 1 holds A and B (events 1, 2); event 2 is deleted. A
   new planner does not construct (`JOURNAL_TRUNCATED`); planner 1's `dispatch`, `select`,
@@ -16176,9 +16179,7 @@ conflicting admissions against divergent histories):
   append and the read-back; the previous head replaced between the decision and the append;
   the event acknowledged by a rival with another digest. In those cases the event file may
   remain in the journal, unacknowledged. NOT prevented, only detected afterwards: an event
-  lost or replaced after the read-back and before the publish. Its record is published; the
-  next operation of every planner raises, so no conflicting admission follows (pinned by a
-  test). `recover` checks once and then publishes the pending record of every live lineage.
+  lost or replaced after the commit's last check and before the publish; see limit (2).
 - Supported storage / failure model: event files can be lost or replaced (deleted tail, older
   copy of the journal directory restored, rival history written afterwards) while the anchor
   survives; a planner process can die at any point. Operating-system crash and power loss are
@@ -16188,16 +16189,30 @@ conflicting admissions against divergent histories):
   lost or replaced it keeps deciding against its replica, which is still the complete
   acknowledged history, so it refuses what collides, but it keeps appending to and publishing
   from a journal no new planner can open (pinned by a test);
-  (2) the publication window described above;
+  (2) the publication windows of a commit, after its last check and before the publish. The
+  new event lost or replaced after the read-back: its record is published (unless a rival's
+  acknowledgement landed first), and the next operation of every planner raises (pinned by a
+  test). The previous head lost or replaced after the re-check: the record is published and
+  the writer continues under (1), other planners stop. In neither case was a conflicting
+  admission possible afterwards (verifier probes). `recover`, and `pump` for a deferred record
+  that turned out to be journalled, check once and then publish the pending record of every
+  live lineage;
   (3) an event appended but never acknowledged is not acknowledged history: lost, nothing was
-  published for it; still stored, the next planner validates, acknowledges and publishes it,
-  whoever wrote it.
-- Outside the model: journal and anchor lost or rolled back together, or a journal of at most
-  one event whose anchor is lost (a NEW planner then admits against the shorter history,
-  pinned by a test; a planner that was running still stops). With the default sibling anchor
-  a rollback of the common parent directory is such a case. A writer who rewrites journal and
-  anchor. A missing anchor directory is re-created empty; with two or more events that does
-  not replay.
+  published for it; still stored, the next replay by any planner, including the one whose
+  commit failed, validates and acknowledges it, whoever wrote it, and `recover` publishes its
+  record (pinned by a test).
+- Outside the model, where conflicting work can be admitted: journal and anchor lost or rolled
+  back together, in whole or in part, or a journal of at most one event whose anchor is lost.
+  A NEW planner then admits against the shorter history (pinned by a test). A planner that
+  was running stops only if the head it holds is in the lost part; one whose head is at or
+  below what survived continues, and with a partly lost anchor it admits over a lost lineage
+  that a new planner refuses (pinned by a test). With the default sibling anchor a rollback
+  of the common parent directory is such a case. Also outside: the anchor alone lost under a
+  running planner (it continues against its complete replica and re-anchors only new events;
+  new planners refuse the journal; an anchor that cannot be written raises `OSError` after the
+  event was linked, nothing published; pinned by a test); a writer who rewrites journal and
+  anchor. The constructor re-creates a missing anchor directory empty; on a full open that
+  does not replay once the journal has two or more events.
 - No repair tool: after a continuity failure nothing runs until an operator restores the
   journal. `MemoryJournal` has no separate anchor (its acknowledgement is its own event list).
   Two files per event, never removed; a full open lists both directories.

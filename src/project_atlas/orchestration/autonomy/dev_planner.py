@@ -32,10 +32,15 @@ second record of it. Properties:
     unchanged, that each event it applies matches its acknowledgement, that only the newest
     event is unacknowledged, and that the journal does not end below an acknowledged event. A
     commit checks the previous head once more after its append and reads its own event back
-    before acknowledging it. Where any of this fails the operation raises ``JournalCorrupt``,
-    publishes nothing and leaves the replica unchanged. So: a planner that starts on a journal
-    that lost or had replaced any acknowledged event does not start; a running planner stops
-    when its head, or its own new event before acknowledgement, is lost or replaced;
+    before acknowledging it. Where any of this fails the operation raises (``JournalCorrupt``,
+    or an ``OSError`` when journal or anchor cannot be read or written), nothing is published
+    for the event that failed, and the replica does not advance past the last event that
+    passed the checks (a replay applies the events before the failing one; a ``pump`` may have
+    published for records it handled earlier in the same pass). So, with the anchor intact: a
+    planner that starts on a journal that lost or had replaced any acknowledged event does not
+    start; a running planner stops at its next replay when the head it holds is lost or
+    replaced, and inside a commit when its new event is lost or replaced before the read-back
+    or the previous head before the re-check;
   * linearisable admission: event ``n`` exists only by EXCLUSIVE CREATION of its name
     (``os.link``, the primitive the spool uses); a writer first replays everything up to
     ``n - 1``, decides against that state, and loses with no effect if another writer created
@@ -68,17 +73,29 @@ Limits (what this is NOT):
         lost or replaced, it keeps deciding against its replica, which is still the complete
         acknowledged history, so it admits nothing conflicting; but it goes on appending to and
         publishing from a journal that no new planner can open any more;
-      - an event lost or replaced after its writer's read-back (inside or after the
-        acknowledgement) and before the publish: the record is published; the next operation
-        of every planner stops, so no conflicting admission follows;
-      - ``recover`` checks once and then publishes the pending record of every live lineage;
-      - an event appended but never acknowledged (its writer died) is not acknowledged
-        history: if it is lost, nothing was published for it; if it is still stored, the next
-        planner validates, acknowledges and publishes it, whoever wrote it.
-    Outside the model: journal and anchor lost or rolled back TOGETHER, or a journal of at most
-    one event with its anchor lost (a new planner then accepts the shorter history; a planner
-    that was running still stops; the default anchor is a sibling directory, so a rollback of
-    the common parent is such a case); a writer who rewrites journal and anchor;
+      - the publication windows of a commit, after its last check and before the publish. The
+        NEW event lost or replaced after its read-back: the record is published (unless a
+        rival's acknowledgement landed first, which raises); the next operation of every
+        planner stops. The PREVIOUS head lost or replaced after the re-check: the record is
+        published and the writer continues under the limit above, while other planners stop.
+        In neither case was a conflicting admission possible afterwards;
+      - ``recover``, and ``pump`` for a deferred record that turned out to be journalled,
+        check once and then publish the pending record of every live lineage;
+      - an event appended but never acknowledged (its writer died or its commit failed) is not
+        acknowledged history: if it is lost, nothing was published for it; if it is still
+        stored, the next replay by any planner, including the one whose commit failed,
+        validates and acknowledges it, whoever wrote it, and ``recover`` publishes its record.
+    Outside the model, where conflicting work CAN be admitted: journal and anchor lost or
+    rolled back TOGETHER, in whole or in part, or a journal of at most one event with its
+    anchor lost. A new planner then accepts the shorter history. A planner that was running
+    stops only if the head it holds is in the lost part; one whose head is at or below what
+    survived continues, and with a partly lost anchor it can admit over a lost lineage that a
+    new planner would refuse (a running planner probes only the next acknowledgement, a full
+    open lists the anchor). The default anchor is a sibling directory, so a rollback of the
+    common parent is such a case. Also outside: the anchor alone lost under a running planner
+    (it continues against its complete replica and re-anchors only new events, while new
+    planners refuse the journal; an anchor that cannot be written raises ``OSError`` after
+    the event was linked, with nothing published); a writer who rewrites journal and anchor;
   * failing closed is the whole response: there is no repair or re-anchoring tool here, an
     operator has to restore the journal;
   * ``recover`` must be called by whoever restarts a planner; nothing in ``src`` does that yet;
@@ -208,7 +225,8 @@ class Journal(Protocol):
         """Record that event ``seq`` with this sha256 is acknowledged history.
 
         Raises ``JournalCorrupt`` when the stored event is not that event (any more) or when
-        ``seq`` is already acknowledged with a different digest. Idempotent otherwise.
+        ``seq`` is already acknowledged with a different digest; an ``OSError`` when the anchor
+        cannot be written. Idempotent otherwise.
         """
 
     def acknowledged(self, seq: int) -> str | None:
@@ -302,10 +320,12 @@ class DirJournal:
     highest acknowledged number, or whose event differs from its acknowledgement, does not
     replay. ``anchor`` defaults to the sibling directory ``<root>.ack``; put it on storage that
     does not fail together with ``root`` to cover more than the loss of event files. Every
-    planner on a journal must use the same anchor. A missing anchor directory is created: with
-    two or more events in the journal an empty or foreign anchor does not replay
-    (``JOURNAL_UNANCHORED``); with at most one event it is indistinguishable from "nothing
-    acknowledged yet".
+    planner on a journal must use the same anchor. The constructor creates a missing anchor
+    directory. On a full open (a new planner, ``fleet_status``) a journal of two or more
+    events with an empty or foreign anchor does not replay (``JOURNAL_UNANCHORED``); with at
+    most one event it is indistinguishable from "nothing acknowledged yet". A planner that is
+    already at the head does not notice an emptied anchor. IO errors on the anchor surface as
+    ``OSError``.
     """
 
     def __init__(self, root: Path, *, anchor: Path | None = None) -> None:
@@ -619,8 +639,9 @@ def _transition(state: FleetState, ev: dict[str, Any], raw: bytes) -> Callable[[
 def replay(journal: Journal, state: FleetState, *, witness: bool = False) -> int:
     """Apply every journal event ``state`` has not seen; returns how many. Fail-closed.
 
-    Continuity is checked on every call, before anything is applied and before the caller may
-    decide or publish anything:
+    Continuity is checked on every call, before the caller may decide or publish anything: the
+    head check before anything is applied, the others per event as it is applied, the
+    truncation check after the batch. Events that passed stay applied when a later one fails:
       * the event ``state`` already holds as its HEAD must still be stored with the same digest
         (events below the head are not re-read by a planner that already applied them);
       * every event applied must match its acknowledgement where one exists, and every applied
@@ -915,8 +936,9 @@ class Planner:
 
         Starts with a journal replay. Raises ``JournalCorrupt`` when the journal does not replay
         or continuity cannot be established, there or later in the pass, and re-raises an
-        ``OSError`` from the journal or the transport; a record claimed by then and not yet
-        journalled is kept in ``deferred``. Bounded per channel by ``MAX_RAISES_PER_PASS``.
+        ``OSError`` from the journal or from publishing; a record claimed by then and not yet
+        journalled is kept in ``deferred``. An error from the transport's ``claim`` is
+        quarantined instead, at most ``MAX_RAISES_PER_PASS`` times per channel and pass.
         """
         self.sync()
         n = 0

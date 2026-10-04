@@ -1232,7 +1232,7 @@ def test_readers_and_writers_racing_never_see_a_truncated_journal(tmp_path):
     for th in readers:
         th.join()
     assert errors == []
-    assert len(seen) >= 3  # the readers did run
+    assert any(0 < k < n * 12 for k in seen)  # a reader saw the journal while it was growing
     rows = fleet_status(DirJournal(tmp_path / "j"))
     assert len(rows) == n * 12 and sorted(r["last_seq"] for r in rows) == list(range(1, n * 12 + 1))
     acks = sorted(a.name for a in (tmp_path / "j.ack").iterdir() if a.suffix == ".ack")
@@ -1403,3 +1403,91 @@ def test_a_memory_journal_that_changes_under_its_planner_stops_it():
     with pytest.raises(JournalCorrupt, match="JOURNAL_DIVERGED:event 2"):
         p.select([qi("C")])
     assert len(t._queues[Channel.WORK]) == 2
+
+
+def test_a_planner_one_event_behind_a_lost_tail_stops_without_appending(tmp_path):
+    t = SpoolTransport(tmp_path / "spool")
+    p1 = planner(t, DirJournal(tmp_path / "j"), "plan-1")
+    p1.dispatch(qi("A"), **FIELDS)
+    stale = planner(t, DirJournal(tmp_path / "j"), "plan-2")  # at event 1
+    p1.dispatch(qi("B"), **fields("src/y"))  # event 2, acknowledged; stale has not seen it
+    (tmp_path / "j" / "000000000002.json").unlink()
+    for attempt in (
+        lambda: stale.dispatch(qi("C"), **fields("src/y")),  # over B's paths
+        lambda: stale.select([qi("C")]),
+        lambda: stale.recover(),
+    ):
+        with pytest.raises(JournalCorrupt, match="JOURNAL_TRUNCATED:event 2 is acknowledged"):
+            attempt()
+    assert _events(tmp_path) == ["000000000001.json"] and len(_published(tmp_path)) == 2
+    assert set(stale.lineages) == {"A"}
+
+
+def test_limit_a_failed_commit_leaves_an_event_that_the_next_replay_adopts(tmp_path):
+    """Pinned: an unacknowledged stored event is adopted by any replay, published by recover."""
+
+    class Replaced(DirJournal):
+        armed = False
+
+        def append(self, seq, data):
+            ok = super().append(seq, data)
+            if ok and self.armed:
+                self.armed = False
+                self._path(seq).write_bytes(data.replace(b"plan-1", b"plan-9"))
+            return ok
+
+    t = SpoolTransport(tmp_path / "spool")
+    j = Replaced(tmp_path / "j")
+    p = planner(t, j, "plan-1")
+    p.dispatch(qi("A"), **FIELDS)
+    j.armed = True
+    with pytest.raises(JournalCorrupt, match="JOURNAL_DIVERGED:event 2"):
+        p.dispatch(qi("B"), **fields("src/y"))
+    assert set(p.lineages) == {"A"} and len(_published(tmp_path)) == 1
+    p.select([qi("Z")])  # the same planner's next replay validates and acknowledges it
+    assert p.lineages["B"].dispatched_by == "plan-9" and p.state.seq == 2
+    assert (tmp_path / "j.ack" / "000000000002.ack").exists()
+    assert p.pump() == 0 and len(_published(tmp_path)) == 1  # not published by replay or pump
+    with pytest.raises(PlannerError, match="already in use"):
+        p.dispatch(qi("B"), **fields("src/y"))
+    assert p.recover() == ["REPUBLISHED:B:WORK"] and len(_published(tmp_path)) == 2
+
+
+def test_limit_a_running_planner_does_not_notice_the_loss_of_the_anchor_alone(tmp_path):
+    """Pinned, outside the model: only a full open sees an emptied anchor."""
+    t, p1 = _two_holders(tmp_path)
+    for a in (tmp_path / "j.ack").iterdir():
+        a.unlink()
+    p1.dispatch(qi("D"), **fields("src/d"))  # continues, against its complete replica
+    assert [a.name for a in (tmp_path / "j.ack").iterdir()] == ["000000000003.ack"]
+    with pytest.raises(PlannerError, match=r"^SCOPE_COLLISION:A:"):
+        p1.dispatch(qi("E"), **FIELDS)
+    with pytest.raises(JournalCorrupt, match="JOURNAL_UNANCHORED:event 1"):
+        planner(t, DirJournal(tmp_path / "j"), "plan-2")
+    # an anchor that cannot be written fails closed with an OSError: linked, not published
+    (tmp_path / "j.ack" / "000000000003.ack").unlink()
+    (tmp_path / "j.ack").rmdir()
+    with pytest.raises(OSError):
+        p1.dispatch(qi("F"), **fields("src/f"))
+    assert _events(tmp_path)[-1] == "000000000004.json" and len(_published(tmp_path)) == 3
+    assert "F" not in p1.lineages
+
+
+def test_limit_partial_anchor_loss_lets_a_stale_running_planner_admit_over_a_lost_lineage(
+    tmp_path,
+):
+    """Pinned, outside the model: journal tail AND part of the anchor lost together."""
+    t = SpoolTransport(tmp_path / "spool")
+    p1 = planner(t, DirJournal(tmp_path / "j"), "plan-1")
+    p1.dispatch(qi("A"), **FIELDS)
+    stale = planner(t, DirJournal(tmp_path / "j"), "plan-2")  # at event 1
+    p1.dispatch(qi("B"), **fields("src/y"))
+    p1.dispatch(qi("E"), **fields("src/e"))
+    for lost in ("j/000000000002.json", "j/000000000003.json", "j.ack/000000000002.ack"):
+        (tmp_path / lost).unlink()  # acknowledgement 3 survives
+    with pytest.raises(JournalCorrupt, match="JOURNAL_TRUNCATED:event 3"):
+        planner(t, DirJournal(tmp_path / "j"), "plan-3")  # a full open lists the anchor
+    stale.dispatch(qi("C"), **fields("src/y"))  # probes only acknowledgement 2: admitted
+    assert len(_published(tmp_path)) == 4  # A, B, E and the colliding C
+    with pytest.raises(JournalCorrupt):
+        p1.select([qi("Z")])  # the planner whose head was lost stops
