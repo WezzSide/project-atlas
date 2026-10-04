@@ -18,7 +18,8 @@ guarantee. Limits:
   * path overlap only: no semantic conflict detection (a generated file two lineages both rewrite,
     a whole-suite acceptance command);
   * the planner cannot observe a merge, so an INTEGRATION_READY lineage holds its scope for the
-    lifetime of this planner object; nothing here releases it;
+    lifetime of this planner object; no transition releases it (the pre-existing, unguarded
+    ``fail_execution`` would move it to BLOCKED and so drop it; nothing in ``src`` calls that);
   * it does not lift the fabric adapter's serial-dispatch rule.
 """
 

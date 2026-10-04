@@ -1020,6 +1020,15 @@ def test_different_repository_never_collides_in_the_planner():
     assert p.in_flight() == {"A", "B"} and _work_records(t) == 2
 
 
+def test_repository_case_variant_is_the_same_repository_and_collides():
+    t = InMemoryTransport()
+    p = scoped(t)
+    p.dispatch(qi("A"), **FIELDS)
+    with pytest.raises(PlannerError, match="SCOPE_COLLISION:A:"):
+        p.dispatch(qi("B"), **_fields("src/x", repository=FIELDS["repository"].upper()))
+    assert p.in_flight() == {"A"} and _work_records(t) == 1
+
+
 def test_a_holder_with_a_broken_seal_fails_closed():
     t = InMemoryTransport()
     p = scoped(t)

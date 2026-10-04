@@ -15854,9 +15854,12 @@ What holds and what releases scope (in this planner object):
 - holds: DISPATCHED, VERIFYING, REPAIR_DISPATCHED, INTEGRATION_READY;
 - releases: BLOCKED and OWNER_REQUIRED (every `_terminal` transition, including
   `fail_execution`, NO_INDEPENDENT_VERIFIER, REPAIR_TASK_ID_COLLISION, attempt ceiling);
-- never released: INTEGRATION_READY. The planner has no transition after it and cannot observe
-  a merge, so that scope is held until the planner object is discarded. There is no release
-  call.
+- not released by any planner transition: INTEGRATION_READY. The planner cannot observe a
+  merge, so that scope is held until the planner object is discarded. Exception: the
+  pre-existing public `fail_execution` has no phase guard; called on an INTEGRATION_READY
+  lineage it moves it to BLOCKED and releases the scope, and called on a DISPATCHED lineage it
+  releases the scope while a remote run may still be live. Nothing in `src` calls it. Not
+  changed here; listed in the backlog.
 
 Limits:
 - In-memory only: a planner restart forgets every holder.
@@ -15870,6 +15873,10 @@ Limits:
 - The `SCOPE_COLLISION` message is split on `:`, `,` and `|`; `norm_path` does not forbid those
   characters in a path or in a lineage root, so such names make the message ambiguous.
 - An OWNER_REQUIRED lineage releases its scope although its result branch may still exist.
+- The repository is compared case-insensitively and otherwise as sealed: a `.git` suffix or a
+  URL spelling of the same repository is treated as a different repository.
+- `select_next` does not validate `in_flight` (a string is iterated as characters); the planner
+  always passes a frozenset.
 
 Observation, not changed: `dev_contracts.norm_path`/`_matches` and
 `dev_package._canon_path`/`_overlaps` agree on NFC, trailing-slash stripping, `normpath`,
@@ -15881,15 +15888,15 @@ key and raises on malformed entries, so it accepts entries a package spec would 
 Commands and results (`PYTHONPATH=<worktree>/src`, `--no-cov -o addopts=""`):
 - `pytest` on the two changed test files, unchanged tree at `71f6a039`: 106 passed.
 - Those two files plus `test_orchestration_dev_fabric_adapter.py` from this change against the
-  base versions of the three source modules: 30 failed, 169 passed. Most of the 30 fail on the
+  base versions of the three source modules: 31 failed, 169 passed. Most of the 31 fail on the
   missing names (`scope_overlap`, `works_collide`, `in_flight`), not on a behavioural
   assertion.
-- This change, the two files: 136 passed.
+- This change, the two files: 137 passed.
 - `pytest` on `test_orchestration_dev_loop_contracts.py`, `_dev_queue.py`,
   `_dev_fabric_adapter.py`, `_dev_package.py`, `_dev_package_repair.py`, `_dev_crosswalk.py`:
-  646 passed.
+  647 passed.
 - `pytest tests/unit -k "orchestration_dev or dev_package or executor or agent_execute or
-  workflow or autonomy or global_foundation or github_port"`: 1355 passed, 5152 deselected.
+  workflow or autonomy or global_foundation or github_port"`: 1356 passed, 5152 deselected.
 - `ruff check .`: clean. `ruff format --check` on the six changed code files: clean.
   `mypy src`: no issues in 415 source files.
 - The full test suite was not run.
@@ -15898,4 +15905,4 @@ Not done / open:
 - Owner adoption point: INTEGRATION_READY keeps holding scope with no release call.
 - Durable scope holders, a release on merge, cross-process exclusion.
 - No adapter or workflow wiring; no live run.
-- Not independently verified.
+- Independent verification and exact-head CI are recorded on the PR, not here.

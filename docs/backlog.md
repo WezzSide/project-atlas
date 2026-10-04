@@ -842,7 +842,7 @@ Historical roadmaps are classified as inputs and are not erased._
 No multi-agent capability is proven by anything in this section.
 
 - [x] ATLAS-DEVQ-0006: write-scope collision admission in the DEVQ planner — in-flight exclusion in `select_next`/`Planner.select`, `scope_overlap`/`works_collide`, and an always-on dispatch refusal `SCOPE_COLLISION` (no off switch). In-memory, single process, path overlap only; admission control, not authority. Lands with the PR that carries this entry.
-- [ ] Collision refusal on by default (owner decision; needs an edit of an existing planner test that dispatches two same-scope lineages).
+- [ ] `Planner.fail_execution` phase guard (it is unguarded: on INTEGRATION_READY or on a DISPATCHED lineage with a live run it releases the scope); validate the `in_flight` argument of `select_next`.
 - [ ] Ledger-derived fleet/mission status with durable scope holders (survives a planner restart; release on observed merge).
 - [ ] Exact run correlation token + enforced single writer (needs a workflow change and an owner dispatch grant to prove).
 - [ ] Live evidence of two lineages in flight.

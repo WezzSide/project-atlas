@@ -450,12 +450,14 @@ def works_collide(a: WorkItem, b: WorkItem) -> tuple[tuple[str, str], ...]:
     Both seals are verified first (``ContractError`` when either fails): an unverifiable work
     item is an error, never "no collision". Work in different repositories never collides, and
     work of the same lineage never collides with itself (a repair keeps its lineage's scope by
-    construction, see ``materialize_repair``). Repository and lineage root are compared exactly,
-    as sealed. Pure; grants nothing.
+    construction, see ``materialize_repair``). The repository is compared case-insensitively
+    (GitHub ``owner/name`` is case-insensitive); no other spelling is unified (a ``.git`` suffix
+    or a URL form is a different repository here). The lineage root is compared exactly, as
+    sealed. Pure; grants nothing.
     """
     a.verify_seal()
     b.verify_seal()
-    if a.repository != b.repository or a.lineage_root == b.lineage_root:
+    if a.repository.lower() != b.repository.lower() or a.lineage_root == b.lineage_root:
         return ()
     return scope_overlap(a.allowed_paths, b.allowed_paths)
 
