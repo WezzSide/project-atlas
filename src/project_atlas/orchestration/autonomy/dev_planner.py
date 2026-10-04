@@ -17,9 +17,21 @@ Coordination journal (ATLAS-DEVQ-0007): every state change of the planner is ONE
 append-only journal, and the planner's in-memory state is only a replica obtained by replaying
 it. The journal is the single source of truth for lineage phase and scope ownership; there is no
 second record of it. Properties:
-  * write-ahead: the event is appended (and, for ``DirJournal``, fsynced) before the matching
-    record is published; ``recover`` re-publishes what a crash left unpublished (publishing is
-    idempotent) and re-feeds records this identity had claimed but not yet journalled;
+  * write-ahead: the event is appended (and, for ``DirJournal``, fsynced) and acknowledged
+    before the matching record is published; ``recover`` re-publishes what a crash left
+    unpublished (publishing is idempotent) and, on a transport that keeps claimed records
+    (``claimed_records``: the spool), re-feeds records this identity had claimed but not yet
+    journalled;
+  * continuity before admission and before publication (the ownership invariant): loss or
+    replacement of ACKNOWLEDGED history is never permission to admit or publish. An event is
+    acknowledged once its digest is in the journal's anchor (``DirJournal``: one exclusive file
+    per event in a separate directory), which happens after the append and before anything is
+    published for it. Every replay, and so every operation that decides or publishes, first
+    checks that the head this planner holds is still stored unchanged, that each event it
+    applies matches its acknowledgement, and that the journal does not end below the highest
+    acknowledged event. Where that cannot be established the operation raises
+    ``JournalCorrupt`` and nothing is appended or published: a planner whose history was lost
+    or replaced under it stops, and a new planner does not start on the shortened journal;
   * linearisable admission: event ``n`` exists only by EXCLUSIVE CREATION of its name
     (``os.link``, the primitive the spool uses); a writer first replays everything up to
     ``n - 1``, decides against that state, and loses with no effect if another writer created
@@ -43,9 +55,18 @@ second record of it. Properties:
 Limits (what this is NOT):
   * the default ``MemoryJournal`` is per-process and volatile; durability and cross-process
     admission exist only with a ``DirJournal`` on a directory that offers atomic ``link``;
-  * a deleted TAIL of the journal is undetectable from the journal alone (no external anchor);
-    if it is deleted under a running planner, that planner and a later one can hold different
-    histories and admit colliding scopes before the next replay fails;
+  * storage / failure model of the continuity check: event files may be lost or replaced (a
+    deleted tail, a restored older copy of the journal directory, a rival history written
+    after such a loss) while the anchor survives, and the process may die at any point. NOT
+    covered: journal and anchor lost or rolled back TOGETHER (the default anchor is a sibling
+    directory, so a rollback of their common parent takes both; a new planner then accepts the
+    shorter history, while a planner that was running still stops); a writer who rewrites the
+    journal and the anchor; an event lost after the last continuity check of an operation that
+    had already been acknowledged (the record is published; every later operation stops);
+    loss of an event that was appended but not yet acknowledged, which is by definition not
+    acknowledged history and for which nothing was published;
+  * failing closed is the whole response: there is no repair or re-anchoring tool here, an
+    operator has to restore the journal;
   * ``recover`` must be called by whoever restarts a planner; nothing in ``src`` does that yet;
   * a full open lists the journal directory and reads every event; the directory fsync after
     an append is best effort (not available on Windows);
@@ -55,7 +76,9 @@ Limits (what this is NOT):
     ``release_scope`` is called with the merge revision, which the CALLER asserts; the planner
     does not verify it. Releasing a scope grants nothing;
   * no leases, heartbeats or executor assignment: a holder whose executor died stays a holder
-    until its lineage reaches a releasing phase;
+    until its lineage reaches a releasing phase. A phase, a timeout or a caller-supplied
+    revision is not proof that an old executor can no longer write or that integration
+    happened: ``fail_execution`` and ``release_scope`` release on the caller's word;
   * the quarantine list is evidence in memory only and is not journalled;
   * it does not lift the fabric adapter's serial-dispatch rule, and no live run has exercised
     two lineages.
@@ -153,6 +176,8 @@ _REPAIR_SUFFIX = re.compile(r"-R[0-9]+$")  # reserved for planner-materialised r
 JOURNAL_VERSION = 1
 MAX_COMMIT_RETRIES = 16  # lost exclusive-create races before a commit gives up (never spins)
 _EVENT_FILE = re.compile(r"[0-9]{12}\.json")
+_ACK_FILE = re.compile(r"[0-9]{12}\.ack")
+_DIGEST = re.compile(r"[0-9a-f]{64}")
 _REVISION = re.compile(r"[0-9a-f]{40}")
 _EXECUTING = frozenset({Phase.DISPATCHED, Phase.REPAIR_DISPATCHED})
 
@@ -164,9 +189,37 @@ class Journal(Protocol):
     def append(self, seq: int, data: bytes) -> bool:
         """Create event ``seq`` iff it is the next one; False when it already exists."""
 
+    def acknowledge(self, seq: int, digest: str) -> None:
+        """Record that event ``seq`` with this sha256 is acknowledged history.
+
+        Raises ``JournalCorrupt`` when the stored event is not that event (any more) or when
+        ``seq`` is already acknowledged with a different digest. Idempotent otherwise.
+        """
+
+    def acknowledged(self, seq: int) -> str | None:
+        """The digest event ``seq`` was acknowledged with, or None when it is not acknowledged."""
+
+    def high_water(self, at_least: int, *, full: bool) -> int:
+        """A sequence number that is acknowledged and > ``at_least``, or ``at_least``.
+
+        ``full`` asks for the highest acknowledged number (a listing); otherwise only
+        ``at_least + 1`` is probed.
+        """
+
+    def check_head(self, seq: int, digest: str) -> None:
+        """Raise ``JournalCorrupt`` unless stored event ``seq`` still has this digest."""
+
+
+def _sha(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
 
 class MemoryJournal:
-    """Volatile, single-process journal (the default). Same contract, no durability."""
+    """Volatile, single-process journal (the default). Same contract, no durability.
+
+    Its events live in this object and cannot be lost separately from it, so acknowledgement
+    is the event list itself.
+    """
 
     def __init__(self) -> None:
         self._events: list[bytes] = []
@@ -180,6 +233,21 @@ class MemoryJournal:
         self._events.append(data)
         return True
 
+    def acknowledge(self, seq: int, digest: str) -> None:
+        self.check_head(seq, digest)
+
+    def acknowledged(self, seq: int) -> str | None:
+        return _sha(self._events[seq - 1]) if 1 <= seq <= len(self._events) else None
+
+    def high_water(self, at_least: int, *, full: bool) -> int:
+        return max(at_least, len(self._events))
+
+    def check_head(self, seq: int, digest: str) -> None:
+        if self.acknowledged(seq) != digest:
+            raise JournalCorrupt(
+                f"JOURNAL_DIVERGED:event {seq} is not the event this planner holds"
+            )
+
 
 class DirJournal:
     """Durable journal: one immutable file per event, ``<root>/<seq:012d>.json``.
@@ -187,14 +255,80 @@ class DirJournal:
     ``append`` writes a temp file, fsyncs it and creates the final name with ``os.link``, which
     never overwrites: of several processes appending the same sequence number exactly one
     succeeds. Needs a directory with atomic ``link`` (local disk, a mounted volume).
+
+    Acknowledgement anchor: ``<anchor>/<seq:012d>.ack`` holds the sha256 of event ``seq`` and is
+    created the same way (exclusive, never overwritten) once the event is in the journal. The
+    anchor is the witness that survives a loss of journal files: a journal that ends below the
+    highest acknowledged number, or whose event differs from its acknowledgement, does not
+    replay. ``anchor`` defaults to the sibling directory ``<root>.ack``; put it on storage that
+    does not fail together with ``root`` to cover more than the loss of event files.
     """
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, *, anchor: Path | None = None) -> None:
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
+        self.anchor = (
+            self.root.with_name(self.root.name + ".ack") if anchor is None else Path(anchor)
+        )
+        self.anchor.mkdir(parents=True, exist_ok=True)
 
     def _path(self, seq: int) -> Path:
         return self.root / f"{seq:012d}.json"
+
+    def _ack(self, seq: int) -> Path:
+        return self.anchor / f"{seq:012d}.ack"
+
+    def acknowledged(self, seq: int) -> str | None:
+        try:
+            digest = self._ack(seq).read_text(encoding="ascii")
+        except FileNotFoundError:
+            return None
+        except ValueError as exc:
+            raise JournalCorrupt(f"JOURNAL_CORRUPT:acknowledgement {seq} is unreadable") from exc
+        if not _DIGEST.fullmatch(digest):
+            raise JournalCorrupt(f"JOURNAL_CORRUPT:acknowledgement {seq} is not a digest")
+        return digest
+
+    def check_head(self, seq: int, digest: str) -> None:
+        try:
+            stored = _sha(self._path(seq).read_bytes())
+        except FileNotFoundError:
+            raise JournalCorrupt(
+                f"JOURNAL_DIVERGED:event {seq}, which this planner holds, is gone"
+            ) from None
+        if stored != digest:
+            raise JournalCorrupt(
+                f"JOURNAL_DIVERGED:event {seq} is not the event this planner holds"
+            )
+
+    def acknowledge(self, seq: int, digest: str) -> None:
+        self.check_head(seq, digest)  # read back: the stored event is (still) this event
+        known = self.acknowledged(seq)
+        if known is None:
+            fd, tmp = tempfile.mkstemp(dir=self.anchor, prefix=".tmp-")
+            try:
+                with os.fdopen(fd, "w", encoding="ascii") as fh:
+                    fh.write(digest)
+                    fh.flush()
+                    os.fsync(fh.fileno())
+                with contextlib.suppress(FileExistsError):
+                    os.link(tmp, self._ack(seq))  # exclusive: the first acknowledgement stands
+            finally:
+                os.unlink(tmp)
+            known = self.acknowledged(seq)
+        if known != digest:
+            raise JournalCorrupt(
+                f"JOURNAL_DIVERGED:event {seq} is acknowledged as a different event"
+            )
+
+    def high_water(self, at_least: int, *, full: bool) -> int:
+        if not full:
+            return at_least + 1 if self._ack(at_least + 1).exists() else at_least
+        names = [p.name for p in self.anchor.iterdir() if not p.name.startswith(".tmp-")]
+        odd = sorted(n for n in names if not _ACK_FILE.fullmatch(n) or int(n[:12]) < 1)
+        if odd:
+            raise JournalCorrupt(f"JOURNAL_CORRUPT:anchor holds something else: {odd[:3]}")
+        return max((int(n[:12]) for n in names), default=at_least)
 
     def read(self, after: int) -> list[bytes]:
         last = 0
@@ -283,7 +417,7 @@ def _transition(state: FleetState, ev: dict[str, Any], raw: bytes) -> Callable[[
     kind, root, planner = ev["event"], ev["root"], ev["planner"]
     if not isinstance(root, str) or not isinstance(planner, str):
         raise PlannerError("journal event root/planner must be strings")
-    seq, head = state.seq + 1, hashlib.sha256(raw).hexdigest()
+    seq, head = state.seq + 1, _sha(raw)
     steps: list[Callable[[], None]] = []
     st = state.lineages.get(root)
 
@@ -442,19 +576,52 @@ def _transition(state: FleetState, ev: dict[str, Any], raw: bytes) -> Callable[[
     return apply
 
 
-def replay(journal: Journal, state: FleetState) -> int:
-    """Apply every journal event ``state`` has not seen; returns how many. Fail-closed."""
+def replay(journal: Journal, state: FleetState, *, witness: bool = False) -> int:
+    """Apply every journal event ``state`` has not seen; returns how many. Fail-closed.
+
+    Continuity is established on every call, before anything is applied and before the caller
+    may decide or publish anything:
+      * the event ``state`` already holds as its head must still be stored with the same digest
+        (a planner whose history was lost or replaced under it stops here);
+      * every event applied must match its acknowledgement where one exists;
+      * the journal may not end below the highest acknowledged sequence number (a journal that
+        lost its tail does not replay, however well-formed what is left of it is).
+    With ``witness`` (a planner, not a read-only projection) each applied event is acknowledged.
+    """
+    full = state.seq == 0
+    if not full:
+        journal.check_head(state.seq, state.head)
     n = 0
-    for raw in journal.read(state.seq):
-        try:
-            ev = json.loads(raw)
-            if not isinstance(ev, dict):
-                raise PlannerError("event is not an object")
-            _transition(state, ev, raw)()
-        except (ContractError, ValueError, KeyError, TypeError, RecursionError) as exc:
-            raise JournalCorrupt(f"JOURNAL_CORRUPT:event {state.seq + 1}: {exc}") from exc
-        n += 1
-    return n
+    while True:
+        batch = journal.read(state.seq)
+        for raw in batch:
+            seq = state.seq + 1
+            try:
+                ev = json.loads(raw)
+                if not isinstance(ev, dict):
+                    raise PlannerError("event is not an object")
+                apply = _transition(state, ev, raw)
+            except (ContractError, ValueError, KeyError, TypeError, RecursionError) as exc:
+                raise JournalCorrupt(f"JOURNAL_CORRUPT:event {seq}: {exc}") from exc
+            digest = _sha(raw)
+            if journal.acknowledged(seq) not in (None, digest):
+                raise JournalCorrupt(
+                    f"JOURNAL_DIVERGED:event {seq} is acknowledged as a different event"
+                )
+            if witness:
+                journal.acknowledge(seq, digest)
+            apply()
+            n += 1
+        mark = journal.high_water(state.seq, full=full)
+        if mark <= state.seq:
+            return n
+        if not batch and not journal.read(state.seq):
+            # acknowledged beyond the journal and nothing more to read: the tail is gone
+            raise JournalCorrupt(
+                f"JOURNAL_TRUNCATED:event {mark} is acknowledged but the journal ends at "
+                f"{state.seq}"
+            )
+        full = False  # a writer got ahead while we read (event before acknowledgement): go on
 
 
 def fleet_status(journal: Journal) -> tuple[dict[str, Any], ...]:
@@ -524,22 +691,25 @@ class Planner:
         self.blocked = self.state.blocked
         self.issued = self.state.issued  # task_id -> the request issued for it
         self.quarantined: list[tuple[str, str, str]] = []  # (channel, seal, reason)
-        # records already claimed from the transport whose commit could not be written
-        # (contention, journal IO error): retried by the next pump, never quarantined for that
+        # records already claimed from the transport that could not be decided (contention,
+        # journal IO error, a journal that does not replay): retried by a later pump once the
+        # cause is gone, never quarantined for that
         self.deferred: list[tuple[Channel, Any]] = []
         self.sync()  # a restarted planner starts from what the journal says, or not at all
 
     # -- journal ---------------------------------------------------------------------------
     def sync(self) -> int:
         """Replay journal events written since the last look (by this or another planner)."""
-        return replay(self.journal, self.state)
+        return replay(self.journal, self.state, witness=True)
 
     def _commit(self, decide: Callable[[], dict[str, Any]]) -> dict[str, Any]:
         """Decide against the current journal state and append the ONE resulting event.
 
         ``decide`` runs after a fresh replay and raises to refuse. If another writer takes the
         sequence number first, nothing was written: replay and decide again, a bounded number
-        of times. In-memory state changes only by applying the event that was appended.
+        of times. The appended event is acknowledged (read back and anchored) before the
+        in-memory state changes and before this returns, so the caller publishes only for an
+        event that is acknowledged history; if that fails this raises and nothing is published.
         """
         for _ in range(MAX_COMMIT_RETRIES):
             self.sync()
@@ -553,6 +723,7 @@ class Planner:
             raw = json.dumps(ev, sort_keys=True).encode()
             apply = _transition(self.state, ev, raw)
             if self.journal.append(ev["seq"], raw):
+                self.journal.acknowledge(ev["seq"], _sha(raw))
                 apply()
                 return ev
         raise JournalContended("JOURNAL_CONTENDED: could not append after bounded retries")
@@ -569,16 +740,7 @@ class Planner:
         and VERDICT records this identity had claimed from a transport that keeps them
         (``claimed_records``) but that are not in the journal yet. Returns what it did.
         """
-        self.sync()
-        done: list[str] = []
-        for root, st in sorted(self.lineages.items()):
-            rec: Record | None = None
-            if st.phase in _EXECUTING:
-                rec = st.work
-            elif st.phase is Phase.VERIFYING:
-                rec = self.issued.get(st.work.task_id)
-            if rec is not None and self.transport.publish(rec):
-                done.append(f"REPUBLISHED:{root}:{rec.KIND.value}")
+        done = self._republish()
         claimed = getattr(self.transport, "claimed_records", None)
         if claimed is not None:
             handlers: tuple[tuple[Channel, Callable[[Any], None]], ...] = (
@@ -593,6 +755,20 @@ class Planner:
                     self._guarded(channel.value, rec.seal, handler, rec)
                     if self.state.seq != before:
                         done.append(f"REPLAYED:{channel.value}:{rec.seal}")
+        return done
+
+    def _republish(self) -> list[str]:
+        """Publish the pending record of every live lineage (idempotent). Replays first."""
+        self.sync()  # continuity first: nothing is published from a history that does not replay
+        done: list[str] = []
+        for root, st in sorted(self.lineages.items()):
+            rec: Record | None = None
+            if st.phase in _EXECUTING:
+                rec = st.work
+            elif st.phase is Phase.VERIFYING:
+                rec = self.issued.get(st.work.task_id)
+            if rec is not None and self.transport.publish(rec):
+                done.append(f"REPUBLISHED:{root}:{rec.KIND.value}")
         return done
 
     # -- selection / dispatch -------------------------------------------------------------
@@ -682,10 +858,12 @@ class Planner:
 
     # -- pump -------------------------------------------------------------------------------
     def pump(self) -> int:
-        """Consume every available result and verdict once; returns records processed.
+        """Consume the available results and verdicts once each; returns records processed.
 
-        Starts with a journal replay and raises ``JournalCorrupt`` when the journal does not
-        replay, there or later in the pass; a record claimed by then is kept in ``deferred``.
+        Starts with a journal replay. Raises ``JournalCorrupt`` when the journal does not replay
+        or continuity cannot be established, there or later in the pass, and re-raises an
+        ``OSError`` from the journal or the transport; a record claimed by then and not yet
+        journalled is kept in ``deferred``. Bounded per channel by ``MAX_RAISES_PER_PASS``.
         """
         self.sync()
         n = 0
@@ -698,6 +876,8 @@ class Planner:
             if rec.seal not in self.state.seals:
                 self._guarded(channel.value, rec.seal, handlers[channel], rec)
                 n += 1
+            else:  # journalled after all (the append raised after it had linked the event)
+                self._republish()
         for channel, handler in handlers.items():
             raises = 0  # per channel: a flooded RESULT channel must not starve VERDICT
             while True:
@@ -717,12 +897,13 @@ class Planner:
         return n
 
     def _guarded(self, channel: str, seal: str, fn: Callable[[Any], None], rec: Any) -> None:
-        """One bad record is quarantined; it never aborts the pass or blocks other lineages.
+        """A record the planner REFUSES is quarantined and the pass goes on to the next record.
 
-        A record whose event could not be WRITTEN (lost the append race too often, or the
-        journal raised an IO error, or the journal no longer replays) was not judged at all: it
-        is kept in ``deferred`` for the next pump instead of being quarantined. An IO error or a
-        corrupt journal is re-raised after that. ``deferred`` is in memory only.
+        A record that could not be decided (the commit lost the append race too often, an
+        ``OSError`` was raised before its event was journalled, or the journal no longer
+        replays) is kept in ``deferred`` for a later pump instead of being quarantined. An
+        ``OSError`` or ``JournalCorrupt`` is re-raised after that and ends the pass.
+        ``deferred`` is in memory only.
         """
         try:
             fn(rec)
@@ -827,11 +1008,15 @@ class Planner:
             self.transport.publish(self.lineages[ev["root"]].work)
 
     def fail_execution(self, task_id: str, reason: str) -> None:
-        """The remote execution itself failed (no result): block that lineage only.
+        """The caller reports that the remote execution failed (no result): block that lineage.
 
         Only for the CURRENT work of a lineage that is executing (DISPATCHED or
         REPAIR_DISPATCHED). A lineage that already has a result, is INTEGRATION_READY or is
-        terminal is refused: its scope is not released by a late or mistaken failure report.
+        terminal is refused, and so is a superseded task id: a wrong-phase or stale failure
+        report does not release a scope. That is all this guards. The planner does not confirm
+        that the remote executor has stopped or can no longer write; the scope is released on
+        the caller's word, so a caller must have established that (or fenced the executor)
+        before it calls this.
         """
 
         def decide() -> dict[str, Any]:
@@ -849,8 +1034,9 @@ class Planner:
         """Release the scope of an INTEGRATION_READY lineage whose candidate was merged.
 
         ``merged_revision`` (40-hex) is recorded as the evidence the CALLER asserts; the planner
-        cannot observe a merge and does not verify it. This is not a merge, grants nothing and
-        changes no phase: it only stops the lineage from holding its write scope.
+        cannot observe a merge and does not verify it, so the revision is not proof that
+        integration occurred. This is not a merge, grants nothing and changes no phase: it only
+        stops the lineage from holding its write scope.
         """
 
         def decide() -> dict[str, Any]:

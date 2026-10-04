@@ -16090,7 +16090,9 @@ change, no adapter / crosswalk / transport / workflow change):
   id, work seal, repository, base revision, allowed paths, holds_scope, scope_released,
   dispatched_by, last_seq) from the journal alone, without a planner object.
 - `fail_execution(task_id, reason)` is refused unless `task_id` is the current work of a
-  lineage in DISPATCHED or REPAIR_DISPATCHED.
+  lineage in DISPATCHED or REPAIR_DISPATCHED. This prevents wrong-phase and superseded-task
+  failure transitions. It does not confirm that the remote executor has terminated: the scope
+  is released on the caller's report.
 - `release_scope(root, merged_revision=<40-hex>)` releases the scope of an INTEGRATION_READY
   lineage. The phase stays INTEGRATION_READY, the task id stays used.
 - `dev_queue.select_next` rejects a bare string or non-string ids as `in_flight`.
@@ -16117,9 +16119,6 @@ Limits:
 - Under contention a compatible dispatch can be refused with `JOURNAL_CONTENDED`.
 - The hash chain and the seals are unkeyed: they detect corruption, not a writer with access
   to the journal directory, who can write a well-formed history.
-- A deleted tail of the journal cannot be detected from the journal alone; deleted under a
-  running planner it can leave two planners with different histories that admit colliding
-  scopes before the next replay fails.
 - `recover()` is called by nothing in `src`. A record that is rejected and stays in the spool's
   `claimed/` is fed and quarantined again by every `recover()`.
 - A full open lists the journal directory and reads every event; the directory fsync after an
@@ -16135,18 +16134,60 @@ Limits:
 - This is not multi-agent delivery: no live run has exercised two lineages.
 
 Commands and results (`PYTHONPATH=<worktree>/src`, `--no-cov -o addopts=""`):
-- `pytest tests/unit/test_orchestration_dev_planner_journal.py` (new): 30 passed; twenty
-  consecutive runs, 30 passed each.
+- `pytest tests/unit/test_orchestration_dev_planner_journal.py` (new): 40 passed; twenty
+  consecutive runs, 40 passed each.
 - The same file against main's `dev_planner.py`: 1 error during collection (the imported
   names do not exist there).
 - `test_orchestration_dev_loop_contracts.py`, `_dev_queue.py`, `_dev_fabric_adapter.py`,
   `_dev_package.py`, `_dev_package_repair.py`, `_dev_crosswalk.py`: 749 passed.
-- Those six plus `_dev_spool_transport.py` and `_dev_planner_journal.py`: 790 passed.
+- Those six plus `_dev_spool_transport.py` and `_dev_planner_journal.py`: 800 passed.
 - `pytest tests/unit -k "orchestration_dev or dev_package or executor or agent_execute or
-  workflow or autonomy or global_foundation or github_port"`: 1488 passed, 5152 deselected.
+  workflow or autonomy or global_foundation or github_port"`: 1498 passed, 5152 deselected.
 - `ruff check .`: clean. `ruff format --check` on the four changed code files: clean.
   `mypy src`: no issues in 415 source files.
 - The full test suite was not run locally.
+
+Continuity repair (owner hold on head `fec822fb`: tail loss under a running planner allowed
+conflicting admissions against divergent histories):
+- Invariant implemented: loss or replacement of acknowledged coordination history is not
+  permission to admit or publish; where continuity cannot be established, admission and
+  recovery publication raise `JournalCorrupt` and nothing is appended or published.
+- Mechanism: `DirJournal(root, anchor=...)` keeps an acknowledgement anchor, one exclusive file
+  `<anchor>/<seq:012d>.ack` with the event's sha256, default `<root>.ack` (a sibling
+  directory). `_commit` appends, then acknowledges (reads the event back, creates or compares
+  the acknowledgement), then applies in memory and returns; the caller publishes only after
+  that. `replay` (run by every `sync`, so by `select`, `pump`, `recover`, every commit and the
+  republish path) first checks that the head the planner holds is still stored with the same
+  digest, compares each applied event with its acknowledgement, and refuses a journal that ends
+  below the highest acknowledged event (`JOURNAL_TRUNCATED`); a mismatch is `JOURNAL_DIVERGED`.
+  A planner acknowledges the events it replays; `fleet_status` only checks.
+- The reported case, as tested: planner 1 holds A and B (events 1, 2); event 2 is deleted. A
+  new planner does not construct (`JOURNAL_TRUNCATED`); planner 1's `dispatch`, `select`,
+  `pump`, `recover`, `fail_execution` all raise before deciding; the journal directory and the
+  spool's WORK files are unchanged. With event 2 replaced by a well-chained rival DISPATCH over
+  B's paths, both planners raise `JOURNAL_DIVERGED` and the rival work is not published.
+- Detection versus prevention: an event that is linked and then lost or replaced before the
+  writer's acknowledgement, or acknowledged by a rival with another digest, makes the commit
+  raise; the test asserts that the work was not published, the replica did not advance and no
+  acknowledgement was written.
+- Supported storage / failure model: event files can be lost or replaced (deleted tail, older
+  copy of the journal directory restored, rival history written afterwards) while the anchor
+  survives; the process can die at any point. An event appended but not yet acknowledged can
+  be lost without consequence: nothing was published for it.
+- Remaining limits: (1) journal and anchor lost or rolled back together are not detected by a
+  NEW planner, which then admits against the shorter history (pinned by a test; a planner that
+  was running still stops). With the default sibling anchor a rollback of the common parent
+  directory is such a case; a separate `anchor` location narrows it. (2) A writer who rewrites
+  journal and anchor is out of scope. (3) An event lost after it was acknowledged and after
+  the operation's last check: its record is published, every later operation stops. (4) There
+  is no repair tool: after a continuity failure nothing runs until an operator restores the
+  journal. (5) `MemoryJournal` has no separate anchor. (6) One more file per event; a full
+  open lists the anchor directory.
+- Also in this repair: a deferred record whose event turns out to be journalled (the append
+  raised after linking) now has its pending record published by `pump`; tests for the
+  TERMINAL evidence type, strict event file names, `recover` after a journalled REPAIR verdict;
+  docstrings of `pump`, `_guarded`, `fail_execution`, `release_scope` corrected.
+- No leases, driver wiring or executor allocation were added.
 
 Not done / open: see the backlog section "Multi-agent autonomous delivery (governed)".
 Independent verification and exact-head CI are recorded on the PR, not here.

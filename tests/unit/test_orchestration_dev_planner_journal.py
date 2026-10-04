@@ -188,6 +188,9 @@ class Interleaved:
     def read(self, after):
         return self.inner.read(after)
 
+    def __getattr__(self, name):  # acknowledgement and continuity: the inner journal's
+        return getattr(self.inner, name)
+
     def append(self, seq, data):
         if not self.fired:
             self.fired = True
@@ -321,9 +324,17 @@ def test_an_edited_event_breaks_the_chain_and_the_planner_refuses_to_start(tmp_p
     ev = json.loads(files[0].read_bytes())
     ev["planner"] = "someone-else"
     files[0].write_bytes(json.dumps(ev, sort_keys=True).encode())
-    with pytest.raises(PlannerError, match="hash chain is broken"):
+    # the anchor notices first: event 1 is no longer the event that was acknowledged
+    with pytest.raises(JournalCorrupt, match="JOURNAL_DIVERGED:event 1 is acknowledged as a diff"):
         _open(tmp_path)
-    with pytest.raises(PlannerError, match="hash chain is broken"):
+    with pytest.raises(JournalCorrupt, match="JOURNAL_DIVERGED"):
+        fleet_status(DirJournal(tmp_path / "j"))
+    # and without any anchor the chain alone still refuses the edit
+    for ack in (tmp_path / "j.ack").iterdir():
+        ack.unlink()
+    with pytest.raises(JournalCorrupt, match="hash chain is broken"):
+        _open(tmp_path)
+    with pytest.raises(JournalCorrupt, match="hash chain is broken"):
         fleet_status(DirJournal(tmp_path / "j"))
 
 
@@ -331,13 +342,16 @@ def test_a_missing_middle_event_or_a_stray_file_is_refused(tmp_path):
     files = _journal_with(tmp_path)
     middle = files[1].read_bytes()
     files[1].unlink()
-    with pytest.raises(PlannerError, match=r"JOURNAL_CORRUPT:directory is not events 1\.\.k"):
+    with pytest.raises(JournalCorrupt, match=r"JOURNAL_CORRUPT:directory is not events 1\.\.k"):
         _open(tmp_path)
     files[1].write_bytes(middle)
     assert _open(tmp_path).lineages["A"].phase is Phase.INTEGRATION_READY
-    (tmp_path / "j" / "notes.txt").write_text("x")
-    with pytest.raises(PlannerError, match=r"JOURNAL_CORRUPT:directory is not events 1\.\.k"):
-        _open(tmp_path)
+    for stray in ("notes.txt", "000000000004.json.bak", "x000000000004.json", "4.json"):
+        (tmp_path / "j" / stray).write_text("x")
+        with pytest.raises(JournalCorrupt, match=r"JOURNAL_CORRUPT:directory is not events 1\.\.k"):
+            _open(tmp_path)
+        (tmp_path / "j" / stray).unlink()
+    assert _open(tmp_path).state.seq == 3
 
 
 def test_garbage_and_non_object_events_are_refused(tmp_path):
@@ -422,6 +436,16 @@ def test_a_well_chained_event_that_is_not_a_legal_transition_is_refused(tmp_path
         (dict(event="RELEASE", root="nope", evidence=MERGED), "unknown lineage"),
         (dict(event="NONSENSE", root="A"), "unknown journal event"),
     ]
+    t2 = InMemoryTransport()  # a second, still executing lineage for the TERMINAL evidence case
+    p2 = planner(t2, DirJournal(tmp_path / "j"))
+    p2.dispatch(qi("Z"), **fields("src/zz"))
+    n, head = _head(tmp_path)
+    cases.append(
+        (
+            dict(event="TERMINAL", root="Z", phase="BLOCKED", reason="x", evidence=5),
+            "TERMINAL evidence must be a string",
+        )
+    )
     for body, why in cases:
         _forge(j, n + 1, head, **body)
         with pytest.raises(PlannerError, match=why):
@@ -429,8 +453,9 @@ def test_a_well_chained_event_that_is_not_a_legal_transition_is_refused(tmp_path
         (j / f"{n + 1:012d}.json").unlink()
     # control: a legal event at the same position is accepted, so the refusals above are real
     _forge(j, n + 1, head, event="DISPATCH", root="B", work=encode(w("B", ("src/q",))))
-    assert _open(tmp_path).in_flight() == {"A", "B"}
+    assert _open(tmp_path).in_flight() == {"A", "B", "Z"}
     (j / f"{n + 1:012d}.json").unlink()
+    (tmp_path / "j.ack" / f"{n + 1:012d}.ack").unlink()  # the control event was acknowledged
     # a record whose seal does not verify
     wire = json.loads(encode(w("B", ("src/q",))))
     wire["body"]["allowed_paths"] = ["src/x"]
@@ -920,3 +945,287 @@ def test_append_refuses_a_sequence_number_whose_predecessor_is_missing(tmp_path)
     (tmp_path / "j" / "000000000000.json").write_bytes(b"{}")  # not an event number
     with pytest.raises(JournalCorrupt):
         DirJournal(tmp_path / "j").read(0)
+
+
+def test_recover_does_not_feed_a_journalled_repair_verdict_again(tmp_path):
+    t = SpoolTransport(tmp_path / "spool")
+    p = planner(t, DirJournal(tmp_path / "j"))
+    p.dispatch(qi("A"), **FIELDS)
+    implement(t)
+    p.pump()
+    verify(t, Verdict.FAIL, DEFECT)
+    assert p.pump() == 1 and p.lineages["A"].phase is Phase.REPAIR_DISPATCHED
+    q = planner(t, DirJournal(tmp_path / "j"))
+    assert q.recover() == [] and not q.quarantined
+
+
+def test_an_append_that_raises_after_linking_still_gets_its_record_published(tmp_path):
+    class LinkThenRaise(DirJournal):
+        fail = False
+
+        def append(self, seq, data):
+            ok = super().append(seq, data)
+            if self.fail and ok:
+                self.fail = False
+                raise OSError("unlink of the temp file failed")
+            return ok
+
+    t = InMemoryTransport()
+    j = LinkThenRaise(tmp_path / "j")
+    p = planner(t, j)
+    p.dispatch(qi("A"), **FIELDS)
+    implement(t)
+    j.fail = True
+    with pytest.raises(OSError):
+        p.pump()
+    assert len(p.deferred) == 1 and not t._queues[Channel.VERIFICATION]
+    assert p.pump() == 0  # replay finds the event; the deferred record is already journalled
+    assert p.lineages["A"].phase is Phase.VERIFYING and p.deferred == [] and not p.quarantined
+    assert len(t._queues[Channel.VERIFICATION]) == 1  # and its request went out
+
+
+# ---- loss or replacement of acknowledged history --------------------------------------------
+#
+# Storage / failure model these tests pin: event files can be lost or replaced (a deleted tail,
+# a restored older copy of the journal directory, a rival history written after such a loss)
+# while the acknowledgement anchor survives. Out of the model: journal and anchor rolled back
+# together, and a writer who rewrites both.
+
+
+def _two_holders(tmp_path, anchor=None):
+    """Planner with A and B dispatched (events 1, 2, both acknowledged and published)."""
+    t = SpoolTransport(tmp_path / "spool")
+    p = planner(t, DirJournal(tmp_path / "j", anchor=anchor), "plan-1")
+    p.dispatch(qi("A"), **FIELDS)
+    p.dispatch(qi("B"), **fields("src/y"))
+    return t, p
+
+
+def _published(tmp_path):
+    return sorted(p.name for p in (tmp_path / "spool" / "WORK").glob("*.json"))
+
+
+def _events(tmp_path):
+    return sorted(p.name for p in (tmp_path / "j").iterdir())
+
+
+def test_tail_loss_under_a_running_planner_admits_nothing_from_either_planner(tmp_path):
+    t, p1 = _two_holders(tmp_path)
+    published = _published(tmp_path)
+    (tmp_path / "j" / "000000000002.json").unlink()  # the journal loses its acknowledged tail
+
+    # a planner started now would see a well-formed journal [1] in which B never existed and
+    # src/y is free. It does not get that far: the anchor says event 2 is acknowledged.
+    with pytest.raises(JournalCorrupt, match="JOURNAL_TRUNCATED:event 2 is acknowledged"):
+        planner(t, DirJournal(tmp_path / "j"), "plan-2")
+    with pytest.raises(JournalCorrupt, match="JOURNAL_TRUNCATED"):
+        fleet_status(DirJournal(tmp_path / "j"))
+
+    # the running planner still holds [1, 2] in memory. Every operation that could admit or
+    # publish stops at the continuity check, before it decides anything.
+    for attempt in (
+        lambda: p1.dispatch(qi("D"), **fields("src/d")),  # compatible with its own view
+        lambda: p1.dispatch(qi("C"), **fields("src/y")),
+        lambda: p1.select([qi("D")]),
+        lambda: p1.pump(),
+        lambda: p1.recover(),
+        lambda: p1.fail_execution("A", "x"),
+    ):
+        with pytest.raises(JournalCorrupt, match="JOURNAL_DIVERGED:event 2, which this planner"):
+            attempt()
+    assert _events(tmp_path) == ["000000000001.json"]  # nothing was appended
+    assert _published(tmp_path) == published  # nothing was published
+    assert set(p1.lineages) == {"A", "B"} and p1.state.seq == 2  # and nothing changed in memory
+
+
+def test_a_replaced_tail_is_refused_by_the_running_and_by_every_new_planner(tmp_path):
+    t, p1 = _two_holders(tmp_path)
+    published = _published(tmp_path)
+    j = tmp_path / "j"
+    (j / "000000000002.json").unlink()
+    # the rival history of the reported case: a lineage C over B's paths, as event 2, written
+    # by something that did not go through the anchor (a planner would have been refused above)
+    from project_atlas.orchestration.autonomy.dev_contracts import make_work
+
+    c = make_work(
+        task_id="C",
+        execution_id="C-E1",
+        lineage_root="C",
+        acceptance_contract=("ok",),
+        **fields("src/y"),
+    )
+    head1 = hashlib.sha256((j / "000000000001.json").read_bytes()).hexdigest()
+    _forge(j, 2, head1, event="DISPATCH", root="C", work=encode(c))
+
+    with pytest.raises(JournalCorrupt, match="JOURNAL_DIVERGED:event 2 is acknowledged as a diff"):
+        planner(t, DirJournal(j), "plan-2")
+    with pytest.raises(JournalCorrupt, match="JOURNAL_DIVERGED:event 2 is not the event this"):
+        p1.dispatch(qi("D"), **fields("src/d"))
+    with pytest.raises(JournalCorrupt, match="JOURNAL_DIVERGED"):
+        p1.recover()
+    assert _events(tmp_path) == ["000000000001.json", "000000000002.json"]
+    assert _published(tmp_path) == published  # C's work was never published by anyone
+
+
+def test_history_replaced_between_append_and_publish_is_caught_before_publication(tmp_path):
+    """Detection is not enough: the event is linked, then lost, BEFORE the work is published."""
+
+    class LostAfterLink(DirJournal):
+        mode = ""
+
+        def append(self, seq, data):
+            ok = super().append(seq, data)
+            if ok and self.mode == "lost":
+                self._path(seq).unlink()
+            elif ok and self.mode == "replaced":
+                self._path(seq).write_bytes(data.replace(b"plan-1", b"plan-9"))
+            return ok
+
+    t = SpoolTransport(tmp_path / "spool")
+    j = LostAfterLink(tmp_path / "j")
+    p = planner(t, j, "plan-1")
+    p.dispatch(qi("A"), **FIELDS)
+    for mode, why in (("lost", "is gone"), ("replaced", "is not the event this planner holds")):
+        j.mode = mode
+        with pytest.raises(JournalCorrupt, match=f"JOURNAL_DIVERGED:event 2.*{why}"):
+            p.dispatch(qi("B"), **fields("src/y"))
+        j.mode = ""
+        # the event existed on disk for a moment; it was never acknowledged, never applied to
+        # the replica, and its work was never published
+        assert set(p.lineages) == {"A"} and p.state.seq == 1
+        assert len(_published(tmp_path)) == 1
+        assert not (tmp_path / "j.ack" / "000000000002.ack").exists()
+        (tmp_path / "j" / "000000000002.json").unlink(missing_ok=True)
+    assert p.dispatch(qi("B"), **fields("src/y")).task_id == "B"  # healthy again: admitted
+    assert len(_published(tmp_path)) == 2
+
+
+def test_an_acknowledgement_by_a_rival_stops_the_writer_before_it_publishes(tmp_path):
+    class RivalWins(DirJournal):
+        armed = False
+
+        def acknowledge(self, seq, digest):
+            if self.armed:  # between this writer's link and its acknowledgement
+                self.armed = False
+                self._ack(seq).write_text("0" * 64, encoding="ascii")
+            super().acknowledge(seq, digest)
+
+    t = SpoolTransport(tmp_path / "spool")
+    j = RivalWins(tmp_path / "j")
+    p = planner(t, j)
+    p.dispatch(qi("A"), **FIELDS)
+    j.armed = True
+    with pytest.raises(JournalCorrupt, match="JOURNAL_DIVERGED:event 2 is acknowledged as a diff"):
+        p.dispatch(qi("B"), **fields("src/y"))
+    assert set(p.lineages) == {"A"} and len(_published(tmp_path)) == 1
+
+
+def test_an_unacknowledged_tail_event_may_be_lost_because_nothing_was_published_for_it(tmp_path):
+    class DiesAfterLink(DirJournal):
+        die = False
+
+        def acknowledge(self, seq, digest):
+            if self.die:
+                raise KeyboardInterrupt  # the process dies between link and acknowledgement
+            super().acknowledge(seq, digest)
+
+    t = SpoolTransport(tmp_path / "spool")
+    j = DiesAfterLink(tmp_path / "j")
+    p = planner(t, j)
+    p.dispatch(qi("A"), **FIELDS)
+    j.die = True
+    with pytest.raises(KeyboardInterrupt):
+        p.dispatch(qi("B"), **fields("src/y"))
+    assert _events(tmp_path)[-1] == "000000000002.json" and len(_published(tmp_path)) == 1
+    (tmp_path / "j" / "000000000002.json").unlink()  # that unacknowledged event is then lost
+    q = planner(t, DirJournal(tmp_path / "j"))  # continuity holds: the anchor ends at 1
+    assert set(q.lineages) == {"A"}
+    q.dispatch(qi("C"), **fields("src/y"))  # B was never acknowledged, so nothing conflicts
+    assert len(_published(tmp_path)) == 2
+    # had the event survived instead, the next planner would have acknowledged and published it
+    # (covered by test_a_dispatch_that_was_journalled_but_not_published_is_published_by_recover)
+
+
+def test_the_anchor_can_live_on_separate_storage_and_catches_a_restored_old_journal(tmp_path):
+    anchor = tmp_path / "elsewhere" / "anchor"
+    t, _p1 = _two_holders(tmp_path, anchor=anchor)
+    assert sorted(a.name for a in anchor.iterdir()) == ["000000000001.ack", "000000000002.ack"]
+    assert not (tmp_path / "j.ack").exists()
+    old = (tmp_path / "j" / "000000000001.json").read_bytes()
+    for f in (tmp_path / "j").iterdir():  # the journal directory is restored from an old copy
+        f.unlink()
+    (tmp_path / "j" / "000000000001.json").write_bytes(old)
+    with pytest.raises(JournalCorrupt, match="JOURNAL_TRUNCATED"):
+        planner(t, DirJournal(tmp_path / "j", anchor=anchor), "plan-2")
+    for stray in ("notes.txt", "000000000003.ack.bak", "000000000000.ack"):
+        (anchor / stray).write_text("0" * 64)
+        with pytest.raises(JournalCorrupt, match="anchor holds something else"):
+            fleet_status(DirJournal(tmp_path / "j", anchor=anchor))
+        (anchor / stray).unlink()
+    (anchor / "000000000001.ack").write_text("not a digest")
+    with pytest.raises(JournalCorrupt, match="acknowledgement 1 is not a digest"):
+        fleet_status(DirJournal(tmp_path / "j", anchor=anchor))
+
+
+def test_limit_journal_and_anchor_rolled_back_together_are_not_detected_by_a_new_planner(
+    tmp_path,
+):
+    """Outside the supported model, pinned so the limit is a fact and not a hope.
+
+    When the anchor is lost together with the journal tail, a NEW planner has nothing that says
+    event 2 ever existed and admits against the shorter history. The planner that was running
+    is still stopped, because it holds event 2 itself.
+    """
+    t, p1 = _two_holders(tmp_path)
+    (tmp_path / "j" / "000000000002.json").unlink()
+    (tmp_path / "j.ack" / "000000000002.ack").unlink()
+    p2 = planner(t, DirJournal(tmp_path / "j"), "plan-2")
+    p2.dispatch(qi("C"), **fields("src/y"))  # collides with B, which p2 cannot know about
+    assert len(_published(tmp_path)) == 3
+    with pytest.raises(JournalCorrupt, match="JOURNAL_DIVERGED:event 2 is not the event this"):
+        p1.dispatch(qi("D"), **fields("src/d"))
+    assert len(_published(tmp_path)) == 3 and _events(tmp_path)[-1] == "000000000002.json"
+
+
+def test_readers_and_writers_racing_never_see_a_truncated_journal(tmp_path):
+    """An acknowledgement ahead of a reader's last read is progress, not loss."""
+    n = 6
+    t = SpoolTransport(tmp_path / "spool")
+    stop = threading.Event()
+    errors: list[str] = []
+
+    def write(i):
+        p = planner(t, DirJournal(tmp_path / "j"), f"plan-{i}")
+        for k in range(12):
+            for _ in range(50):
+                try:
+                    p.dispatch(qi(f"T{i}-{k}"), **fields(f"src/w{i}/k{k}"))
+                    break
+                except JournalContended:
+                    continue
+                except PlannerError as exc:  # pragma: no cover - reported below
+                    errors.append(f"writer {i}: {exc}")
+                    return
+
+    def read():
+        while not stop.is_set():
+            try:
+                fleet_status(DirJournal(tmp_path / "j"))
+                planner(t, DirJournal(tmp_path / "j"), "reader").select([qi("X")])
+            except PlannerError as exc:  # pragma: no cover - reported below
+                errors.append(f"reader: {exc}")
+                return
+
+    writers = [threading.Thread(target=write, args=(i,)) for i in range(n)]
+    readers = [threading.Thread(target=read) for _ in range(3)]
+    for th in readers + writers:
+        th.start()
+    for th in writers:
+        th.join()
+    stop.set()
+    for th in readers:
+        th.join()
+    assert errors == []
+    rows = fleet_status(DirJournal(tmp_path / "j"))
+    assert len(rows) == n * 12 and sorted(r["last_seq"] for r in rows) == list(range(1, n * 12 + 1))
+    assert len(list((tmp_path / "j.ack").iterdir())) == n * 12
