@@ -9,7 +9,8 @@ Semantics every backend must provide:
   * records travel as plain JSON and are re-validated (seal included) on claim: tamper => error;
   * a record type is only published to / claimable from its own channel (RESULT != VERDICT);
   * consume-once: a claimed record is never handed out again; re-publishing an identical sealed
-    record is an idempotent no-op;
+    record is an idempotent no-op when its address, if it has one, is the same (another
+    address, or none after one, is refused), and a withdrawn record is not published again;
   * a role may claim only from the channels its role owns; the VERIFICATION channel additionally
     refuses the executor's own identity (IMPLEMENTER != VERIFIER).
 
@@ -38,6 +39,7 @@ from project_atlas.orchestration.autonomy.dev_contracts import (
     VerificationRequest,
     WorkItem,
     same_identity,
+    validate_identity,
 )
 
 _MODEL_FOR_KIND: dict[RecordKind, Any] = {
@@ -78,8 +80,16 @@ class TransportError(ContractError):
 
 
 class DevTransport(Protocol):
-    def publish(self, record: Record) -> bool:
-        """Publish a sealed record; False when an identical record was already published."""
+    def publish(self, record: Record, *, to: str | None = None) -> bool:
+        """Publish a sealed record; False when an identical record was already published.
+
+        ``to`` (optional, ATLAS-DEVQ-0011) addresses the record to one identity: only that
+        identity's ``claim`` receives it. The address is delivery metadata next to the
+        record, not part of its seal. A backend that implements it says so with the class
+        attribute ``addressed = True`` (callers read it with ``getattr``). Such a backend may also
+        offer
+        ``withdraw(record) -> bool``: take a published record back if nobody claimed it.
+        """
 
     def claim(self, channel: Channel, *, role: Role, identity: str) -> Record | None:
         """Consume-once claim of the next record on ``channel`` for ``role``; None when empty."""
@@ -103,22 +113,55 @@ def decode(wire: str) -> Record:
     return rec
 
 
+MAX_IDENTITY = 200  # an executor identity / addressee, in characters (identities are ASCII)
+
+
+def check_address(to: str | None, standing: str | None) -> None:
+    """Refuse an address that is not an identity, or that differs from the one that stands.
+
+    A record is addressed once: publishing it again with another address, or with none after
+    it was addressed (or the reverse), would silently change who may receive it.
+    """
+    if to is not None:
+        try:
+            if not isinstance(to, str):
+                raise ValueError("not a string")
+            validate_identity(to)
+            if len(to) > MAX_IDENTITY:
+                raise ValueError("too long")
+        except ValueError as exc:
+            raise TransportError(f"invalid addressee: {exc}") from exc
+    if (to is None) != (standing is None) or (
+        to is not None and standing is not None and not same_identity(to, standing)
+    ):
+        raise TransportError("record is already published with a different address")
+
+
 class InMemoryTransport:
     """Reference/test backend. Not a production transport."""
 
+    addressed = True
+
     def __init__(self) -> None:
+        self._withdrawn: set[tuple[Channel, str]] = set()
+        self._to: dict[tuple[Channel, str], str] = {}  # (channel, seal) -> addressee
         self._queues: dict[Channel, deque[str]] = defaultdict(deque)
         self._seen: set[tuple[Channel, str]] = set()
         self.claims: list[tuple[Channel, str, str]] = []  # (channel, seal, claimer identity)
         # undecodable/tampered wires, kept as bounded evidence (newest MAX_REJECTED)
         self.rejected: list[tuple[Channel, str]] = []
 
-    def publish(self, record: Record) -> bool:
+    def publish(self, record: Record, *, to: str | None = None) -> bool:
         channel = CHANNEL_FOR_KIND[record.KIND]
         wire = encode(record)  # verifies the seal
         key = (channel, record.seal)
+        if key in self._withdrawn:
+            return False  # taken back by its publisher: it stays back
+        check_address(to, self._to.get(key) if key in self._seen else to)
         if key in self._seen:
             return False
+        if to is not None:
+            self._to[key] = to
         self._seen.add(key)
         self._queues[channel].append(wire)
         return True
@@ -142,10 +185,30 @@ class InMemoryTransport:
                     continue  # addressed to a different verifier; leave it queued
                 if same_identity(identity, rec.executor_identity):
                     raise TransportError("executor identity may not claim its own verification")
+            addressee = self._to.get((channel, rec.seal))
+            if addressee is not None and not same_identity(identity, addressee):
+                continue  # addressed to another identity; leave it queued
             del q[idx]
             self.claims.append((channel, rec.seal, identity))
             return rec
         return None
+
+    def withdraw(self, record: Record) -> bool:
+        """Take a record back for good unless it was claimed; True when this call did.
+
+        Also for a record that was never published: a later ``publish`` of it is refused.
+        """
+        channel = CHANNEL_FOR_KIND[record.KIND]
+        wire = encode(record)
+        key = (channel, record.seal)
+        if any(c == channel and s == record.seal for c, s, _ in self.claims):
+            return False
+        q = self._queues[channel]
+        if wire in q:
+            q.remove(wire)
+        fresh = key not in self._withdrawn
+        self._withdrawn.add(key)
+        return fresh
 
     # test hook: simulate wire tampering of the next queued record
     def _tamper_next(self, channel: Channel, replace: tuple[str, str]) -> None:

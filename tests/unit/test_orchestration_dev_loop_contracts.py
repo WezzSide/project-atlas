@@ -1253,3 +1253,25 @@ def test_the_planner_refuses_a_repository_identity_it_cannot_key():
     with pytest.raises(PlannerError, match=r"^REPOSITORY_UNSUPPORTED:"):
         p.dispatch(qi("B"), **_fields("src/q", repository=" WezzSide/project-atlas"))
     assert _work_records(t) == 1 and p.state.seq == 1 and set(p.lineages) == {"A"}
+
+
+def test_repository_key_edges_carried_from_the_devq_0010_verification():
+    from project_atlas.orchestration.autonomy.dev_contracts import repository_key
+
+    # the ``.git`` decoration is a literal suffix: these are other repositories, not ``o/x``
+    for name in ("xagit", "x-git", "legit", "x_git"):
+        assert repository_key(f"o/{name}") == f"o/{name}" != repository_key("o/x")
+    for odd in (
+        "WezzSide/projecté",
+        "WezzSide/" + chr(0xFF58),
+        "WezzSide/proje" + chr(0x441) + "t",
+    ):
+        with pytest.raises(ContractError, match="unsupported repository identity"):
+            repository_key(odd)
+
+    class Spelled:
+        def __str__(self):
+            return "a/b"
+
+    with pytest.raises(ContractError, match="not a string"):
+        repository_key(Spelled())

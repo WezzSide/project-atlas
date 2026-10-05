@@ -1181,3 +1181,179 @@ def test_a_coordinator_checks_its_observer_before_anything_else(tmp_path):
     attached.anchor.rmdir()
     with pytest.raises(PlannerError, match="observer needs a non-empty identity"):
         coordinator(tmp_path, attached, identity="coord-3", observer=Nameless())
+
+
+# ---- executor ownership (ATLAS-DEVQ-0011) ---------------------------------------------------
+
+E1, E2 = "vps1-impl", "vps4-impl"
+
+
+def _run(tmp_path, who):
+    """``who`` claims the next work addressed to it and publishes a result."""
+    t = SpoolTransport(tmp_path / "spool")
+    w = t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity=who)
+    if w is not None:
+        t.publish(make_result(w, executor_identity=who, result_revision=REV1, result_tree=TREE1))
+    return w
+
+
+def test_the_coordinator_assigns_each_lineage_to_one_executor_and_reports_who_owns_what(tmp_path):
+    store(tmp_path)
+    c = coordinator(tmp_path, max_live=4, executors=(E1, E2))
+    st = c.tick([cand("A", "src/a"), cand("B", "src/b"), cand("C", "src/c")])
+    assert st["admitted"] == ["A", "B"] and st["deferred"] == [["C", "EXECUTOR_BUSY"]]
+    assert st["executors"] == {E1: ["A"], E2: ["B"]} and st["executor_limit"] == 1
+    rows = {r["lineage_root"]: r for r in st["lineages"]}
+    assert (rows["A"]["executor"], rows["B"]["executor"]) == (E1, E2)
+    # each executor receives its own lineage only
+    assert _run(tmp_path, E2).task_id == "B" and _run(tmp_path, E2) is None
+    assert _run(tmp_path, "intruder") is None
+    assert _run(tmp_path, E1).task_id == "A"
+    st = c.tick([cand("C", "src/c")])
+    # both are being verified: their executors still own them
+    assert st["executors"] == {E1: ["A"], E2: ["B"]} and st["deferred"] == [["C", "EXECUTOR_BUSY"]]
+    verify(tmp_path)
+    verify(tmp_path)
+    st = c.tick([cand("C", "src/c")])
+    assert st["admitted"] == ["C"] and st["executors"] == {E1: ["C"], E2: []}
+    on_disk = json.loads((tmp_path / "status" / "status.json").read_text())
+    assert on_disk["executors"] == {E1: ["C"], E2: []}
+    # a second coordinator with another pool reads the same owners from the journal
+    other = coordinator(tmp_path, identity="coord-2", max_live=4, executors=("vps9-impl",))
+    assert other.tick()["executors"] == {E1: ["C"], "vps9-impl": []}
+    # and one without a pool assigns nothing but still reports them
+    plain = coordinator(tmp_path, identity="coord-3", max_live=4)
+    st = plain.tick([cand("D", "src/d")])
+    assert st["executors"] == {E1: ["C"]} and st["admitted"] == ["D"]
+    assert {r["lineage_root"]: r["executor"] for r in st["lineages"]}["D"] == ""
+
+
+def test_a_reassigned_execution_is_recovered_and_tracked_without_a_second_valid_writer(tmp_path):
+    j = store(tmp_path)
+    c = coordinator(tmp_path, max_live=4, executors=(E1, E2))
+    c.tick([cand("A", "src/a")])
+    spool = SpoolTransport(tmp_path / "spool")
+    old = spool.claim(Channel.WORK, role=Role.IMPLEMENTER, identity=E1)  # E1 starts working
+    new = c.planner.reassign("A", executor_pool=(E2,), reason="runner unreachable")
+    events = len(list(j.root.glob("*.json")))
+    # the fenced work record is still in the spool: the journal knows it, the witness is quiet
+    st = c.tick()
+    assert st["state"] == "OK" and st["executors"] == {E1: [], E2: ["A"]}
+    assert st["lineages"][0]["epoch"] == 1 and st["lineages"][0]["execution_id"] == "A-E1-X1"
+    # the record of the new execution is lost before E2 took it: recovery re-publishes the
+    # SAME record with the SAME address; it is not another execution
+    (tmp_path / "spool" / "WORK" / f"{new.seal}.json").unlink()
+    st = c.tick()
+    assert st["recovered"] == ["REPUBLISHED:A:WORK"]
+    assert len(list(j.root.glob("*.json"))) == events + 0 and st["lineages"][0]["epoch"] == 1
+    assert spool.claim(Channel.WORK, role=Role.IMPLEMENTER, identity=E1) is None
+    # E1 finishes the fenced execution late; E2 finishes the current one
+    spool.publish(make_result(old, executor_identity=E1, result_revision=REV1, result_tree=TREE1))
+    st = c.tick()
+    assert st["lineages"][0]["phase"] == "DISPATCHED" and st["records_quarantined"] == 1
+    assert _run(tmp_path, E2).seal == new.seal
+    st = c.tick()
+    assert st["lineages"][0]["phase"] == "VERIFYING" and st["state"] == "OK"
+    # a restart replays to the same owner
+    again = coordinator(tmp_path, identity="coord-2", max_live=4).tick()
+    assert again["executors"] == {E2: ["A"]} and again["lineages"][0]["epoch"] == 1
+
+
+def test_executors_need_a_transport_that_delivers_to_the_addressee(tmp_path):
+    class Unaddressed(SpoolTransport):
+        addressed = 1  # truthy is not enough: the attribute must be exactly True
+
+    store(tmp_path)
+    attached = store(tmp_path, create=False)
+    common = dict(
+        identity="coord-1",
+        verifier_identities=(VER,),
+        status_path=tmp_path / "status" / "status.json",
+        accept_same_filesystem=True,
+    )
+    with pytest.raises(PlannerError, match="COORDINATOR_NEEDS_ADDRESSED_TRANSPORT"):
+        Coordinator(attached, Unaddressed(tmp_path / "spool"), executors=(E1,), **common)
+    for pool, limit, why in (((E1, E1), 1, "duplicate"), ((E1,), 0, "executor_limit")):
+        with pytest.raises(PlannerError, match=why):
+            coordinator(tmp_path, executors=pool, executor_limit=limit)
+    assert not (tmp_path / "status" / "status.json").exists()  # configuration: no status
+    Coordinator(attached, Unaddressed(tmp_path / "spool"), **common)  # no pool: no requirement
+    item, fields = cand("Z", "src/z")
+    for key in ("executor_pool", "executor_limit"):
+        with pytest.raises(PlannerError, match="work fields may not set"):
+            coordinator(tmp_path).tick([(item, {**fields, key: (E1,)})])
+
+
+def test_the_executor_limit_is_the_coordinators_and_a_busy_pool_ends_the_step(tmp_path):
+    store(tmp_path)
+    c = coordinator(tmp_path, max_live=8, executors=(E1, E2), executor_limit=2)
+    cands = [cand(n, f"src/{n.lower()}") for n in ("A", "B", "C", "D", "F", "G")]
+    st = c.tick(cands)
+    assert st["admitted"] == ["A", "B", "C", "D"] and st["executor_limit"] == 2
+    assert st["executors"] == {E1: ["A", "C"], E2: ["B", "D"]}
+    assert st["deferred"] == [["F", "EXECUTOR_BUSY"]]  # G was not tried: the pool is full
+
+
+def test_an_address_that_cannot_be_read_halts_the_coordinator(tmp_path):
+    from project_atlas.orchestration.autonomy.dev_transport import TransportError
+
+    store(tmp_path)
+    c = coordinator(tmp_path, max_live=4, executors=(E1,))
+    st = c.tick([cand("A", "src/a")])
+    assert st["state"] == "OK"
+    seal = st["lineages"][0]["work_seal"]
+    (tmp_path / "spool" / "WORK" / f"{seal}.to").write_text("vps1-impl\n")
+    before = tree(tmp_path)
+    with pytest.raises(TransportError, match="invalid addressee"):
+        c.tick([cand("N", "src/n")])
+    status = json.loads((tmp_path / "status" / "status.json").read_text())
+    assert status["state"] == "HALTED" and status["reason"].startswith("TRANSPORT_ERROR:")
+    assert tree(tmp_path) == before  # nothing appended, published or re-addressed
+    with pytest.raises(TransportError):
+        coordinator(tmp_path, identity="coord-2", executors=(E1,)).tick()
+
+
+def test_a_record_the_transport_refuses_after_its_event_is_not_reported_as_a_refusal(tmp_path):
+    from project_atlas.orchestration.autonomy.dev_contracts import make_work
+    from project_atlas.orchestration.autonomy.dev_transport import TransportError
+
+    store(tmp_path)
+    c = coordinator(tmp_path, max_live=4, executors=(E1,))
+    c.tick()
+    item, fields = cand("A", "src/a")
+    work = make_work(
+        task_id="A",
+        execution_id="A-E1",
+        lineage_root="A",
+        required_role=Role.IMPLEMENTER,
+        max_attempts=item.max_attempts,
+        **fields,
+    )
+    # the spool already holds another address for exactly this record
+    (tmp_path / "spool" / "WORK" / f"{work.seal}.to").write_text("someone-else")
+    with pytest.raises(TransportError, match="different address"):
+        c.tick([(item, fields)])
+    status = json.loads((tmp_path / "status" / "status.json").read_text())
+    assert status["state"] == "HALTED" and status["reason"].startswith("TRANSPORT_ERROR:")
+    # the DISPATCH is journalled and owned; it is not delivered until the address is repaired
+    assert c.planner.lineages["A"].executor == E1 and works(tmp_path) == []
+    (tmp_path / "spool" / "WORK" / f"{work.seal}.to").unlink()
+    st = c.tick()
+    assert st["state"] == "OK" and st["recovered"] == ["REPUBLISHED:A:WORK"]
+    assert works(tmp_path) == [f"{work.seal}.json"]
+
+
+def test_a_transport_error_in_the_constructor_leaves_a_halted_status(tmp_path, monkeypatch):
+    from project_atlas.orchestration.autonomy.dev_transport import TransportError
+
+    store(tmp_path)
+    assert coordinator(tmp_path).tick([cand("A", "src/a")])["state"] == "OK"
+
+    def refused(self, channel):
+        raise TransportError("listing refused")
+
+    monkeypatch.setattr(SpoolTransport, "published", refused)
+    with pytest.raises(TransportError, match="listing refused"):
+        coordinator(tmp_path, identity="coord-2")
+    status = json.loads((tmp_path / "status" / "status.json").read_text())
+    assert status["state"] == "HALTED" and status["reason"] == "TRANSPORT_ERROR:listing refused"

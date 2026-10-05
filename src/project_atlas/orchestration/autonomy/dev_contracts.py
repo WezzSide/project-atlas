@@ -447,7 +447,9 @@ def scope_overlap(a: tuple[str, ...], b: tuple[str, ...]) -> tuple[tuple[str, st
 _REPO_OWNER = r"[A-Za-z0-9][A-Za-z0-9-]{0,38}"
 _REPO_NAME = r"[A-Za-z0-9._-]{1,100}"
 _REPO_HOST = r"[Gg][Ii][Tt][Hh][Uu][Bb]\.[Cc][Oo][Mm]"
-# The supported spellings of ONE repository identity. Everything is anchored and ASCII; one
+# The supported spellings of ONE repository identity. Every pattern is applied with
+# ``fullmatch`` and uses explicit ASCII classes; the ``http(s)`` scheme and the host are
+# case-insensitive, ``ssh://`` and ``git@`` must be lower case; one
 # optional ``.git`` and one optional trailing slash are the only decorations.
 _REPO_FORMS = tuple(
     re.compile(prefix + rf"({_REPO_OWNER})/({_REPO_NAME}?)(?:\.git)?/?")

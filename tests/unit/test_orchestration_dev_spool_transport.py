@@ -246,3 +246,261 @@ def test_blocked_claimed_slot_is_parked_once_and_not_retried(tmp_path, monkeypat
     assert calls["n"] == 1 and naps == [], "a blocked destination is never retried"
     assert (tmp_path / "WORK" / "rejected" / f"{w.seal}.json").exists()
     assert t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity=IMPL) is None  # parked once
+
+
+# ---- ATLAS-DEVQ-0011: addressed delivery ----------------------------------------------------
+
+
+def test_an_addressed_record_is_delivered_only_to_its_addressee(tmp_path):
+    t = SpoolTransport(tmp_path)
+    a, b, c = work("A"), work("B"), work("C")
+    assert t.publish(a, to="vps1-impl") and t.publish(b, to="vps4-impl") and t.publish(c)
+    assert (tmp_path / "WORK" / f"{a.seal}.to").read_text() == "vps1-impl"
+    assert not (tmp_path / "WORK" / f"{c.seal}.to").exists()
+
+    def claim(who):
+        return SpoolTransport(tmp_path).claim(Channel.WORK, role=Role.IMPLEMENTER, identity=who)
+
+    # another identity gets only what is addressed to nobody in particular
+    assert claim("someone").seal == c.seal and claim("someone") is None
+    assert claim("VPS4-IMPL").seal == b.seal and claim("vps4-impl") is None  # identity rules
+    assert claim("vps1-impl").seal == a.seal and claim("vps1-impl") is None
+    # the address is not a record: it is never listed, claimed or parked
+    assert {r.seal for r in t.published(Channel.WORK)} == {a.seal, b.seal, c.seal}
+    assert not (tmp_path / "WORK" / "rejected").exists()
+
+
+def test_a_record_is_addressed_once(tmp_path):
+    t = SpoolTransport(tmp_path)
+    a, c = work("A"), work("C")
+    assert t.publish(a, to="vps1-impl") is True
+    assert t.publish(a, to="vps1-impl") is False  # idempotent with the same address
+    for other in ("vps4-impl", None):
+        with pytest.raises(TransportError, match="already published with a different address"):
+            t.publish(a, to=other)
+    assert t.publish(c) is True
+    with pytest.raises(TransportError, match="already published with a different address"):
+        t.publish(c, to="vps1-impl")  # an open record cannot be narrowed afterwards
+    for bad in ("", " x ", 5):
+        with pytest.raises(TransportError, match="invalid addressee"):
+            t.publish(work("D"), to=bad)
+    assert not (tmp_path / "WORK" / f"{work('D').seal}.json").exists()
+    # still so after the record was claimed
+    assert t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity="vps1-impl").seal == a.seal
+    assert t.publish(a, to="vps1-impl") is False
+    with pytest.raises(TransportError, match="already published with a different address"):
+        t.publish(a, to="vps4-impl")
+
+
+def test_an_unreadable_address_delivers_to_nobody_and_does_not_wedge_the_channel(tmp_path):
+    t = SpoolTransport(tmp_path)
+    a, c = work("A"), work("C")
+    t.publish(a, to="vps1-impl")
+    t.publish(c)
+    (tmp_path / "WORK" / f"{a.seal}.to").write_bytes(b"\xff\xfe not an identity \n")
+    got = t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity="vps1-impl")
+    assert got.seal == c.seal  # the open record behind it is still delivered
+    assert t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity="vps1-impl") is None
+    assert (tmp_path / "WORK" / f"{a.seal}.json").exists()  # left in place, not parked
+    with pytest.raises(TransportError):
+        t.publish(a, to="vps1-impl")
+
+
+def test_an_address_written_before_a_crash_is_never_widened(tmp_path):
+    """The address is written before the record: a record never appears without it."""
+    t = SpoolTransport(tmp_path)
+    a = work("A")
+    (tmp_path / "WORK" / f"{a.seal}.to").write_text("vps1-impl")  # crash before the record
+    with pytest.raises(TransportError, match="already published with a different address"):
+        t.publish(a)
+    assert t.publish(a, to="vps1-impl") is True
+    assert t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity="other") is None
+
+
+def test_the_in_memory_backend_addresses_the_same_way():
+    from project_atlas.orchestration.autonomy.dev_transport import InMemoryTransport
+
+    t = InMemoryTransport()
+    a, c = work("A"), work("C")
+    assert t.publish(a, to="vps1-impl") and t.publish(c)
+    assert t.publish(a, to="vps1-impl") is False
+    with pytest.raises(TransportError, match="different address"):
+        t.publish(a)
+    with pytest.raises(TransportError, match="different address"):
+        t.publish(c, to="vps1-impl")
+    with pytest.raises(TransportError, match="invalid addressee"):
+        t.publish(work("D"), to="")
+    assert t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity="other").seal == c.seal
+    assert t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity="other") is None
+    assert t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity="vps1-impl").seal == a.seal
+    assert InMemoryTransport.addressed is True and SpoolTransport.addressed is True
+    # a claimed record is the claimer's: it is not withdrawn, and a pending one is
+    assert t.withdraw(a) is False and t.withdraw(a) is False
+    d = work("D2")
+    assert t.publish(d) and t.withdraw(d) is True and t.withdraw(d) is False
+    assert t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity="other") is None
+
+
+def test_a_claimed_record_is_readopted_only_by_its_addressee(tmp_path, monkeypatch):
+    """Crash between the claim and its meta: the address still says whose record it is."""
+    import os as _os
+
+    t = SpoolTransport(tmp_path)
+    a, c = work("A"), work("C")
+    t.publish(a, to="vps1-impl")
+    t.publish(c)
+    real = _os.replace
+
+    def no_meta(src, dst, *args, **kw):
+        if str(dst).endswith(".claim.json"):
+            raise OSError("crash before the claim meta")
+        return real(src, dst, *args, **kw)
+
+    monkeypatch.setattr("os.replace", no_meta)
+    assert t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity="vps1-impl").seal == a.seal
+    assert t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity="vps1-impl").seal == c.seal
+    monkeypatch.setattr("os.replace", real)
+    assert not list((tmp_path / "WORK" / "claimed").glob("*.claim.json"))
+    seen = {r.seal for r in t.claimed_records(Channel.WORK, identity="vps4-impl")}
+    assert seen == {c.seal}  # the unaddressed one is still "unowned"; the addressed one is not
+    mine = {r.seal for r in t.claimed_records(Channel.WORK, identity="vps1-impl")}
+    assert mine == {a.seal, c.seal}
+
+
+def test_withdraw_takes_back_only_what_nobody_claimed(tmp_path):
+    t = SpoolTransport(tmp_path)
+    a, b = work("A"), work("B")
+    t.publish(a, to="vps1-impl")
+    t.publish(b, to="vps1-impl")
+    assert t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity="vps1-impl").seal == a.seal
+    assert t.withdraw(a) is False  # claimed: it stays with its claimer
+    assert (tmp_path / "WORK" / "claimed" / f"{a.seal}.json").exists()
+    assert not (tmp_path / "WORK" / "withdrawn" / f"{a.seal}.json").exists()
+    assert t.withdraw(b) is True and t.withdraw(b) is False
+    assert (tmp_path / "WORK" / "withdrawn" / f"{b.seal}.json").exists()
+    assert not (tmp_path / "WORK" / f"{b.seal}.json").exists()
+    assert t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity="vps1-impl") is None
+    assert {r.seal for r in t.published(Channel.WORK)} == {a.seal}  # withdrawn: not listed
+
+
+def test_a_record_withdrawn_before_it_arrived_is_never_published(tmp_path):
+    """The planner that fenced it wins also against a publish that is still on its way."""
+    from project_atlas.orchestration.autonomy.dev_transport import InMemoryTransport
+
+    for t in (SpoolTransport(tmp_path), InMemoryTransport()):
+        late = work("LATE")
+        assert t.withdraw(late) is True and t.withdraw(late) is False  # not in the transport yet
+        # the stale publisher arrives: refused quietly, whatever address it brings
+        assert t.publish(late, to="vps1-impl") is False
+        assert t.publish(late) is False
+        assert t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity="vps1-impl") is None
+    assert not (tmp_path / "WORK" / f"{work('LATE').seal}.json").exists()
+    assert not list((tmp_path / "WORK").glob("*.to"))
+
+
+def test_a_publish_that_was_on_its_way_takes_its_own_name_back(tmp_path, monkeypatch):
+    import os as _os
+
+    t = SpoolTransport(tmp_path)
+    a = work("A")
+    real = _os.link
+
+    def withdrawn_meanwhile(src, dst, *args, **kw):
+        if str(dst).endswith(f"{a.seal}.json") and "withdrawn" not in str(dst):
+            monkeypatch.setattr("os.link", real)
+            assert SpoolTransport(tmp_path).withdraw(a) is True  # after publish looked
+        return real(src, dst, *args, **kw)
+
+    monkeypatch.setattr("os.link", withdrawn_meanwhile)
+    assert t.publish(a, to="vps1-impl") is False
+    assert not (tmp_path / "WORK" / f"{a.seal}.json").exists()
+    assert t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity="vps1-impl") is None
+
+
+def test_withdraw_never_keeps_a_tombstone_for_a_record_a_claimer_took(tmp_path, monkeypatch):
+    from project_atlas.orchestration.autonomy import dev_spool_transport as mod
+
+    t = SpoolTransport(tmp_path)
+    a = work("A")
+    t.publish(a)
+    real = mod._release_pending
+
+    claimed = []
+
+    def claimer_first(path):
+        # a claimer links the record after the tombstone was written, before the name is removed
+        if not claimed:
+            claimed.append(True)  # (the claim releases its own pending name through here too)
+            got = SpoolTransport(tmp_path).claim(Channel.WORK, role=Role.IMPLEMENTER, identity="x")
+            assert got is not None and got.seal == a.seal
+        real(path)
+
+    monkeypatch.setattr(mod, "_release_pending", claimer_first)
+    assert t.withdraw(a) is False  # the claimer has it: not withdrawn
+    monkeypatch.setattr(mod, "_release_pending", real)
+    assert not (tmp_path / "WORK" / "withdrawn" / f"{a.seal}.json").exists()
+    assert (tmp_path / "WORK" / "claimed" / f"{a.seal}.json").exists()
+    assert t.withdraw(a) is False and t.publish(a) is False
+
+
+def test_republishing_with_a_case_variant_of_the_address_is_the_same_address(tmp_path):
+    from project_atlas.orchestration.autonomy.dev_transport import InMemoryTransport
+
+    for t in (SpoolTransport(tmp_path), InMemoryTransport()):
+        a = work("A")
+        assert t.publish(a, to="vps1-impl") is True
+        assert t.publish(a, to="VPS1-IMPL") is False  # identities compare as same_identity
+
+
+def test_an_address_file_must_hold_exactly_an_identity(tmp_path):
+    t = SpoolTransport(tmp_path)
+    a = work("A")
+    t.publish(a, to="vps1-impl")
+    for junk in ("vps1-impl\n", " vps1-impl", "", '{"to": "vps1-impl"}', "a" * 257):
+        (tmp_path / "WORK" / f"{a.seal}.to").write_text(junk)
+        assert t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity="vps1-impl") is None
+        assert t.claimed_records(Channel.WORK, identity="vps1-impl") == []
+    assert (tmp_path / "WORK" / f"{a.seal}.json").exists()
+    (tmp_path / "elsewhere").write_text("vps4-impl")
+    (tmp_path / "WORK" / f"{a.seal}.to").unlink()
+    (tmp_path / "WORK" / f"{a.seal}.to").mkdir()  # not a regular file
+    assert t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity="vps1-impl") is None
+    (tmp_path / "WORK" / f"{a.seal}.to").rmdir()
+    try:
+        (tmp_path / "WORK" / f"{a.seal}.to").symlink_to(tmp_path / "elsewhere")
+    except OSError:  # no symlinks here (Windows without the privilege): nothing to check
+        return
+    assert t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity="vps4-impl") is None
+
+
+def test_a_withdrawn_record_stays_withdrawn(tmp_path):
+    """A planner that replayed before the reassignment must not put the fenced record back."""
+    t = SpoolTransport(tmp_path)
+    a = work("A")
+    assert t.publish(a, to="vps1-impl") and t.withdraw(a)
+    for to in ("vps1-impl", "vps4-impl", None):
+        assert t.publish(a, to=to) is False  # refused quietly, like a known record
+    assert not (tmp_path / "WORK" / f"{a.seal}.json").exists()
+    assert t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity="vps1-impl") is None
+
+
+def test_a_claimed_record_with_an_unreadable_address_is_readopted_by_nobody(tmp_path):
+    t = SpoolTransport(tmp_path)
+    a = work("A")
+    t.publish(a, to="vps1-impl")
+    assert t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity="vps1-impl").seal == a.seal
+    (tmp_path / "WORK" / "claimed" / f"{a.seal}.claim.json").unlink()  # crash before the meta
+    (tmp_path / "WORK" / f"{a.seal}.to").write_text("vps1-impl\n")
+    for who in ("vps1-impl", "vps4-impl"):
+        assert t.claimed_records(Channel.WORK, identity=who) == []
+
+
+def test_an_addressee_is_a_bounded_identity(tmp_path):
+    from project_atlas.orchestration.autonomy.dev_transport import InMemoryTransport
+
+    for t in (SpoolTransport(tmp_path), InMemoryTransport()):
+        with pytest.raises(TransportError, match="invalid addressee"):
+            t.publish(work("A"), to="e" * 201)
+        assert t.publish(work("A"), to="e" * 200) is True
+    assert not list((tmp_path / "WORK").glob("*.tmp*"))
+    assert [p.name for p in (tmp_path / "WORK").glob("*.to")] == [f"{work('A').seal}.to"]
