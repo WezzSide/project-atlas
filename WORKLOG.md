@@ -16716,8 +16716,12 @@ What this does NOT establish (limits):
   The limit is a rule of the dispatch decision, like `live_limit`, not of replay.
 - A lineage dispatched without a pool is not assigned and behaves as before.
 - The scope of a BLOCKED or OWNER_REQUIRED lineage still cannot be handed over.
-- The fabric adapter was not changed or run: it claims with its own executor identity, so
-  it receives the records addressed to it; that pairing is not tested end to end here.
+- The fabric adapter's code was not changed (one docstring sentence of `ResultInBaseObserver`
+  in the same file was) and no repository test runs it against an assigned pool: it claims
+  with its own executor identity, so it receives the records addressed to it. Naming the
+  SAME executor again in a reassignment is not supported end to end with it: an adapter that
+  still holds the fenced work pairs the verification request with that work and fails
+  closed (measured by a verifier; the lineage then stays VERIFYING).
 - Local tests only. No live run, no executor dispatch.
 
 Carried from the PR #1071 verification: tests pin that `.git` is a literal suffix (`o/xagit`
@@ -16728,16 +16732,16 @@ observer constructor's exception.
 Existing tests changed (vs main `fdbb42c7`, by test name and body): one changed in place,
 `test_fleet_status_is_derived_from_the_journal_alone` (two new row keys); the journal test
 helper `_forge` now writes version 3 for an event that names an executor. Test functions:
-journal file 76 -> 89, coordinator file 42 -> 48, spool file 11 -> 19, loop-contracts file
+journal file 76 -> 92, coordinator file 42 -> 49, spool file 11 -> 23, loop-contracts file
 72 -> 73.
 
 Commands and results (`PYTHONPATH=<worktree>/src`, `--no-cov -o addopts=""`):
-- `test_orchestration_dev_planner_journal.py` 112 passed, `_dev_coordinator.py` 48,
-  `_dev_spool_transport.py` 19 (these three together 30 consecutive runs, no failure),
+- `test_orchestration_dev_planner_journal.py` 115 passed, `_dev_coordinator.py` 49,
+  `_dev_spool_transport.py` 23 (these three together 30 consecutive runs, no failure),
   `_dev_loop_contracts.py` 150, `_dev_fabric_adapter.py` 141.
-- The nine DEVQ files: 984 passed. Broad selection (`-k "orchestration_dev or dev_package or
+- The nine DEVQ files: 992 passed. Broad selection (`-k "orchestration_dev or dev_package or
   executor or agent_execute or workflow or autonomy or global_foundation or github_port"`):
-  1682 passed, 5152 deselected.
+  1690 passed, 5152 deselected.
 - `ruff check .` clean; `ruff format --check` on the nine changed Python files clean;
   `mypy src`: no issues in 415 source files.
 - 38 scratch mutants of the model and of addressed delivery against five DEVQ test files
@@ -16779,11 +16783,35 @@ PASS_WITH_NONBLOCKING_FINDINGS):
 - Tests added for behaviour that was correct but unpinned: name tie-break, owner matched by
   `same_identity`, a superseded task id cannot be reassigned, the reason must be printable,
   the coordinator's `executor_limit`, `EXECUTOR_BUSY` ending the step.
-Not pinned / remaining: two race-only properties of the spool address (the re-check after
-the exclusive link, the address written before the record) are covered by the verifier's
-concurrency trials, not by a repository test; a concurrent UNADDRESSED publish of the same
+Not pinned / remaining: three race-only properties of the spool address (its exclusive
+creation, the re-check after it, the address written before the record) are covered by the
+verifiers' concurrency trials, not by a repository test; the 256-byte bound on an address
+file cannot be told apart by a test from the identity bound of 200 characters; a concurrent UNADDRESSED publish of the same
 seal can win the record name before an addressed one (the planner never does both); the
 seal-equality clause of the REASSIGN rule is unreachable once the suffix is reserved; a
 main-code claimer on the same spool ignores addresses (the journal is version-gated, the
 spool is not); a claim identity is compared as `same_identity` does (case and surrounding
 whitespace); a pool may contain a verifier or the planner's own identity.
+
+Found by independent verification of the second pushed head `87e43401` and fixed in this
+entry's code (verdicts there: semantics PASS_WITH_NONBLOCKING_FINDINGS, evidence FAIL on the
+first item):
+- Two docstring sentences of the `Coordinator` (class limits, `tick`) still said that only a
+  continuity failure or an `OSError` writes `HALTED`; a `TransportError` does too.
+- An executor identity longer than 256 bytes was journalled and could then never be
+  delivered by the spool. Identities named in a pool, in a journal event and as an addressee
+  are now at most 200 characters, checked before anything is written.
+- A planner that had replayed before a reassignment could publish the withdrawn, fenced
+  record again on a spool (its adapter then dispatched the fenced execution; the result was
+  refused). `SpoolTransport.publish` now refuses a withdrawn seal, as the in-memory
+  transport did; `withdraw` removes its copy again when a claimer took the record meanwhile.
+- A `TransportError` while `pump` published the record of an event it had just journalled
+  was quarantined against the consumed result or verdict and the tick ended `OK`; it is now
+  raised (and halts a coordinator tick), and recovery re-publishes the record.
+- `claimed_records` with an unreadable address, a `TransportError` in the coordinator
+  constructor and the planner's exact `addressed is True` check now have tests.
+Still open, by measurement of that verification: an address file next to a RESULT or VERDICT
+record keeps the planner from claiming it, silently (the spool directory is trusted);
+`recover` on a planner whose transport is not `addressed` is not guarded (only `dispatch`
+and `reassign` are); `_addressee` checks for a symbolic link and then opens the path, which
+is not atomic.

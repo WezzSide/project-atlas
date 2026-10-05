@@ -189,8 +189,8 @@ What this does NOT establish: it does not stop, signal or observe the earlier ex
 may keep running and pushing to its own result branch (nothing here integrates a branch; only
 a verified result of the current execution can become INTEGRATION_READY). A fenced work
 record that nobody claimed yet is withdrawn from a transport that supports it (best effort,
-repeated on recovery), so the earlier executor does not START it afterwards; one it already
-claimed runs on; identities are
+repeated on recovery; the spool then refuses to publish that seal again). The earlier
+executor can still have claimed it first, and then runs on; identities are
 unauthenticated strings and the address of a work record is metadata in the transport, so
 this fences stale or slow executors, not one that forges another's identity; a reassignment
 IS a new execution that the new owner's adapter dispatches (it is bounded per work item, so
@@ -252,6 +252,7 @@ from project_atlas.orchestration.autonomy.dev_queue import (
     validate,
 )
 from project_atlas.orchestration.autonomy.dev_transport import (
+    MAX_IDENTITY,
     Channel,
     DevTransport,
     Record,
@@ -844,6 +845,8 @@ def _executor_of(ev: dict[str, Any]) -> str:
         if not isinstance(executor, str):
             raise ValueError("not a string")
         validate_identity(executor)
+        if len(executor) > MAX_IDENTITY:
+            raise ValueError("too long")
     except ValueError as exc:
         raise PlannerError(f"event names an invalid executor identity: {exc}") from exc
     return executor
@@ -1418,8 +1421,9 @@ class Planner:
     def recover(self) -> list[str]:
         """After a restart: finish what a crash may have left between journal and transport.
 
-        Re-publishes the current work of every executing lineage and the issued request of every
-        verifying one (idempotent: an already published record is a no-op), then re-feeds RESULT
+        Withdraws fenced work records nobody claimed (``WITHDRAWN:<root>:WORK``), re-publishes
+        the current work of every executing lineage and the issued request of every verifying
+        one (idempotent: an already published record is a no-op), then re-feeds RESULT
         and VERDICT records this identity had claimed from a transport that keeps them
         (``claimed_records``) but that are not in the journal yet. Returns what it did.
         """
@@ -1441,7 +1445,7 @@ class Planner:
         return done
 
     def _republish(self) -> list[str]:
-        """Publish the pending record of every live lineage (idempotent). Replays first."""
+        """Withdraw fenced records, publish each live lineage's pending record. Replays first."""
         self.sync()  # continuity first: nothing is published from a history that does not replay
         self._anchor_head()  # and nothing is published for an event that is not acknowledged
         done: list[str] = []
@@ -1640,6 +1644,8 @@ class Planner:
                 if not isinstance(e, str):
                     raise ValueError("not a string")
                 validate_identity(e)
+                if len(e) > MAX_IDENTITY:
+                    raise ValueError("too long")
         except ValueError as exc:
             raise PlannerError(f"invalid executor identity in the pool: {exc}") from exc
         if len({e.strip().casefold() for e in pool}) != len(pool):
@@ -1689,8 +1695,10 @@ class Planner:
         accepts a result only for the new work and only from the new owner. A result of the
         earlier execution, whenever it arrives and whoever sends it, is refused: it answers a
         work seal that is no longer the lineage's current work (the journal refuses a
-        REASSIGN that would keep the seal). The fenced record is withdrawn from the transport
-        if nobody claimed it yet.
+        REASSIGN that would keep the seal). The fenced record is withdrawn if nobody claimed
+        it yet and the transport has ``withdraw``. With the fabric adapter, naming the SAME
+        executor again is not supported end to end: an adapter that still holds the fenced
+        work pairs the verification request with it and fails closed.
 
         That refusal, not the caller's ``reason``, is what makes the replacement safe. A
         timeout, an expired lease or a report that an executor died is a reason to call this;
@@ -1829,6 +1837,10 @@ class Planner:
             self.deferred.append((Channel(channel), rec))
         except JournalCorrupt:  # the journal stopped replaying mid-pass: stop, keep the record
             self.deferred.append((Channel(channel), rec))
+            raise
+        except TransportError:
+            # the transport refused the record of an event that IS journalled (e.g. an address
+            # that cannot be read): not a refusal of the consumed record; recover re-publishes
             raise
         except ContractError as exc:
             self._quarantine(channel, seal, str(exc))
@@ -2011,8 +2023,11 @@ class Coordinator:
       * it does not dispatch an executor: publishing a WORK record makes it available to an
         implementer role; causing a workflow run is the fabric adapter's separate, authority
         bound step. Nothing here holds or consumes a dispatch grant;
-      * recovery is not a new attempt: ``recover`` only re-publishes the SAME sealed record
-        (same seal, same execution id, same attempt number). A transport that still has the
+      * recovery is not a new attempt: ``recover`` re-publishes only the SAME sealed record
+        (same seal, same execution id, same attempt number, same address), withdraws fenced
+        records nobody claimed, and journals results and verdicts this identity had claimed
+        but not yet journalled; it never writes a DISPATCH or a REASSIGN. A transport that still
+        has the
         record, pending or claimed, ignores it. If the transport lost it, the record is
         published again, and whether that leads to a second workflow dispatch is decided by
         the adapter's own ledger (the crosswalk), which refuses a seal it already dispatched:
@@ -2055,10 +2070,11 @@ class Coordinator:
         until its dependency is completed and is then reported as refused, because
         ``Planner.dispatch`` validates an item on its own: dependencies are not supported;
       * status ``state`` is ``OK``, ``DEGRADED`` (the anchor holds repair records; the tick
-        still ran) or ``HALTED`` (continuity failed, or an ``OSError`` from the store or the
-        transport stopped the constructor or a tick, reason ``IO_ERROR:...``; written best
-        effort). Any other failure, including a constructor refused for its configuration,
-        leaves the previous status in place;
+        still ran) or ``HALTED`` (continuity failed, or an ``OSError`` (reason
+        ``IO_ERROR:...``) or a ``TransportError`` (reason ``TRANSPORT_ERROR:...``) from the
+        store or the transport stopped the constructor or a tick; written best effort). Any
+        other failure, including a constructor refused for its configuration, leaves the
+        previous status in place;
       * the status file is last-writer-wins and names no coordinator: one that fails to start
         for a reason local to it (a wrong transport or store) overwrites a shared status with
         ``HALTED`` until a healthy tick rewrites it;
@@ -2067,10 +2083,11 @@ class Coordinator:
         coordinator assigns to no member that already owns ``executor_limit``
         (``EXECUTOR_BUSY``; another coordinator's limit or a ``reassign`` can exceed it). The
         status lists the live lineages each executor owns, from the journal. That needs a
-        transport whose class attribute ``addressed`` is ``True`` (an attribute check, not a
+        transport whose attribute ``addressed`` is ``True`` (an attribute check, not a
         test of delivery). The coordinator never calls ``reassign``: it detects no dead
         executor and replaces none. A transport that refuses a record (``TransportError``,
-        e.g. an address that cannot be read) stops the tick with a ``HALTED`` status.
+        e.g. an address that cannot be read) stops the tick with a ``HALTED`` status; the
+        event of that record, if it was just journalled, stays journalled.
     """
 
     def __init__(
@@ -2198,9 +2215,11 @@ class Coordinator:
         acknowledgement repair, with its record, may have been written). An ``OSError`` from
         the journal, the anchor, the transport listing or a publish is raised as it is, after
         a ``HALTED`` status naming it (``IO_ERROR``) was written if it can be written, so a
-        tick stopped by a ``JournalCorrupt`` or an ``OSError`` replaces an earlier ``OK``
-        whenever the status file can be written. A tick that raises anything else (an invalid
-        candidate list, an exception of another type) leaves the previous status in place.
+        tick stopped by a ``JournalCorrupt``, an ``OSError`` or a ``TransportError`` (raised
+        as it is after a ``HALTED`` status with reason ``TRANSPORT_ERROR:...``) replaces an
+        earlier ``OK`` whenever the status file can be written. A tick that raises anything
+        else (an invalid candidate list, an exception of another type) leaves the previous
+        status in place.
         An ``OSError`` from the status file itself is raised as it is; one from the
         transport's ``claim`` is quarantined by ``pump``.
         """

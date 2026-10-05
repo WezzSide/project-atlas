@@ -11,7 +11,7 @@ Layout::
 
     <root>/<CHANNEL>/<seal>.json                 published, unclaimed
     <root>/<CHANNEL>/<seal>.to                    addressee of the record, if it has one
-    <root>/<CHANNEL>/withdrawn/<seal>.json        taken back by its publisher before a claim
+    <root>/<CHANNEL>/withdrawn/<seal>.json        moved here by ``withdraw`` (never claimed)
     <root>/<CHANNEL>/claimed/<seal>.json          consumed (content kept as durable evidence)
     <root>/<CHANNEL>/claimed/<seal>.claim.json    who claimed it
 
@@ -167,7 +167,11 @@ class SpoolTransport:
         wire = encode(record)  # verifies the seal
         d = self._dir(channel)
         final = d / f"{record.seal}.json"
-        exists = final.exists() or (d / _CLAIMED / f"{record.seal}.json").exists()
+        exists = (
+            final.exists()
+            or (d / _CLAIMED / f"{record.seal}.json").exists()
+            or (d / "withdrawn" / f"{record.seal}.json").exists()  # taken back: stays back
+        )
         standing = self._addressee(channel, record.seal)
         check_address(to, standing if exists or standing is not None else to)
         if exists:
@@ -284,10 +288,11 @@ class SpoolTransport:
     def withdraw(self, record: Record) -> bool:
         """Take a published record back if nobody claimed it yet; False otherwise.
 
-        The pending name is moved to ``withdrawn/`` (kept as evidence). A claimer that
-        already linked the record keeps it: the move then finds nothing, or removes only the
-        pending name the claimer was about to clean up. Best effort; never raises for a
-        record that is not pending.
+        The pending name is moved to ``withdrawn/`` (kept as evidence), and ``publish``
+        refuses that seal from then on. A claimer that already linked the record keeps it:
+        the move then finds nothing, or removes only the pending name the claimer was about
+        to clean up, and the copy in ``withdrawn/`` is removed again. Best effort; never
+        raises for a record that is not pending.
         """
         channel = CHANNEL_FOR_KIND[record.KIND]
         d = self._dir(channel)
@@ -299,7 +304,11 @@ class SpoolTransport:
             os.replace(d / name, d / "withdrawn" / name)
         except OSError:
             return False
-        return not (d / _CLAIMED / name).exists()  # a claimer may have linked it meanwhile
+        if (d / _CLAIMED / name).exists():  # a claimer linked it meanwhile: it is the claimer's
+            with contextlib.suppress(OSError):
+                os.unlink(d / "withdrawn" / name)
+            return False
+        return True
 
     def published(self, channel: Channel) -> list[Record]:
         """Every decodable record this spool holds on ``channel``, pending or claimed.

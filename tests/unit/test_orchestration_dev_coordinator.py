@@ -1341,3 +1341,19 @@ def test_a_record_the_transport_refuses_after_its_event_is_not_reported_as_a_ref
     st = c.tick()
     assert st["state"] == "OK" and st["recovered"] == ["REPUBLISHED:A:WORK"]
     assert works(tmp_path) == [f"{work.seal}.json"]
+
+
+def test_a_transport_error_in_the_constructor_leaves_a_halted_status(tmp_path, monkeypatch):
+    from project_atlas.orchestration.autonomy.dev_transport import TransportError
+
+    store(tmp_path)
+    assert coordinator(tmp_path).tick([cand("A", "src/a")])["state"] == "OK"
+
+    def refused(self, channel):
+        raise TransportError("listing refused")
+
+    monkeypatch.setattr(SpoolTransport, "published", refused)
+    with pytest.raises(TransportError, match="listing refused"):
+        coordinator(tmp_path, identity="coord-2")
+    status = json.loads((tmp_path / "status" / "status.json").read_text())
+    assert status["state"] == "HALTED" and status["reason"] == "TRANSPORT_ERROR:listing refused"

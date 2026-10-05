@@ -2645,3 +2645,60 @@ def test_a_planner_assigns_only_over_a_transport_that_addresses(tmp_path):
     with pytest.raises(PlannerError, match=r"^EXECUTORS_NEED_ADDRESSED_TRANSPORT:"):
         p.reassign("A", executor_pool=POOL, reason="x")
     assert p.state.seq == 0 and not list((tmp_path / "j").iterdir())
+
+
+def test_an_executor_identity_is_bounded_before_it_is_journalled(tmp_path):
+    t = SpoolTransport(tmp_path / "spool")
+    p = planner(t, DirJournal(tmp_path / "j"))
+    with pytest.raises(PlannerError, match="invalid executor identity in the pool"):
+        p.dispatch(qi("A"), executor_pool=("e" * 201,), **FIELDS)
+    assert p.state.seq == 0 and not list((tmp_path / "spool" / "WORK").glob("*.to"))
+    assert p.dispatch(qi("A"), executor_pool=("e" * 200,), **FIELDS)
+    assert _claim_work(t, "e" * 200) is not None
+    # and on replay: a journalled assignment to an identity no transport could address
+    j = tmp_path / "j2"
+    j.mkdir()
+    _forge(
+        j, 1, "", event="DISPATCH", root="B", work=encode(_work("B", "src/q")), executor="e" * 201
+    )
+    with pytest.raises(JournalCorrupt, match="invalid executor identity"):
+        planner(InMemoryTransport(), DirJournal(j))
+
+
+def test_a_planner_requires_addressed_to_be_exactly_true(tmp_path):
+    for value in (1, "yes", [True], None, 0):
+
+        class Truthy(InMemoryTransport):
+            addressed = value
+
+        p = planner(Truthy(), DirJournal(tmp_path / f"j{value!r}".replace("'", "")))
+        with pytest.raises(PlannerError, match=r"^EXECUTORS_NEED_ADDRESSED_TRANSPORT:"):
+            p.dispatch(qi("A"), executor_pool=POOL, **FIELDS)
+        assert p.state.seq == 0
+
+
+def test_a_record_the_transport_refuses_in_pump_is_not_quarantined_as_a_bad_result(tmp_path):
+    from project_atlas.orchestration.autonomy.dev_transport import TransportError
+
+    t = SpoolTransport(tmp_path / "spool")
+    p = planner(t, DirJournal(tmp_path / "j"))
+    wa = p.dispatch(qi("A"), executor_pool=(E1,), **FIELDS)
+    assert _claim_work(t, E1).seal == wa.seal
+    res = _result(wa, E1)
+    t.publish(res)
+    real = SpoolTransport.publish
+
+    def refuse_requests(self, record, *, to=None):
+        if record.KIND.value == "VERIFICATION_REQUEST":
+            raise TransportError("record is already published with a different address")
+        return real(self, record, to=to)
+
+    SpoolTransport.publish = refuse_requests
+    try:
+        with pytest.raises(TransportError, match="different address"):
+            p.pump()
+    finally:
+        SpoolTransport.publish = real
+    # the RESULT event is journalled; the result was not thrown away as a bad record
+    assert p.lineages["A"].phase is Phase.VERIFYING and p.quarantined == []
+    assert p.recover() == ["REPUBLISHED:A:VERIFICATION_REQUEST"]

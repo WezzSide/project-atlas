@@ -85,7 +85,8 @@ class DevTransport(Protocol):
         ``to`` (optional, ATLAS-DEVQ-0011) addresses the record to one identity: only that
         identity's ``claim`` receives it. The address is delivery metadata next to the
         record, not part of its seal. A backend that implements it says so with the class
-        attribute ``addressed = True``. Such a backend may also offer
+        attribute ``addressed = True`` (callers read it with ``getattr``). Such a backend may also
+        offer
         ``withdraw(record) -> bool``: take a published record back if nobody claimed it.
         """
 
@@ -111,6 +112,9 @@ def decode(wire: str) -> Record:
     return rec
 
 
+MAX_IDENTITY = 200  # an executor identity / addressee, in characters (identities are ASCII)
+
+
 def check_address(to: str | None, standing: str | None) -> None:
     """Refuse an address that is not an identity, or that differs from the one that stands.
 
@@ -122,6 +126,8 @@ def check_address(to: str | None, standing: str | None) -> None:
             if not isinstance(to, str):
                 raise ValueError("not a string")
             validate_identity(to)
+            if len(to) > MAX_IDENTITY:
+                raise ValueError("too long")
         except ValueError as exc:
             raise TransportError(f"invalid addressee: {exc}") from exc
     if (to is None) != (standing is None) or (
