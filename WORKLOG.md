@@ -16447,8 +16447,8 @@ seal change, no workflow / CLI change):
   what it switched on is now always on.
 - One basis, `RESULT_IN_BASE`: the earlier lineage is INTEGRATION_READY and its verified
   result revision is an ancestor of the new work's `base_revision`. The entry holds root,
-  basis, result revision, base revision, observer identity and bounded `str -> str` evidence
-  (at most 8 pairs, 256 characters each). The journal checks that the entry names exactly
+  basis, result revision, base revision, observer identity and bounded evidence (a non-empty
+  mapping of at most 8 `str -> str` pairs, key and value together 1 to 256 characters). The journal checks that the entry names exactly
   that lineage's result and exactly the new work's base, that entries are ordered, unique and
   only for lineages the work collides with. Applying the event marks the earlier lineage
   (`handover`, `handed_over_to`, history line `SCOPE_HANDED_OVER:<root>:<base>`); it stops
@@ -16457,9 +16457,10 @@ seal change, no workflow / CLI change):
   base_revision=)`), given to `Planner(observer=)` / `Coordinator(observer=)` at
   construction and called inside the dispatch decision, once per (result, base) per dispatch.
   `dispatch` has no parameter for evidence. No observer, an observer that returns `None`,
-  raises `ValueError` (incl. `ContractError`) / `OSError` / `TypeError`, or returns something
-  that is not bounded evidence: the refusal stands. Another exception type propagates;
-  nothing was appended.
+  raises `ValueError` (every `ContractError`, so also an `AdapterError`, `TransportError` or
+  `JournalCorrupt` raised inside it) / `OSError` / `TypeError`, or returns anything but a
+  mapping that is bounded evidence: the refusal stands. Another exception type (e.g.
+  `RuntimeError`, `KeyError`) propagates; nothing was appended.
 - `dev_fabric_adapter.ResultInBaseObserver(port, repository=, identity=)`: one
   `port.compare(base_revision, result_revision)`; evidence only when the merge base is the
   result revision; `None` for another repository or a revision that is not 40 lowercase hex;
@@ -16485,20 +16486,27 @@ increment"):
 - Corrections to the ATLAS-DEVQ-0008 entry above (left as written): `repairs()` checked
   that the identity is a string, not "the identity"; the sentence about 4 and 8 coordinator
   threads and 825 events refers to head `5179279c`, not to the merged head.
-- Tests now pin: a second loss of the same acknowledgement leaves no second record;
-  a fabricated record gives `DEGRADED` and deleting it gives `OK`; after adopting, a planner
-  counts the head as seen acknowledged.
+- Tests now pin two documented repair-record limits (a second loss of the same
+  acknowledgement leaves no second record; a fabricated record gives `DEGRADED` and deleting
+  it gives `OK`) and one behaviour (after adopting, a planner counts the head as seen
+  acknowledged).
 
 What this does NOT establish (limits):
 - The observer is trusted like the journal directory: the entry is unkeyed, and whoever can
   construct a planner can construct an observer that lies. The journal cannot check ancestry.
-- Ancestry says nothing about the default branch or about who merged. It covers the
-  VERIFIED result revision only, not commits pushed to the result branch afterwards.
+- Ancestry says nothing about the default branch or about who merged, and a handover does
+  not mean the result was integrated: a base equal to, or built on, the unmerged result
+  branch satisfies it. It covers the VERIFIED result revision only, not commits pushed to
+  the result branch afterwards. The earlier executor is not fenced by anything but the
+  journal refusing further records for its lineage.
 - No handover exists for a BLOCKED or OWNER_REQUIRED lineage, nor for an INTEGRATION_READY
-  lineage whose candidate is never integrated: those paths stay closed in that journal.
+  lineage whose result is not an ancestor of the base a new work is given: those paths stay
+  closed in that journal.
   That needs evidence about the executor (leases / executor assignment, next increment).
 - A journal written before this rule that admitted work over a retained scope no longer
-  replays (`JOURNAL_CORRUPT ... SCOPE_RETAINED`). The journal version was not changed.
+  replays (`JOURNAL_CORRUPT ... SCOPE_RETAINED`), and the previous code cannot replay a
+  journal that contains a handover (`JOURNAL_CORRUPT ... SCOPE_COLLISION`). The journal
+  version was not changed, so only the replay tells the two apart.
 - Each dispatch re-observes every INTEGRATION_READY lineage it overlaps; the observer is
   called between the replay and the append of a commit, so a slow observer widens the window
   in which another writer wins the sequence number (retried, then `JOURNAL_CONTENDED`).
@@ -16509,11 +16517,11 @@ What this does NOT establish (limits):
   semantics) are open and listed in `docs/backlog.md`.
 
 Existing tests changed (compared with main `f3dcdba4` by test name and body):
-- `test_orchestration_dev_planner_journal.py`: 60 -> 72 test functions (81 collected with
+- `test_orchestration_dev_planner_journal.py`: 60 -> 75 test functions (89 collected with
   parametrised cases); two changed in place
   (`test_release_scope_needs_integration_ready_and_a_merge_revision`: a released scope is
   now refused; `test_fleet_status_is_derived_from_the_journal_alone`: two new row keys).
-- `test_orchestration_dev_coordinator.py`: 37 -> 41 test functions; three changed in place (status key set;
+- `test_orchestration_dev_coordinator.py`: 37 -> 42 test functions; three changed in place (status key set;
   a reserved-key case removed with the parameter; a direct planner now refuses a terminal
   scope too).
 - `test_orchestration_dev_loop_contracts.py`: 66 -> 66 test functions; two replaced under
@@ -16523,21 +16531,35 @@ Existing tests changed (compared with main `f3dcdba4` by test name and body):
 - `test_orchestration_dev_fabric_adapter.py`: 81 -> 83 test functions, none changed.
 
 Commands and results (`PYTHONPATH=<worktree>/src`, `--no-cov -o addopts=""`):
-- `test_orchestration_dev_planner_journal.py` 81 passed, `_dev_coordinator.py` 41 passed
+- `test_orchestration_dev_planner_journal.py` 89 passed, `_dev_coordinator.py` 42 passed
   (these two together 30 consecutive runs, no failure), `_dev_fabric_adapter.py` 141 passed,
   `_dev_loop_contracts.py` 96 passed (the counts include parametrised cases).
 - The nine DEVQ files (`_dev_loop_contracts`, `_dev_queue`, `_dev_fabric_adapter`,
   `_dev_package`, `_dev_package_repair`, `_dev_crosswalk`, `_dev_spool_transport`,
-  `_dev_planner_journal`, `_dev_coordinator`): 884 passed.
+  `_dev_planner_journal`, `_dev_coordinator`): 893 passed.
 - `pytest tests/unit -k "orchestration_dev or dev_package or executor or agent_execute or
-  workflow or autonomy or global_foundation or github_port"`: 1582 passed, 5152 deselected.
+  workflow or autonomy or global_foundation or github_port"`: 1591 passed, 5152 deselected.
 - `ruff check .` clean; `ruff format --check` on the six changed Python files clean;
   `mypy src`: no issues in 415 source files.
-- 22 scratch mutants of the new logic, each against the four changed test files (two
-  layout-dependent adapter tests deselected in the scratch copy): all fail at least one
-  test. One (the journal accepting a handover from a lineage in any phase) survived until a
-  VERIFYING lineage with a result was added to the replay test.
+- Scratch mutants (two layout-dependent adapter tests deselected in the scratch copy): of
+  my own 22, one survived (the journal accepting a handover from a lineage in any phase)
+  until a VERIFYING lineage with a result was added to the replay test. The two independent
+  verifiers of the first pushed head (`d003b723`) ran 42 and 43 of their own and found
+  survivors that were not equivalent: retained reported before holders (both places), the
+  last handover base winning, `isinstance` instead of an exact `int` for a record's
+  sequence number, entries not sorted by the planner. Each of these, and three new ones
+  (a non-mapping accepted as evidence, an empty evidence pair accepted, the coordinator not
+  checking its observer), now fails one test or more. Not pinned: evidence keys not sorted
+  inside an entry; `str()` around a record's digest.
 - `tests/unit/test_orchestration_dev_package_repair.py` is unchanged.
 - The full test suite was not run locally.
+
+Found by independent verification of the first pushed head `d003b723` and fixed here: an
+observer that returned a truthy non-mapping (`["no"]`, a set, a list of pairs) was read as
+evidence and the dispatch admitted. Not reachable with `ResultInBaseObserver`, which returns
+a dict or `None`. Evidence must now be a `Mapping`, and an empty pair is refused. Also: the
+coordinator checks its observer's identity before anything else (a nameless observer with an
+unreadable store raised `AttributeError` while writing the `HALTED` status), and
+`ResultInBaseObserver` matches revisions with `fullmatch`.
 
 Independent verification and exact-head CI are recorded on the PR, not here.

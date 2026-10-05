@@ -141,20 +141,24 @@ report (``fail_execution``) or an asserted merge revision (``release_scope``) ne
 scope: such lineages are refused with ``SCOPE_RETAINED`` instead of ``SCOPE_COLLISION``, and
 that is the only difference. The one basis for a handover is ``RESULT_IN_BASE``: the earlier
 lineage is INTEGRATION_READY and its verified result revision is an ancestor of the new
-work's ``base_revision``. The new work then starts from history that contains the earlier
-result, so the two cannot diverge over those paths, and the earlier lineage is fenced by the
-journal itself: it is terminal, and no further result or verdict for it is accepted. The
+work's ``base_revision``. The new work then starts from history that contains the verified
+result revision, so it cannot conflict with that revision. The earlier lineage is terminal
+and the journal accepts no further result or verdict for it; its executor and its result
+branch are not fenced by anything else. The
 journal checks that an entry names exactly that lineage's result and exactly the new work's
 base. That the ancestry was OBSERVED is the statement of a ``HandoverObserver`` given to the
 planner at construction, called inside the dispatch decision and journalled with its identity
 and evidence; ``dispatch`` has no parameter through which a caller could pass such evidence.
 What this does not establish: the observer is trusted like the journal directory (whoever
 can construct a planner can construct a lying observer, and the entry is unkeyed); ancestry
-says nothing about the default branch or about who merged; commits pushed to the earlier
-result branch AFTER the verified revision are not covered (only the verified revision is);
-a journal written before this rule that admitted work over a retained scope no longer
-replays; and the scope of a BLOCKED or OWNER_REQUIRED lineage, or of an INTEGRATION_READY
-lineage whose candidate is never integrated, cannot be handed over at all yet.
+says nothing about the default branch or about who merged, and a handover does not mean the
+result was integrated: a base equal to, or built on, the unmerged result branch satisfies
+it; commits pushed to the earlier result branch AFTER the verified revision are not covered
+(only the verified revision is); a journal written before this rule that admitted work over
+a retained scope no longer replays, and the previous code cannot replay a journal that
+contains a handover (both fail closed; the journal version is unchanged); and the scope of
+a BLOCKED or OWNER_REQUIRED lineage, or of an INTEGRATION_READY lineage whose result is not
+an ancestor of the base a new work is given, cannot be handed over at all yet.
 
 Store identity and coordinator (ATLAS-DEVQ-0008): ``StoreJournal`` is a ``DirJournal`` whose
 journal and anchor directories are created once, carry one store id, and are afterwards only
@@ -247,7 +251,7 @@ class LineageState:
     scope_released: str = ""  # merge revision the caller asserted in ``release_scope``
     dispatched_by: str = ""  # planner identity that journalled the DISPATCH
     last_seq: int = 0  # journal sequence number of the lineage's latest event
-    handover: str = ""  # base revision of the first work admitted over this scope (verified)
+    handover: str = ""  # base revision of the first work admitted over this scope (journalled)
     handed_over_to: list[str] = field(default_factory=list)  # lineage roots admitted over it
 
 
@@ -804,7 +808,7 @@ def _evidence_ok(evidence: object) -> bool:
         isinstance(evidence, dict)
         and 0 < len(evidence) <= MAX_EVIDENCE_KEYS
         and all(
-            isinstance(k, str) and isinstance(v, str) and len(k) + len(v) <= MAX_EVIDENCE_CHARS
+            isinstance(k, str) and isinstance(v, str) and 0 < len(k) + len(v) <= MAX_EVIDENCE_CHARS
             for k, v in evidence.items()
         )
     )
@@ -1346,9 +1350,11 @@ class Planner:
         INTEGRATION_READY and this planner's ``observer`` reports that the lineage's verified
         result revision is an ancestor of the new work's ``base_revision``, the DISPATCH event
         carries that observation and the earlier lineage stops holding its scope. The new
-        work then starts from a base that contains the earlier result, so the two cannot
-        diverge over those paths. No caller can pass such evidence in; without an observer,
-        or when it reports nothing or raises, the refusal stands.
+        work then starts from a base that contains the verified result revision, so it cannot
+        conflict with that revision. No caller can pass such evidence in; without an observer,
+        or when it reports nothing or raises ``ValueError`` (every ``ContractError``),
+        ``OSError`` or ``TypeError``, the refusal stands. Any other exception from the
+        observer propagates and nothing is written.
         The decision is taken against the journal and committed as its next event, so it also
         holds against other planners on the same journal. The DISPATCH event is written before
         the work is published; if publishing fails the lineage is DISPATCHED and ``recover``
@@ -1424,8 +1430,9 @@ class Planner:
         """A handover entry for ``st``'s scope if the observer establishes one, else ``None``.
 
         Fail-closed: no observer, a lineage that is not INTEGRATION_READY, an observer that
-        reports nothing, raises, or returns something that is not bounded evidence all give
-        ``None``, and the caller refuses the dispatch.
+        reports nothing, raises ``ValueError`` / ``OSError`` / ``TypeError``, or returns
+        anything but a mapping that is bounded evidence all give ``None``, and the caller
+        refuses the dispatch. Another exception type propagates.
         """
         res = st.result
         if self.observer is None or st.phase is not Phase.INTEGRATION_READY or res is None:
@@ -1439,7 +1446,7 @@ class Planner:
                     result_revision=res.result_revision,
                     base_revision=work.base_revision,
                 )
-                if seen is not None and _evidence_ok(dict(seen)):
+                if isinstance(seen, Mapping) and _evidence_ok(dict(seen)):
                     found = dict(seen)
             except (ValueError, OSError, TypeError):  # incl. ContractError: not established
                 found = None
@@ -1700,8 +1707,9 @@ class Coordinator:
         ``release_scope``, keep their paths closed (``SCOPE_RETAINED``). The one handover:
         the ``observer`` given to the constructor reports that an INTEGRATION_READY lineage's
         verified result is an ancestor of the candidate's base revision (see
-        ``Planner.dispatch``). Without an observer no scope is ever handed over, and the
-        status says so. The scope of a BLOCKED or OWNER_REQUIRED lineage cannot be handed
+        ``Planner.dispatch``). Without an observer this coordinator hands no scope over, and
+        its status says so (the lineage rows still show handovers other planners made). The scope
+        of a BLOCKED or OWNER_REQUIRED lineage cannot be handed
         over at all yet: that needs evidence about its executor, which nothing here has (the
         repository is compared as in ``works_collide``: a ``.git`` or URL spelling of the
         same repository counts as a different one);
@@ -1752,6 +1760,10 @@ class Coordinator:
         accept_same_filesystem: bool = False,
         observer: HandoverObserver | None = None,
     ) -> None:
+        if observer is not None and not (
+            isinstance(getattr(observer, "identity", None), str) and observer.identity
+        ):
+            raise PlannerError("a handover observer needs a non-empty identity")
         self.observer = observer
         if not isinstance(journal, StoreJournal):
             raise PlannerError(

@@ -211,7 +211,8 @@ class ResultInBaseObserver:
 
     ``result_in_base`` reports evidence only when one ``compare`` of the port shows that
     ``result_revision`` is an ancestor of ``base_revision`` (their merge base is the result
-    revision itself), for the one repository this observer was constructed for. Anything
+    revision itself), for the one repository this observer was constructed for (the caller
+    must pass a port that is bound to that repository; that is not checked here). Anything
     else is ``None``: another repository, a revision that is not 40 lowercase hex digits, a
     merge base that differs. A port error (``AdapterError``, including a truncated compare)
     is raised and the planner treats it as "not established". It calls nothing but
@@ -230,7 +231,7 @@ class ResultInBaseObserver:
     ) -> dict[str, str] | None:
         if repository.lower() != self.repository.lower():  # as works_collide compares it
             return None
-        if not _SHA.match(result_revision) or not _SHA.match(base_revision):
+        if not _SHA.fullmatch(result_revision) or not _SHA.fullmatch(base_revision):
             return None
         merge_base = self.port.compare(base_revision, result_revision).merge_base
         if merge_base != result_revision:

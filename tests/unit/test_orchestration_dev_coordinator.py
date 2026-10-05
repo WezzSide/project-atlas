@@ -1161,3 +1161,23 @@ def test_limit_repair_records_are_trusted_as_files(tmp_path):
     record.unlink()
     st = c.tick()
     assert st["state"] == "OK" and st["repairs"] == []
+
+
+def test_a_coordinator_checks_its_observer_before_anything_else(tmp_path):
+    class Nameless:
+        def result_in_base(self, **kw):
+            return {"merge_base": "x"}
+
+    store(tmp_path)
+    assert coordinator(tmp_path).tick()["state"] == "OK"
+    with pytest.raises(PlannerError, match="observer needs a non-empty identity"):
+        coordinator(tmp_path, identity="coord-2", observer=Nameless())
+    status = json.loads((tmp_path / "status" / "status.json").read_text())
+    assert status["state"] == "OK"  # a configuration refusal writes no status
+    # also when the store is unreadable: the refusal, not an error from writing a status
+    attached = store(tmp_path, create=False)
+    for f in attached.anchor.iterdir():
+        f.unlink()
+    attached.anchor.rmdir()
+    with pytest.raises(PlannerError, match="observer needs a non-empty identity"):
+        coordinator(tmp_path, attached, identity="coord-3", observer=Nameless())

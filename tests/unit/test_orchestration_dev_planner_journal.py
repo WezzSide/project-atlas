@@ -1879,6 +1879,12 @@ def test_one_dispatch_asks_the_observer_once_per_result_and_base(tmp_path):
         Observer(answer=7),
         Observer(answer={str(i): "x" for i in range(9)}),
         Observer(answer={"k": "v" * 256}),
+        Observer(answer={"": ""}),
+        # truthy things that are not a mapping must never be read as evidence
+        Observer(answer=["no"]),
+        Observer(answer=("no",)),
+        Observer(answer={"no"}),
+        Observer(answer=[("refused", "not an ancestor")]),
     ],
 )
 def test_without_an_established_observation_no_scope_is_handed_over(tmp_path, observer):
@@ -1981,6 +1987,8 @@ def test_a_journalled_handover_is_checked_on_replay(tmp_path):
     cases = [
         (d(w(BASE2, "src/x")), "SCOPE_COLLISION:A:"),
         (d(w(BASE2, "src/k")), "SCOPE_RETAINED:K:"),
+        # a retained lineage and a holder both overlap: the holder is named, as before
+        (d(w(BASE2, "src/k", "src/z")), "SCOPE_COLLISION:Z:"),
         (d(w(BASE2, "src/k"), _entry("K")), f"handover of K {not_verified}"),
         (d(w(BASE2, "src/z"), _entry("Z")), f"handover of Z {not_verified}"),
         (d(w(BASE2, "src/v"), _entry("V")), f"handover of V {not_verified}"),
@@ -2081,3 +2089,56 @@ def test_an_adopted_head_that_is_lost_again_is_a_definite_loss(tmp_path):
     p2.recover()  # adopts event 1 (never saw it acknowledged)
     assert [r["kind"] for r in DirJournal(tmp_path / "j").repairs()] == ["ADOPTED"]
     assert p2.state.acked == 1
+
+
+def test_a_holder_is_reported_before_a_retained_lineage_and_entries_are_ordered(tmp_path):
+    t = InMemoryTransport()
+    obs = Observer((REV1, BASE2))
+    p = observing(t, DirJournal(tmp_path / "j"), obs)
+    p.dispatch(qi("A"), **fields("src/a"))
+    p.fail_execution("A", "runner lost")  # A: retained, sorts before the holder
+    p.dispatch(qi("H"), **fields("src/h"))  # H: executing holder
+    with pytest.raises(PlannerError, match=r"^SCOPE_COLLISION:H:src/h\|src/h$"):
+        p.dispatch(qi("X"), **on(BASE2, "src/a", "src/h"))
+    assert obs.calls == []
+    # a released lineage (retained) and a holder handed over in ONE dispatch: the planner
+    # writes the entries in root order although it looked at the holder first
+    p.dispatch(qi("R"), **fields("src/r"))
+    implement(t)  # A's work was still published: its late result is refused by the journal
+    implement(t)  # H's result
+    implement(t)  # R's result
+    p.pump()
+    verify(t)
+    verify(t)
+    p.pump()
+    assert {p.lineages[r].phase for r in ("H", "R")} == {Phase.INTEGRATION_READY}
+    p.release_scope("H", merged_revision=MERGED)  # H: retained now; R: still a holder
+    p.dispatch(qi("Y"), **on(BASE2, "src/h", "src/r"))
+    ev = json.loads((tmp_path / "j" / f"{p.state.seq:012d}.json").read_text())
+    assert [h["root"] for h in ev["handover"]] == ["H", "R"]
+
+
+def test_the_first_handover_base_is_kept(tmp_path):
+    base3 = "8" * 40
+    t = InMemoryTransport()
+    p = observing(t, DirJournal(tmp_path / "j"), Observer((REV1, BASE2), (REV1, base3)))
+    p.dispatch(qi("A"), **FIELDS)
+    to_ready(t, p)
+    p.dispatch(qi("B"), **on(BASE2, "src/x/b"))
+    p.dispatch(qi("C"), **on(base3, "src/x/c"))
+    a = p.lineages["A"]
+    assert a.handover == BASE2 and a.handed_over_to == ["B", "C"]
+    assert a.history[-2:] == [f"SCOPE_HANDED_OVER:B:{BASE2}", f"SCOPE_HANDED_OVER:C:{base3}"]
+
+
+def test_a_repair_record_needs_an_integer_sequence_number_and_a_string_digest(tmp_path):
+    _two_holders(tmp_path)
+    anchor = tmp_path / "j.ack"
+    digest = (anchor / "000000000001.ack").read_text()
+    good = {"v": 1, "seq": 1, "digest": digest, "kind": "RESTORED", "by": "plan-1"}
+    for bad in ({"seq": True}, {"seq": 1.0}, {"digest": int("1" * 64)}):
+        (anchor / "000000000001.repair").write_text(json.dumps(good | bad))
+        with pytest.raises(JournalCorrupt, match=r"repair record 000000000001\.repair"):
+            DirJournal(tmp_path / "j").repairs()
+    (anchor / "000000000001.repair").write_text(json.dumps(good))
+    assert [r["seq"] for r in DirJournal(tmp_path / "j").repairs()] == [1]
