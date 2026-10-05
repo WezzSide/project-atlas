@@ -88,7 +88,9 @@ class DevTransport(Protocol):
         record, not part of its seal. A backend that implements it says so with the class
         attribute ``addressed = True`` (callers read it with ``getattr``). Such a backend may also
         offer
-        ``withdraw(record) -> bool``: take a published record back if nobody claimed it.
+        ``withdraw(record) -> bool``: take a record back if nobody claimed it (also one that
+        was not published yet: it is then not published afterwards); see the backend for
+        what its result says.
         """
 
     def claim(self, channel: Channel, *, role: Role, identity: str) -> Record | None:
@@ -194,9 +196,12 @@ class InMemoryTransport:
         return None
 
     def withdraw(self, record: Record) -> bool:
-        """Take a record back for good unless it was claimed; True when this call did.
+        """Take a record back for good unless it was claimed.
 
-        Also for a record that was never published: a later ``publish`` of it is refused.
+        True when this call marked the seal withdrawn; False when the record was claimed or
+        the seal was withdrawn before. Also for a record that was never published: a later
+        ``publish`` of it is refused. One process, one step: ``publish`` looks for the mark
+        once (the spool transport, whose calls interleave, looks twice).
         """
         channel = CHANNEL_FOR_KIND[record.KIND]
         wire = encode(record)

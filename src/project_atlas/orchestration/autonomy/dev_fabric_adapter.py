@@ -676,7 +676,11 @@ class FabricAdapter:
         return self.pending / f"refused-{seal}.marker"
 
     def _readopt_claimed(self) -> list[str]:
-        """Claim-before-persist crash window: re-adopt records we claimed but never persisted."""
+        """Claim-before-persist crash window: re-adopt records we claimed but never persisted.
+
+        The transport decides what it returns: the spool transport leaves out a record that
+        was withdrawn meanwhile.
+        """
         lister = getattr(self.transport, "claimed_records", None)
         if lister is None:
             return []
@@ -691,7 +695,7 @@ class FabricAdapter:
                 continue
             try:
                 _atomic_write(self._work_file(rec.seal), encode(rec))  # persist FIRST
-            except OSError as exc:  # transient: stays claimed, retried next tick
+            except OSError as exc:  # stays claimed; retried next tick unless withdrawn meanwhile
                 out.append(f"WORK_READOPT_DEFERRED:{rec.task_id}:{exc}")
                 continue
             try:
@@ -870,7 +874,7 @@ class FabricAdapter:
             except (ContractError, RecursionError) as exc:  # e.g. duplicate execution id
                 events.append(f"ACCEPT_REFUSED:{exc}")
                 continue
-            except OSError as exc:  # do not spin on a failing disk; claimed records are re-adopted
+            except OSError as exc:  # do not spin on a failing disk (see _readopt_claimed)
                 events.append(f"ACCEPT_REFUSED:{exc}")
                 break
             except Exception as exc:
