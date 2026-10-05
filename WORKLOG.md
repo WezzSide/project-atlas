@@ -17079,8 +17079,9 @@ a pathologically nested store marker still escaped a RUNNING `Activation.tick` (
 was superseded as well (semantics FAIL, on Python 3.12 only): there `Path.resolve` raises
 `RuntimeError` on a symlink loop, and with the journal, anchor or spool directory turned
 into one, `Activation.open` and `Activation.tick` let that `RuntimeError` out with the old
-status left in place. This entry describes the branch after the fourth commit and replaces
-the entries those heads carried.
+status left in place. This entry describes the branch after the fifth commit and replaces
+the entries those heads carried (the fifth only re-wraps one docstring line that failed the
+line-length check of `ruff check` at `4d26c103`).
 
 Behaviour (`dev_planner.py`): the new class `Activation`, and one change to existing code:
 `StoreJournal._marker` reports a marker that makes the JSON parser raise `RecursionError` as

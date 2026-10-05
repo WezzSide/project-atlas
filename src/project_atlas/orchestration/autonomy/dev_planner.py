@@ -219,7 +219,8 @@ against one failure mode, not proof of independent storage.
 Declared activation (ATLAS-DEVQ-0014): ``Activation`` is how a coordinator is meant to be
 started outside tests. An operator declares, once, which existing store and spool are
 activated; every start reads that record, attaches to exactly what it names and creates
-no store and no spool. The record also keeps the highest event a tick has seen, outside journal and anchor,
+no store and no spool. The record also keeps the highest event a tick has seen, outside
+journal and anchor,
 so a store taken back as a whole below that event is refused. See the class for its limits.
 """
 
