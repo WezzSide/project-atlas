@@ -334,3 +334,62 @@ def test_the_in_memory_backend_addresses_the_same_way():
     assert t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity="other") is None
     assert t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity="vps1-impl").seal == a.seal
     assert InMemoryTransport.addressed is True and SpoolTransport.addressed is True
+
+
+def test_a_claimed_record_is_readopted_only_by_its_addressee(tmp_path, monkeypatch):
+    """Crash between the claim and its meta: the address still says whose record it is."""
+    import os as _os
+
+    t = SpoolTransport(tmp_path)
+    a, c = work("A"), work("C")
+    t.publish(a, to="vps1-impl")
+    t.publish(c)
+    real = _os.replace
+
+    def no_meta(src, dst, *args, **kw):
+        if str(dst).endswith(".claim.json"):
+            raise OSError("crash before the claim meta")
+        return real(src, dst, *args, **kw)
+
+    monkeypatch.setattr("os.replace", no_meta)
+    assert t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity="vps1-impl").seal == a.seal
+    assert t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity="vps1-impl").seal == c.seal
+    monkeypatch.setattr("os.replace", real)
+    assert not list((tmp_path / "WORK" / "claimed").glob("*.claim.json"))
+    seen = {r.seal for r in t.claimed_records(Channel.WORK, identity="vps4-impl")}
+    assert seen == {c.seal}  # the unaddressed one is still "unowned"; the addressed one is not
+    mine = {r.seal for r in t.claimed_records(Channel.WORK, identity="vps1-impl")}
+    assert mine == {a.seal, c.seal}
+
+
+def test_withdraw_takes_back_only_what_nobody_claimed(tmp_path):
+    t = SpoolTransport(tmp_path)
+    a, b = work("A"), work("B")
+    t.publish(a, to="vps1-impl")
+    t.publish(b, to="vps1-impl")
+    assert t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity="vps1-impl").seal == a.seal
+    assert t.withdraw(a) is False  # claimed: it stays with its claimer
+    assert (tmp_path / "WORK" / "claimed" / f"{a.seal}.json").exists()
+    assert t.withdraw(b) is True and t.withdraw(b) is False
+    assert (tmp_path / "WORK" / "withdrawn" / f"{b.seal}.json").exists()
+    assert t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity="vps1-impl") is None
+    assert t.withdraw(work("NEVER")) is False
+    assert {r.seal for r in t.published(Channel.WORK)} == {a.seal}
+
+
+def test_an_address_file_must_hold_exactly_an_identity(tmp_path):
+    t = SpoolTransport(tmp_path)
+    a = work("A")
+    t.publish(a, to="vps1-impl")
+    for junk in ("vps1-impl\n", " vps1-impl", "", '{"to": "vps1-impl"}', "a" * 257):
+        (tmp_path / "WORK" / f"{a.seal}.to").write_text(junk)
+        assert t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity="vps1-impl") is None
+        assert t.claimed_records(Channel.WORK, identity="vps1-impl") == []
+    assert (tmp_path / "WORK" / f"{a.seal}.json").exists()
+    (tmp_path / "elsewhere").write_text("vps4-impl")
+    (tmp_path / "WORK" / f"{a.seal}.to").unlink()
+    try:
+        (tmp_path / "WORK" / f"{a.seal}.to").symlink_to(tmp_path / "elsewhere")
+    except OSError:  # no symlinks here (Windows without the privilege): nothing to check
+        return
+    assert t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity="vps4-impl") is None

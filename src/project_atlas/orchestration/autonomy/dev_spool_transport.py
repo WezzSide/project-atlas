@@ -11,6 +11,7 @@ Layout::
 
     <root>/<CHANNEL>/<seal>.json                 published, unclaimed
     <root>/<CHANNEL>/<seal>.to                    addressee of the record, if it has one
+    <root>/<CHANNEL>/withdrawn/<seal>.json        taken back by its publisher before a claim
     <root>/<CHANNEL>/claimed/<seal>.json          consumed (content kept as durable evidence)
     <root>/<CHANNEL>/claimed/<seal>.claim.json    who claimed it
 
@@ -53,6 +54,7 @@ from project_atlas.orchestration.autonomy.dev_transport import (
 )
 
 _CLAIMED = "claimed"
+MAX_ADDRESS_BYTES = 256
 
 # A concurrent claimer's open/rename can make a read or rename fail TRANSIENTLY with
 # ``PermissionError`` (Windows sharing violation: files are opened without FILE_SHARE_DELETE).
@@ -128,16 +130,24 @@ class SpoolTransport:
     def _addressee(self, channel: Channel, seal: str) -> str | None:
         """Who a record is addressed to; ``None`` when it has no address file.
 
-        An address file that cannot be read or does not hold an identity raises
-        ``TransportError``: an unreadable address is never "addressed to nobody in
-        particular".
+        An address that is a symbolic link, is longer than ``MAX_ADDRESS_BYTES``, cannot be
+        read or does not hold exactly an identity raises ``TransportError``: an unreadable
+        address is never "addressed to nobody in particular". A MISSING address file does
+        mean "not addressed"; the spool directory is trusted for that.
         """
+        path = self._dir(channel) / f"{seal}.to"
         try:
-            who = (self._dir(channel) / f"{seal}.to").read_text(encoding="utf-8")
+            if path.is_symlink():
+                raise ValueError("a symbolic link")
+            with open(path, "rb") as fh:
+                raw = fh.read(MAX_ADDRESS_BYTES + 1)
+            if len(raw) > MAX_ADDRESS_BYTES:
+                raise ValueError("too long")
+            who = raw.decode("utf-8")
         except FileNotFoundError:
             return None
         except (OSError, ValueError) as exc:
-            raise TransportError(f"unreadable address of record {seal}") from exc
+            raise TransportError(f"unreadable address of record {seal}: {exc}") from exc
         check_address(who, who)
         return who
 
@@ -145,10 +155,13 @@ class SpoolTransport:
         """Publish; with ``to`` the record is delivered only to that identity's ``claim``.
 
         The address is written BEFORE the record (exclusive creation, never overwritten), so
-        an addressed record is never claimable without its address. It is delivery metadata
-        in the spool directory, outside the record's seal: whoever can write the spool can
-        write an address. Publishing a record again with another address, or with none after
-        it had one, is refused.
+        a record this call publishes is never claimable without its address. It is delivery
+        metadata in the spool directory, outside the record's seal: whoever can write the
+        spool can write, replace or remove an address, and a missing address file means "not
+        addressed". Publishing a record again with another address, or with none after it
+        had one, is refused when the publishes are sequential; a concurrent UNADDRESSED
+        publish of the same seal can win the record name first (the planner never publishes
+        one seal both ways). ``claim`` and ``claimed_records`` honour the address.
         """
         channel = CHANNEL_FOR_KIND[record.KIND]
         wire = encode(record)  # verifies the seal
@@ -222,7 +235,7 @@ class SpoolTransport:
             try:
                 addressee = self._addressee(channel, rec.seal)
             except TransportError:
-                continue  # unreadable address: nobody receives it, and the channel is not wedged
+                continue  # unreadable address: nobody receives it; the record stays pending
             if addressee is not None and not same_identity(identity, addressee):
                 continue  # addressed to another identity: leave it for that one
             dest = d / _CLAIMED / path.name
@@ -268,6 +281,26 @@ class SpoolTransport:
             return False
         return True
 
+    def withdraw(self, record: Record) -> bool:
+        """Take a published record back if nobody claimed it yet; False otherwise.
+
+        The pending name is moved to ``withdrawn/`` (kept as evidence). A claimer that
+        already linked the record keeps it: the move then finds nothing, or removes only the
+        pending name the claimer was about to clean up. Best effort; never raises for a
+        record that is not pending.
+        """
+        channel = CHANNEL_FOR_KIND[record.KIND]
+        d = self._dir(channel)
+        name = f"{record.seal}.json"
+        if (d / _CLAIMED / name).exists():
+            return False
+        try:
+            (d / "withdrawn").mkdir(exist_ok=True)
+            os.replace(d / name, d / "withdrawn" / name)
+        except OSError:
+            return False
+        return not (d / _CLAIMED / name).exists()  # a claimer may have linked it meanwhile
+
     def published(self, channel: Channel) -> list[Record]:
         """Every decodable record this spool holds on ``channel``, pending or claimed.
 
@@ -306,6 +339,9 @@ class SpoolTransport:
                 rec = decode(rec_path.read_text(encoding="utf-8"))
                 if rec.seal != seal:
                     continue
+                addressee = self._addressee(channel, seal)
+                if addressee is not None and not same_identity(identity, addressee):
+                    continue  # addressed to another identity: never re-adopted by this one
                 out.append(rec)
             except (OSError, ValueError, ContractError, RecursionError):
                 continue  # unreadable claim evidence is ignored, never trusted

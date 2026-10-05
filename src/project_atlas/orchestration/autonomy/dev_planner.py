@@ -166,7 +166,8 @@ a BLOCKED or OWNER_REQUIRED lineage, or of an INTEGRATION_READY lineage whose re
 an ancestor of the base a new work is given, cannot be handed over at all yet.
 
 Executor ownership (ATLAS-DEVQ-0011): which executor owns a lineage's execution is a fact of
-the journal, and replacing it cannot create two valid writers. One model, three parts:
+the journal, and replacing it leaves at most one execution whose result the journal accepts.
+One model, three parts:
   * assignment: a DISPATCH may name the executor that owns the execution (chosen from a pool
     inside the dispatch decision); a REPAIR keeps it. The work record is published ADDRESSED
     to that executor, and the journal accepts a RESULT for the lineage only from it;
@@ -176,19 +177,25 @@ the journal, and replacing it cannot create two valid writers. One model, three 
   * reassignment (``Planner.reassign``, event REASSIGN): the current work is re-materialised
     under its next execution id and a (new or the same) executor becomes the owner. From that
     event on the earlier execution cannot produce an accepted result, whether its executor
-    stopped, is slow, or never learns of it. So at every point of the journal exactly one
-    (execution id, executor) pair can write an accepted result for a lineage.
+    stopped, is slow, or never learns of it. So at every point of the journal at most one
+    (execution id, executor) pair can have a result accepted for an assigned lineage, and
+    only while that lineage is executing (the owner is matched as ``same_identity`` does:
+    case and surrounding whitespace do not distinguish identities).
 A lease in this model is that ownership record: it has no clock. A timeout, a missed
 heartbeat or a report is a reason somebody may have for calling ``reassign``; it is recorded
 as the reason and is not what makes the replacement safe. Events that name an executor are
 journal version 3, which earlier code refuses.
 What this does NOT establish: it does not stop, signal or observe the earlier executor, which
 may keep running and pushing to its own result branch (nothing here integrates a branch; only
-a verified result of the current execution can become INTEGRATION_READY); identities are
+a verified result of the current execution can become INTEGRATION_READY). A fenced work
+record that nobody claimed yet is withdrawn from a transport that supports it (best effort,
+repeated on recovery), so the earlier executor does not START it afterwards; one it already
+claimed runs on; identities are
 unauthenticated strings and the address of a work record is metadata in the transport, so
 this fences stale or slow executors, not one that forges another's identity; a reassignment
-IS a new execution that an adapter will dispatch (it is bounded per work item and it is not
-recovery, which only re-publishes the same record); an executor is "busy" while it owns a
+IS a new execution that the new owner's adapter dispatches (it is bounded per work item, so
+per lineage by that bound times its attempts, and it is not recovery, which only re-publishes
+the same record); an executor is "busy" while it owns a
 lineage that is executing or being verified, a count over the journal, not a measurement;
 and a lineage dispatched without a pool is not assigned and accepts any implementer's
 result, as before.
@@ -248,6 +255,7 @@ from project_atlas.orchestration.autonomy.dev_transport import (
     Channel,
     DevTransport,
     Record,
+    TransportError,
     decode,
     encode,
 )
@@ -813,7 +821,7 @@ class FleetState:
     lineages: dict[str, LineageState] = field(default_factory=dict)
     by_task: dict[str, str] = field(default_factory=dict)  # task_id -> lineage_root
     works: dict[str, WorkItem] = field(default_factory=dict)
-    superseded: dict[str, str] = field(default_factory=dict)  # fenced work seal -> lineage root
+    superseded: dict[str, WorkItem] = field(default_factory=dict)  # fenced seal -> its work
     completed: set[str] = field(default_factory=set)
     blocked: dict[str, str] = field(default_factory=dict)
     issued: dict[str, VerificationRequest] = field(default_factory=dict)
@@ -848,8 +856,12 @@ def next_epoch_work(work: WorkItem, epoch: int) -> WorkItem:
     attempt. The execution id is the fencing token: it is part of the seal, a result has to
     carry the seal and the execution id of the work it answers, and the journal accepts a
     result only for the CURRENT work of a lineage. So a result produced under an earlier
-    epoch can never be accepted once this work is the current one.
+    epoch is not accepted once this work is the current one, PROVIDED the execution id
+    changed: the journal refuses a root work whose execution id already carries an epoch
+    suffix and a REASSIGN whose work has the seal of the work it replaces.
     """
+    if type(epoch) is not int or epoch < 1:
+        raise PlannerError("an epoch is an integer >= 1")
     stem = _EPOCH_SUFFIX.sub("", work.execution_id)
     fresh: WorkItem = work.model_copy(
         update={"execution_id": f"{stem}-X{epoch}", "seal": ""}
@@ -968,6 +980,8 @@ def _transition(state: FleetState, ev: dict[str, Any], raw: bytes) -> Callable[[
             raise PlannerError("lineage/task id already in use")
         if _REPAIR_SUFFIX.search(root):
             raise PlannerError("task id suffix -R<n> is reserved for repair tasks")
+        if _EPOCH_SUFFIX.search(work.execution_id):
+            raise PlannerError("execution id suffix -X<n> is reserved for reassigned executions")
         try:  # also with no earlier lineage: a journal that replays holds no unkeyable identity
             repository_key(work.repository)
         except ContractError as exc:
@@ -1117,17 +1131,18 @@ def _transition(state: FleetState, ev: dict[str, Any], raw: bytes) -> Callable[[
             raise PlannerError("REASSIGN needs the executor that takes the execution over")
         if st.epoch >= MAX_REASSIGNMENTS:
             raise PlannerError(f"REASSIGN_LIMIT:{st.work.task_id} was reassigned {st.epoch} times")
-        if nw.seal != next_epoch_work(st.work, st.epoch + 1).seal:
+        if nw.seal != next_epoch_work(st.work, st.epoch + 1).seal or nw.seal == st.work.seal:
             raise PlannerError("REASSIGN work is not the current work under its next epoch")
         if not isinstance(why, str) or not 0 < len(why) <= MAX_REASON or not why.isprintable():
             raise PlannerError("REASSIGN needs a short printable reason")
-        fenced = st.work
+        fenced, was = st.work, st.executor
 
         def do_reassign() -> None:
-            state.superseded[fenced.seal] = root
+            state.superseded[fenced.seal] = fenced
             state.works[nw.task_id] = nw
             st.work, st.executor = nw, assigned
             st.epoch += 1
+            note(f"FENCED:{fenced.execution_id}:{was or '-'}")
             note(f"REASSIGNED:{nw.execution_id}:{assigned}:{why}")
 
         steps.append(do_reassign)
@@ -1430,6 +1445,9 @@ class Planner:
         self.sync()  # continuity first: nothing is published from a history that does not replay
         self._anchor_head()  # and nothing is published for an event that is not acknowledged
         done: list[str] = []
+        for seal in sorted(self.state.superseded):  # a crash between REASSIGN and withdrawal
+            if self._withdraw(self.state.superseded[seal]):
+                done.append(f"WITHDRAWN:{self.state.superseded[seal].lineage_root}:WORK")
         for root, st in sorted(self.lineages.items()):
             rec: Record | None = None
             if st.phase in _EXECUTING:
@@ -1450,6 +1468,23 @@ class Planner:
         if st.executor:
             return self.transport.publish(st.work, to=st.executor)
         return self.transport.publish(st.work)
+
+    def _withdraw(self, fenced: WorkItem) -> bool:
+        """Take a fenced work record back if nobody claimed it yet (best effort).
+
+        A courtesy to the earlier executor, not the fence: a record that was already claimed
+        stays claimed and its execution may run on; its result is refused either way. A
+        transport without ``withdraw`` leaves the record deliverable.
+        """
+        withdraw = getattr(self.transport, "withdraw", None)
+        return bool(withdraw(fenced)) if callable(withdraw) else False
+
+    def _needs_addressing(self, pool: tuple[str, ...]) -> None:
+        if pool and getattr(self.transport, "addressed", False) is not True:
+            raise PlannerError(
+                "EXECUTORS_NEED_ADDRESSED_TRANSPORT:an execution is assigned only over a "
+                "transport that delivers a work record to the executor it is addressed to"
+            )
 
     # -- selection / dispatch -------------------------------------------------------------
     def in_flight(self) -> frozenset[str]:
@@ -1526,6 +1561,7 @@ class Planner:
         if execution_ordinal < 1:
             raise PlannerError("execution_ordinal must be >= 1")
         pool = self._pool(executor_pool, executor_limit)
+        self._needs_addressing(pool)
         if _REPAIR_SUFFIX.search(item.task_id):
             raise PlannerError("task id suffix -R<n> is reserved for repair tasks")
         reserved = {
@@ -1652,7 +1688,9 @@ class Planner:
         owner, and the new work is published addressed to it. From that event on the journal
         accepts a result only for the new work and only from the new owner. A result of the
         earlier execution, whenever it arrives and whoever sends it, is refused: it answers a
-        work seal that is no longer the lineage's current work.
+        work seal that is no longer the lineage's current work (the journal refuses a
+        REASSIGN that would keep the seal). The fenced record is withdrawn from the transport
+        if nobody claimed it yet.
 
         That refusal, not the caller's ``reason``, is what makes the replacement safe. A
         timeout, an expired lease or a report that an executor died is a reason to call this;
@@ -1667,6 +1705,7 @@ class Planner:
         pool = self._pool(executor_pool, executor_limit)
         if not pool:
             raise PlannerError("reassign needs a non-empty executor pool")
+        self._needs_addressing(pool)
 
         def decide() -> dict[str, Any]:
             st = self._lineage_for(task_id)
@@ -1688,6 +1727,8 @@ class Planner:
         ev = self._commit(decide)
         st = self.lineages[ev["root"]]
         self._publish_work(st)
+        for seal in sorted(self.state.superseded):  # idempotent; only unclaimed records move
+            self._withdraw(self.state.superseded[seal])
         return st.work
 
     def _observe_handover(
@@ -2022,11 +2063,14 @@ class Coordinator:
         for a reason local to it (a wrong transport or store) overwrites a shared status with
         ``HALTED`` until a healthy tick rewrites it;
       * executors are assigned only when the constructor is given ``executors``: each
-        candidate then goes to the pool member that owns the fewest live lineages, at most
-        ``executor_limit`` each (``EXECUTOR_BUSY`` otherwise), and the status lists who owns
-        what, from the journal. That needs a transport that delivers a record to its
-        addressee (``addressed``). The coordinator never calls ``reassign``: it detects no
-        dead executor and replaces none.
+        candidate then goes to the pool member that owns the fewest live lineages, and this
+        coordinator assigns to no member that already owns ``executor_limit``
+        (``EXECUTOR_BUSY``; another coordinator's limit or a ``reassign`` can exceed it). The
+        status lists the live lineages each executor owns, from the journal. That needs a
+        transport whose class attribute ``addressed`` is ``True`` (an attribute check, not a
+        test of delivery). The coordinator never calls ``reassign``: it detects no dead
+        executor and replaces none. A transport that refuses a record (``TransportError``,
+        e.g. an address that cannot be read) stops the tick with a ``HALTED`` status.
     """
 
     def __init__(
@@ -2105,6 +2149,9 @@ class Coordinator:
             raise
         except OSError as exc:  # the store or the transport could not be read: never a stale OK
             self._halted(JournalCorrupt(f"IO_ERROR:{type(exc).__name__}: {exc}"))
+            raise
+        except TransportError as exc:
+            self._halted(JournalCorrupt(f"TRANSPORT_ERROR:{exc}"))
             raise
 
     def _continuity(self) -> None:
@@ -2191,8 +2238,8 @@ class Coordinator:
                 except JournalContended:
                     deferred.append((item.task_id, "JOURNAL_CONTENDED"))
                     break  # the journal is busy: leave the rest for the next tick
-                except JournalCorrupt:
-                    raise
+                except (JournalCorrupt, TransportError):
+                    raise  # a transport that refused a journalled record is not a refusal
                 except (PlannerError, ValueError) as exc:  # incl. ContractError, QueueError
                     reason = str(exc)
                     if reason.startswith("LIVE_LIMIT:"):
@@ -2211,6 +2258,9 @@ class Coordinator:
             raise
         except OSError as exc:
             self._halted(JournalCorrupt(f"IO_ERROR:{type(exc).__name__}: {exc}"))
+            raise
+        except TransportError as exc:  # e.g. a work record whose address cannot be read
+            self._halted(JournalCorrupt(f"TRANSPORT_ERROR:{exc}"))
             raise
         # acknowledgement continuity that had to be repaired stays visible: never plain OK
         status = self._header("DEGRADED" if repairs else "OK") | {

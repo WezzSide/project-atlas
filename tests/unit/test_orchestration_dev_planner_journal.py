@@ -2302,8 +2302,9 @@ def test_a_repair_stays_with_the_lineages_executor(tmp_path):
     assert st.executor == E2 and st.epoch == 0  # a new work item starts at epoch 0
     ev = _event(tmp_path, p.state.seq)
     assert ev["event"] == "REPAIR" and ev["executor"] == E2 and ev["v"] == 3
-    assert _claim_work(t, E1).seal == wa.seal  # only the fenced first execution is left for E1
-    assert _claim_work(t, E1) is None and _claim_work(t, E2).seal == st.work.seal
+    # the fenced first execution was withdrawn before E1 took it: nothing is left for E1
+    assert wa.seal in p.state.superseded and _claim_work(t, E1) is None
+    assert _claim_work(t, E2).seal == st.work.seal
 
 
 def test_reassignment_fences_the_earlier_execution(tmp_path):
@@ -2319,10 +2320,13 @@ def test_reassignment_fences_the_earlier_execution(tmp_path):
         exclude={"seal", "execution_id"}
     )
     assert (st.executor, st.epoch, st.work.seal, st.phase) == (E2, 1, new.seal, Phase.DISPATCHED)
-    assert st.history[-1] == f"REASSIGNED:A-E1-X1:{E2}:lease expired; runner unreachable"
+    assert st.history[-2:] == [
+        f"FENCED:A-E1:{E1}",
+        f"REASSIGNED:A-E1-X1:{E2}:lease expired; runner unreachable",
+    ]
     ev = _event(tmp_path, 2)
     assert (ev["event"], ev["v"], ev["executor"]) == ("REASSIGN", 3, E2)
-    assert p.state.superseded == {old.seal: "A"} and p.in_flight() == {"A"}
+    assert p.state.superseded == {old.seal: old} and p.in_flight() == {"A"}
     # E1 never stopped. Its result arrives late: it answers a work that is no longer current
     t.publish(_result(old, E1))
     p.pump()
@@ -2342,7 +2346,7 @@ def test_reassignment_fences_the_earlier_execution(tmp_path):
     # durable: a new planner replays to the same owner, epoch and fenced seal
     q = planner(InMemoryTransport(), DirJournal(tmp_path / "j"))
     assert (q.lineages["A"].executor, q.lineages["A"].epoch) == (E2, 1)
-    assert q.state.superseded == {old.seal: "A"}
+    assert q.state.superseded == {old.seal: old}
     row = fleet_status(DirJournal(tmp_path / "j"))[0]
     assert (row["executor"], row["epoch"], row["execution_id"]) == (E2, 1, "A-E1-X1")
 
@@ -2352,7 +2356,11 @@ def test_reassignment_is_bounded_and_only_for_an_executing_lineage(tmp_path):
     p = planner(t, DirJournal(tmp_path / "j"))
     p.dispatch(qi("A"), executor_pool=(E1,), **FIELDS)
     # the same executor may take its own lineage again under a new epoch (a restart)
-    assert p.reassign("A", executor_pool=(E1,), reason="restart").execution_id == "A-E1-X1"
+    for bad in ("", "x" * 201, "two\nlines", "tab\there"):
+        with pytest.raises(PlannerError, match="short printable reason"):
+            p.reassign("A", executor_pool=POOL, reason=bad)
+    assert p.state.seq == 1
+    assert p.reassign("A", executor_pool=(E1,), reason="x" * 200).execution_id == "A-E1-X1"
     assert p.reassign("A", executor_pool=(E1,), reason="restart").execution_id == "A-E1-X2"
     assert p.reassign("A", executor_pool=(E2,), reason="move").execution_id == "A-E1-X3"
     assert p.lineages["A"].executor == E2 and p.lineages["A"].epoch == 3
@@ -2377,9 +2385,6 @@ def test_reassignment_is_bounded_and_only_for_an_executing_lineage(tmp_path):
     with pytest.raises(JournalCorrupt, match="REASSIGN_LIMIT:A was reassigned 3 times"):
         planner(InMemoryTransport(), DirJournal(tmp_path / "j"))
     (tmp_path / "j" / f"{n + 1:012d}.json").unlink()
-    for bad in ("", "x" * 201, "two\nlines"):
-        with pytest.raises(PlannerError, match="REASSIGN"):
-            p.reassign("A", executor_pool=POOL, reason=bad)
     with pytest.raises(PlannerError, match="unknown task"):
         p.reassign("NOPE", executor_pool=POOL, reason="x")
     with pytest.raises(PlannerError, match="non-empty executor pool"):
@@ -2553,3 +2558,90 @@ def test_a_journalled_repair_must_keep_the_executor(tmp_path):
     _forge(j, n, prev, **body)  # the assignment silently dropped (and so version 1)
     with pytest.raises(JournalCorrupt, match="REPAIR must keep the lineage's executor"):
         planner(InMemoryTransport(), DirJournal(j))
+
+
+def test_a_fenced_record_nobody_claimed_is_withdrawn_also_after_a_crash(tmp_path):
+    t = SpoolTransport(tmp_path / "spool")
+    p = planner(t, DirJournal(tmp_path / "j"))
+    old = p.dispatch(qi("A"), executor_pool=POOL, **FIELDS)
+    pending = tmp_path / "spool" / "WORK" / f"{old.seal}.json"
+    assert pending.exists()
+    # a planner that dies after the REASSIGN is journalled, before the fenced record moved
+    real = SpoolTransport.withdraw
+    SpoolTransport.withdraw = lambda self, record: False
+    try:
+        new = p.reassign("A", executor_pool=(E2,), reason="runner unreachable")
+    finally:
+        SpoolTransport.withdraw = real
+    assert pending.exists()  # E1 could still start the fenced execution
+    q = planner(SpoolTransport(tmp_path / "spool"), DirJournal(tmp_path / "j"), "plan-2")
+    assert q.recover() == ["WITHDRAWN:A:WORK"]
+    assert not pending.exists()
+    assert (tmp_path / "spool" / "WORK" / "withdrawn" / f"{old.seal}.json").exists()
+    assert q.recover() == []  # idempotent, and the current record is untouched
+    assert _claim_work(t, E1) is None and _claim_work(t, E2).seal == new.seal
+    # a record the earlier executor already claimed is not taken from it
+    b = p.dispatch(qi("B"), executor_pool=(E1,), **fields("src/y"))
+    assert _claim_work(t, E1).seal == b.seal
+    p.reassign("B", executor_pool=(E1,), reason="restart")
+    assert (tmp_path / "spool" / "WORK" / "claimed" / f"{b.seal}.json").exists()
+    assert not (tmp_path / "spool" / "WORK" / "withdrawn" / f"{b.seal}.json").exists()
+
+
+def test_an_execution_id_with_an_epoch_suffix_is_reserved(tmp_path):
+    from project_atlas.orchestration.autonomy.dev_contracts import make_work
+    from project_atlas.orchestration.autonomy.dev_planner import next_epoch_work
+
+    work = make_work(
+        task_id="Q",
+        execution_id="Q-E1-X1",
+        lineage_root="Q",
+        acceptance_contract=("ok",),
+        **FIELDS,
+    )
+    # such a work would be its own "next epoch": a REASSIGN could not fence it
+    assert next_epoch_work(work, 1).seal == work.seal
+    j = tmp_path / "j"
+    j.mkdir()
+    _forge(j, 1, "", event="DISPATCH", root="Q", work=encode(work), executor=E1)
+    with pytest.raises(JournalCorrupt, match="execution id suffix -X<n> is reserved"):
+        planner(InMemoryTransport(), DirJournal(j))
+    for bad in (0, -1, True, "1", 1.0):
+        with pytest.raises(PlannerError, match="an epoch is an integer >= 1"):
+            next_epoch_work(work, bad)
+
+
+def test_ownership_details_of_assignment_and_reassignment(tmp_path):
+    t = InMemoryTransport()
+    p = planner(t, DirJournal(tmp_path / "j"))
+    # among equally loaded executors the first by name, whatever the order of the pool
+    assert p.dispatch(qi("A"), executor_pool=("vps4-impl", "vps1-impl"), **FIELDS)
+    assert p.lineages["A"].executor == "vps1-impl"
+    # the owner is matched as identities are compared everywhere: case does not distinguish
+    wa = _claim_work(t, "VPS1-IMPL")
+    t.publish(_result(wa, "VPS1-IMPL"))
+    p.pump()
+    assert p.lineages["A"].phase is Phase.VERIFYING
+    verify(t, Verdict.FAIL, DEFECT)
+    p.pump()
+    assert p.lineages["A"].work.task_id == "A-R1"
+    # only the CURRENT work of a lineage can be reassigned, not a superseded task id
+    with pytest.raises(PlannerError, match="reassign refused: A is not the executing work"):
+        p.reassign("A", executor_pool=POOL, reason="x")
+    assert p.reassign("A-R1", executor_pool=(E2,), reason="x").execution_id.endswith("-R1-X1")
+
+
+def test_a_planner_assigns_only_over_a_transport_that_addresses(tmp_path):
+    class Plain:
+        def publish(self, record):
+            raise AssertionError("never reached")
+
+        def claim(self, channel, *, role, identity):
+            return None
+
+    p = planner(Plain(), DirJournal(tmp_path / "j"))
+    with pytest.raises(PlannerError, match=r"^EXECUTORS_NEED_ADDRESSED_TRANSPORT:"):
+        p.dispatch(qi("A"), executor_pool=POOL, **FIELDS)
+    with pytest.raises(PlannerError, match=r"^EXECUTORS_NEED_ADDRESSED_TRANSPORT:"):
+        p.reassign("A", executor_pool=POOL, reason="x")
+    assert p.state.seq == 0 and not list((tmp_path / "j").iterdir())

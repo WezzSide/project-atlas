@@ -16693,20 +16693,24 @@ The model (one, in the journal):
 
 No new module, no `WorkItem` field, no new record kind, no seal change: a reassigned work is
 an ordinary sealed work item with another execution id. `dev_package.py` and the golden test
-files are untouched. No adapter, workflow or CLI change.
+files are untouched. No adapter behaviour change (`dev_fabric_adapter.py`: one docstring
+sentence), no workflow or CLI change.
 
 What this does NOT establish (limits):
 - It does not stop, signal or observe the earlier executor. That executor may keep running
   and pushing to its own result branch; nothing here integrates a branch, and only a
-  verified result of the current execution can become INTEGRATION_READY.
+  verified result of the current execution can become INTEGRATION_READY. A fenced record
+  nobody claimed yet is withdrawn (`withdraw`, best effort, repeated on recovery) so that
+  the earlier executor does not start it afterwards; one it already claimed runs on.
 - Identities are unauthenticated strings and an address is metadata in the transport
   directory, outside the seal: this fences a stale or slow executor, not one that forges
   another executor's identity, and whoever can write the spool can write or remove an
   address. If an address is lost while its record stays, another implementer can claim the
   record; its result is refused by the journal.
-- A reassignment IS a new execution: a new sealed work item that an adapter will dispatch as
-  such (the adapter's ledger is keyed by seal and execution id). It is not recovery, which
-  re-publishes the same record. It is bounded per work item; a repair starts a new count.
+- A reassignment IS a new execution: a new sealed work item that the new owner's adapter
+  dispatches (the adapter's ledger is keyed by seal and execution id). It is not recovery,
+  which re-publishes the same record. It is bounded per work item; a repair starts a new
+  count, so a lineage can see the bound once per attempt.
 - No clock, heartbeat or liveness detection; nobody is told to reassign. "Busy" is a count
   of journalled ownership (executing or being verified), not a measurement of an executor.
   The limit is a rule of the dispatch decision, like `live_limit`, not of replay.
@@ -16724,23 +16728,62 @@ observer constructor's exception.
 Existing tests changed (vs main `fdbb42c7`, by test name and body): one changed in place,
 `test_fleet_status_is_derived_from_the_journal_alone` (two new row keys); the journal test
 helper `_forge` now writes version 3 for an event that names an executor. Test functions:
-journal file 76 -> 85, coordinator file 42 -> 45, spool file 11 -> 16, loop-contracts file
+journal file 76 -> 89, coordinator file 42 -> 48, spool file 11 -> 19, loop-contracts file
 72 -> 73.
 
 Commands and results (`PYTHONPATH=<worktree>/src`, `--no-cov -o addopts=""`):
-- `test_orchestration_dev_planner_journal.py` 108 passed, `_dev_coordinator.py` 45,
-  `_dev_spool_transport.py` 16 (these three together 30 consecutive runs, no failure),
+- `test_orchestration_dev_planner_journal.py` 112 passed, `_dev_coordinator.py` 48,
+  `_dev_spool_transport.py` 19 (these three together 30 consecutive runs, no failure),
   `_dev_loop_contracts.py` 150, `_dev_fabric_adapter.py` 141.
-- The nine DEVQ files: 974 passed. Broad selection (`-k "orchestration_dev or dev_package or
+- The nine DEVQ files: 984 passed. Broad selection (`-k "orchestration_dev or dev_package or
   executor or agent_execute or workflow or autonomy or global_foundation or github_port"`):
-  1672 passed, 5152 deselected.
+  1682 passed, 5152 deselected.
 - `ruff check .` clean; `ruff format --check` on the nine changed Python files clean;
   `mypy src`: no issues in 415 source files.
 - 38 scratch mutants of the model and of addressed delivery against five DEVQ test files
   (two layout-dependent adapter tests deselected): 36 failed at least one test. Two
   survived: the reassignment bound removed from the journal rule (a replay test was added;
-  it now fails) and the same bound removed from `Planner.reassign` only, which is equivalent
-  (the journal rule refuses the event before it is appended, with the same message).
+  it now fails) and the same bound removed from `Planner.reassign` only, which changes no
+  journal content (the journal rule still refuses the event before it is appended; only
+  when the pool is also busy does the refusal change from `REASSIGN_LIMIT` to
+  `EXECUTOR_BUSY`).
 - The full test suite was not run locally.
 
 Independent verification and exact-head CI are recorded on the PR, not here.
+
+Found by independent verification of the first pushed head `0dd036b4` and fixed in this
+entry's code (verdicts there: semantics FAIL on the first two, evidence
+PASS_WITH_NONBLOCKING_FINDINGS):
+- `SpoolTransport.claimed_records` handed an addressed work record to another identity when
+  the claim meta was missing (crash between claim and meta), and the fabric adapter of that
+  identity re-adopted and dispatched it; the planner refused its result. `claimed_records`
+  now honours the address.
+- A root work whose execution id already ended in `-X<n>` was its own "next epoch": a
+  REASSIGN kept the seal and fenced nothing. Reachable only through a journal event not
+  written by `Planner.dispatch`. The journal now refuses such a DISPATCH (the suffix is
+  reserved) and a REASSIGN whose work has the seal of the work it replaces; `next_epoch_work`
+  validates its epoch.
+- A fenced, unclaimed work record stayed deliverable, so the replaced executor could still
+  START it: `withdraw` (above).
+- An address that cannot be read made every tick raise `TransportError` while the status
+  file stayed `OK`: a `TransportError` in the constructor or a tick now writes `HALTED`
+  (`TRANSPORT_ERROR`), also when it comes from publishing a record whose event was just
+  journalled (that lineage is then DISPATCHED and undelivered until the address is repaired;
+  the next healthy tick re-publishes it). An address must be a regular file of at most 256
+  bytes holding exactly an identity.
+- A bare `Planner` given a pool on a transport without addressing journalled an assignment
+  it could not deliver: `dispatch` and `reassign` now refuse that before the commit
+  (`EXECUTORS_NEED_ADDRESSED_TRANSPORT`).
+- History gains `FENCED:<execution id>:<executor>` and the replica keeps the fenced work
+  item (`superseded`), not only its seal.
+- Tests added for behaviour that was correct but unpinned: name tie-break, owner matched by
+  `same_identity`, a superseded task id cannot be reassigned, the reason must be printable,
+  the coordinator's `executor_limit`, `EXECUTOR_BUSY` ending the step.
+Not pinned / remaining: two race-only properties of the spool address (the re-check after
+the exclusive link, the address written before the record) are covered by the verifier's
+concurrency trials, not by a repository test; a concurrent UNADDRESSED publish of the same
+seal can win the record name before an addressed one (the planner never does both); the
+seal-equality clause of the REASSIGN rule is unreachable once the suffix is reserved; a
+main-code claimer on the same spool ignores addresses (the journal is version-gated, the
+spool is not); a claim identity is compared as `same_identity` does (case and surrounding
+whitespace); a pool may contain a verifier or the planner's own identity.

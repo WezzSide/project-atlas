@@ -85,7 +85,8 @@ class DevTransport(Protocol):
         ``to`` (optional, ATLAS-DEVQ-0011) addresses the record to one identity: only that
         identity's ``claim`` receives it. The address is delivery metadata next to the
         record, not part of its seal. A backend that implements it says so with the class
-        attribute ``addressed = True``.
+        attribute ``addressed = True``. Such a backend may also offer
+        ``withdraw(record) -> bool``: take a published record back if nobody claimed it.
         """
 
     def claim(self, channel: Channel, *, role: Role, identity: str) -> Record | None:
@@ -181,6 +182,16 @@ class InMemoryTransport:
             self.claims.append((channel, rec.seal, identity))
             return rec
         return None
+
+    def withdraw(self, record: Record) -> bool:
+        """Remove a published, unclaimed record; False when it is not pending."""
+        channel = CHANNEL_FOR_KIND[record.KIND]
+        wire = encode(record)
+        q = self._queues[channel]
+        if wire not in q:
+            return False
+        q.remove(wire)
+        return True
 
     # test hook: simulate wire tampering of the next queued record
     def _tamper_next(self, channel: Channel, replace: tuple[str, str]) -> None:

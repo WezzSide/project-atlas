@@ -1282,3 +1282,62 @@ def test_executors_need_a_transport_that_delivers_to_the_addressee(tmp_path):
     for key in ("executor_pool", "executor_limit"):
         with pytest.raises(PlannerError, match="work fields may not set"):
             coordinator(tmp_path).tick([(item, {**fields, key: (E1,)})])
+
+
+def test_the_executor_limit_is_the_coordinators_and_a_busy_pool_ends_the_step(tmp_path):
+    store(tmp_path)
+    c = coordinator(tmp_path, max_live=8, executors=(E1, E2), executor_limit=2)
+    cands = [cand(n, f"src/{n.lower()}") for n in ("A", "B", "C", "D", "F", "G")]
+    st = c.tick(cands)
+    assert st["admitted"] == ["A", "B", "C", "D"] and st["executor_limit"] == 2
+    assert st["executors"] == {E1: ["A", "C"], E2: ["B", "D"]}
+    assert st["deferred"] == [["F", "EXECUTOR_BUSY"]]  # G was not tried: the pool is full
+
+
+def test_an_address_that_cannot_be_read_halts_the_coordinator(tmp_path):
+    from project_atlas.orchestration.autonomy.dev_transport import TransportError
+
+    store(tmp_path)
+    c = coordinator(tmp_path, max_live=4, executors=(E1,))
+    st = c.tick([cand("A", "src/a")])
+    assert st["state"] == "OK"
+    seal = st["lineages"][0]["work_seal"]
+    (tmp_path / "spool" / "WORK" / f"{seal}.to").write_text("vps1-impl\n")
+    before = tree(tmp_path)
+    with pytest.raises(TransportError, match="invalid addressee"):
+        c.tick([cand("N", "src/n")])
+    status = json.loads((tmp_path / "status" / "status.json").read_text())
+    assert status["state"] == "HALTED" and status["reason"].startswith("TRANSPORT_ERROR:")
+    assert tree(tmp_path) == before  # nothing appended, published or re-addressed
+    with pytest.raises(TransportError):
+        coordinator(tmp_path, identity="coord-2", executors=(E1,)).tick()
+
+
+def test_a_record_the_transport_refuses_after_its_event_is_not_reported_as_a_refusal(tmp_path):
+    from project_atlas.orchestration.autonomy.dev_contracts import make_work
+    from project_atlas.orchestration.autonomy.dev_transport import TransportError
+
+    store(tmp_path)
+    c = coordinator(tmp_path, max_live=4, executors=(E1,))
+    c.tick()
+    item, fields = cand("A", "src/a")
+    work = make_work(
+        task_id="A",
+        execution_id="A-E1",
+        lineage_root="A",
+        required_role=Role.IMPLEMENTER,
+        max_attempts=item.max_attempts,
+        **fields,
+    )
+    # the spool already holds another address for exactly this record
+    (tmp_path / "spool" / "WORK" / f"{work.seal}.to").write_text("someone-else")
+    with pytest.raises(TransportError, match="different address"):
+        c.tick([(item, fields)])
+    status = json.loads((tmp_path / "status" / "status.json").read_text())
+    assert status["state"] == "HALTED" and status["reason"].startswith("TRANSPORT_ERROR:")
+    # the DISPATCH is journalled and owned; it is not delivered until the address is repaired
+    assert c.planner.lineages["A"].executor == E1 and works(tmp_path) == []
+    (tmp_path / "spool" / "WORK" / f"{work.seal}.to").unlink()
+    st = c.tick()
+    assert st["state"] == "OK" and st["recovered"] == ["REPUBLISHED:A:WORK"]
+    assert works(tmp_path) == [f"{work.seal}.json"]
