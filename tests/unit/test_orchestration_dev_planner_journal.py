@@ -395,7 +395,8 @@ def test_garbage_and_non_object_events_are_refused(tmp_path):
 
 
 def _forge(path, seq, prev, **body):
-    ev = {"v": 1, "seq": seq, "prev": prev, "planner": "forger", **body}
+    version = body.pop("v", 2 if "handover" in body else 1)
+    ev = {"v": version, "seq": seq, "prev": prev, "planner": "forger", **body}
     raw = json.dumps(ev, sort_keys=True).encode()
     (path / f"{seq:012d}.json").write_bytes(raw)
     return hashlib.sha256(raw).hexdigest()
@@ -564,7 +565,10 @@ def test_release_scope_needs_integration_ready_and_a_merge_revision(tmp_path):
     assert p.in_flight() == frozenset() and p.scope_holders() == () and p.completed == {"A"}
     with pytest.raises(PlannerError, match="only an unreleased INTEGRATION_READY"):
         p.release_scope("A", merged_revision=MERGED)
-    p.dispatch(qi("B"), **FIELDS)  # the same scope is admitted again
+    # the assertion is recorded; it does not open the scope (ATLAS-DEVQ-0009)
+    with pytest.raises(PlannerError, match=r"^SCOPE_RETAINED:A:src/x\|src/x$"):
+        p.dispatch(qi("B"), **FIELDS)
+    p.dispatch(qi("B"), **fields("src/y"))
     q = planner(InMemoryTransport(), DirJournal(tmp_path / "j"))  # and the release is durable
     assert q.in_flight() == {"B"} and q.lineages["A"].scope_released == MERGED
     with pytest.raises(PlannerError, match="ALREADY_COMPLETED"):
@@ -596,6 +600,8 @@ def test_fleet_status_is_derived_from_the_journal_alone(tmp_path):
             "allowed_paths": ("src/x",),
             "holds_scope": True,
             "scope_released": "",
+            "handover": "",
+            "handed_over_to": (),
             "dispatched_by": "vps3-plan",
             "last_seq": 1,
         },
@@ -611,6 +617,8 @@ def test_fleet_status_is_derived_from_the_journal_alone(tmp_path):
             "allowed_paths": ("src/y",),
             "holds_scope": False,
             "scope_released": "",
+            "handover": "",
+            "handed_over_to": (),
             "dispatched_by": "vps3-plan",
             "last_seq": 3,
         },
@@ -1760,3 +1768,390 @@ def test_a_repair_record_must_name_its_own_sequence_number_and_a_digest(tmp_path
             DirJournal(tmp_path / "j").repairs()
     (anchor / "000000000002.repair").write_text(json.dumps(good))
     assert [r["seq"] for r in DirJournal(tmp_path / "j").repairs()] == [2]
+
+
+# ---- verified scope handover (ATLAS-DEVQ-0009) ----------------------------------------------
+
+BASE2 = "9" * 40
+
+
+class Observer:
+    """Reports a result in a base only for the pairs it was given; records every question."""
+
+    identity = "observer:test"
+
+    def __init__(self, *contained, fail=None, answer=None):
+        self.contained, self.fail, self.answer, self.calls = set(contained), fail, answer, []
+
+    def result_in_base(self, *, repository, result_revision, base_revision):
+        self.calls.append((repository, result_revision, base_revision))
+        if self.fail is not None:
+            raise self.fail
+        if self.answer is not None:
+            return self.answer
+        if (result_revision, base_revision) in self.contained:
+            return {"merge_base": result_revision}
+        return None
+
+
+def observing(t, journal, observer, identity="vps3-plan"):
+    return Planner(
+        t, identity=identity, verifier_identities=(VER,), journal=journal, observer=observer
+    )
+
+
+def on(base, *paths):
+    return {**fields(*paths), "base_revision": base}
+
+
+def _entry(root="A", **kw):
+    return {
+        "root": root,
+        "basis": "RESULT_IN_BASE",
+        "result_revision": REV1,
+        "base_revision": BASE2,
+        "observer": "observer:test",
+        "evidence": {"merge_base": REV1},
+        **kw,
+    }
+
+
+def test_a_scope_is_handed_over_only_when_the_result_is_observed_in_the_new_base(tmp_path):
+    t = InMemoryTransport()
+    obs = Observer((REV1, BASE2))
+    p = observing(t, DirJournal(tmp_path / "j"), obs)
+    p.dispatch(qi("A"), **FIELDS)
+    to_ready(t, p)
+    # a work on A's own base: A's result is not observed in it, so A still owns the paths
+    with pytest.raises(PlannerError, match=r"^SCOPE_COLLISION:A:src/x/b\|src/x$"):
+        p.dispatch(qi("B"), **on(BASE, "src/x/b"))
+    assert obs.calls == [("WezzSide/project-atlas", REV1, BASE)]
+    wb = p.dispatch(qi("B"), **on(BASE2, "src/x/b"))
+    a = p.lineages["A"]
+    assert wb.base_revision == BASE2 and p.in_flight() == {"B"}
+    assert a.phase is Phase.INTEGRATION_READY and a.scope_released == ""  # no assertion used
+    assert a.handover == BASE2 and a.handed_over_to == ["B"]
+    assert a.history[-1] == f"SCOPE_HANDED_OVER:B:{BASE2}" and a.last_seq == p.state.seq
+    ev = json.loads((tmp_path / "j" / f"{p.state.seq:012d}.json").read_text())
+    assert ev["event"] == "DISPATCH" and ev["handover"] == [_entry()] and ev["v"] == 2
+    first = json.loads((tmp_path / "j" / "000000000001.json").read_text())
+    assert first["v"] == 1  # an event without a handover is written as before
+    # durable and derived from the journal alone: a planner without an observer replays it
+    q = planner(InMemoryTransport(), DirJournal(tmp_path / "j"))
+    assert q.lineages["A"].handover == BASE2 and q.in_flight() == {"B"}
+    rows = {r["lineage_root"]: r for r in fleet_status(DirJournal(tmp_path / "j"))}
+    assert rows["A"]["holds_scope"] is False and rows["A"]["handover"] == BASE2
+    assert rows["A"]["handed_over_to"] == ("B",) and rows["B"]["handed_over_to"] == ()
+    # a handed-over scope is not open: every later work over it needs its own observation
+    with pytest.raises(PlannerError, match=r"^SCOPE_RETAINED:A:src/x/c\|src/x$"):
+        q.dispatch(qi("C"), **on(BASE2, "src/x/c"))  # this planner observes nothing
+    with pytest.raises(PlannerError, match=r"^SCOPE_RETAINED:A:src/x/c\|src/x$"):
+        p.dispatch(qi("C"), **on(BASE, "src/x/c"))  # a base that does not contain the result
+    p.dispatch(qi("C"), **on(BASE2, "src/x/c"))
+    assert a.handed_over_to == ["B", "C"] and a.handover == BASE2
+    # and the new owner is a holder like any other
+    with pytest.raises(PlannerError, match=r"^SCOPE_COLLISION:B:src/x/b\|src/x/b$"):
+        p.dispatch(qi("D"), **on(BASE2, "src/x/b"))
+
+
+def test_one_dispatch_asks_the_observer_once_per_result_and_base(tmp_path):
+    t = InMemoryTransport()
+    obs = Observer((REV1, BASE2))
+    p = observing(t, DirJournal(tmp_path / "j"), obs)
+    p.dispatch(qi("A"), **FIELDS)
+    to_ready(t, p)
+    p.dispatch(qi("A2"), **fields("src/w"))
+    to_ready(t, p)  # same result revision REV1 as A
+    p.dispatch(qi("B"), **on(BASE2, "src/x", "src/w"))
+    assert obs.calls == [("WezzSide/project-atlas", REV1, BASE2)]
+    assert p.lineages["A"].handed_over_to == ["B"] == p.lineages["A2"].handed_over_to
+    ev = json.loads((tmp_path / "j" / f"{p.state.seq:012d}.json").read_text())
+    assert [h["root"] for h in ev["handover"]] == ["A", "A2"]
+
+
+@pytest.mark.parametrize(
+    "observer",
+    [
+        None,
+        Observer(),
+        Observer(fail=PlannerError("compare unavailable or truncated")),
+        Observer(fail=OSError("network")),
+        Observer(fail=TypeError("not a mapping")),
+        Observer(answer={}),
+        Observer(answer={"merge_base": 1}),
+        Observer(answer="yes"),
+        Observer(answer=7),
+        Observer(answer={str(i): "x" for i in range(9)}),
+        Observer(answer={"k": "v" * 256}),
+        Observer(answer={"": ""}),
+        # truthy things that are not a mapping must never be read as evidence
+        Observer(answer=["no"]),
+        Observer(answer=("no",)),
+        Observer(answer={"no"}),
+        Observer(answer=[("refused", "not an ancestor")]),
+    ],
+)
+def test_without_an_established_observation_no_scope_is_handed_over(tmp_path, observer):
+    t = InMemoryTransport()
+    p = observing(t, DirJournal(tmp_path / "j"), observer)
+    p.dispatch(qi("A"), **FIELDS)
+    to_ready(t, p)
+    seq = p.state.seq
+    with pytest.raises(PlannerError, match=r"^SCOPE_COLLISION:A:src/x\|src/x$"):
+        p.dispatch(qi("B"), **on(BASE2, "src/x"))
+    p.release_scope("A", merged_revision=MERGED)  # an assertion changes the wording only
+    with pytest.raises(PlannerError, match=r"^SCOPE_RETAINED:A:src/x\|src/x$"):
+        p.dispatch(qi("B"), **on(BASE2, "src/x"))
+    assert p.state.seq == seq + 1 and "B" not in p.lineages  # only the RELEASE was appended
+
+
+def test_an_observer_that_raises_something_else_is_not_swallowed(tmp_path):
+    p = observing(InMemoryTransport(), DirJournal(tmp_path / "j"), Observer(fail=RuntimeError("x")))
+    t = p.transport
+    p.dispatch(qi("A"), **FIELDS)
+    to_ready(t, p)
+    seq = p.state.seq
+    with pytest.raises(RuntimeError):
+        p.dispatch(qi("B"), **on(BASE2, "src/x"))
+    assert p.state.seq == seq and len(list((tmp_path / "j").iterdir())) == seq
+
+
+def test_an_observer_needs_an_identity(tmp_path):
+    class Nameless:
+        identity = ""
+
+        def result_in_base(self, **kw):
+            return {"merge_base": "x"}
+
+    for bad in ("", " ", " x", "x" * 201, "a\nb", None, 5):
+        Nameless.identity = bad
+        with pytest.raises(PlannerError, match="observer needs a non-empty identity"):
+            observing(InMemoryTransport(), DirJournal(tmp_path / "j"), Nameless())
+
+
+def test_only_a_verified_result_can_be_handed_over_never_a_phase_or_a_report(tmp_path):
+    """BLOCKED, OWNER_REQUIRED, executing and verifying lineages: the observer is not asked."""
+    t = InMemoryTransport()
+    obs = Observer(answer={"merge_base": REV1})  # would say yes to anything
+    p = observing(t, DirJournal(tmp_path / "j"), obs)
+    p.dispatch(qi("E"), **fields("src/e"))  # executing
+    p.dispatch(qi("F"), **fields("src/f"))
+    p.fail_execution("F", "runner lost")  # BLOCKED on a report
+    with pytest.raises(PlannerError, match=r"^SCOPE_COLLISION:E:"):
+        p.dispatch(qi("X"), **on(BASE2, "src/e"))
+    with pytest.raises(PlannerError, match=r"^SCOPE_RETAINED:F:"):
+        p.dispatch(qi("X"), **on(BASE2, "src/f"))
+    implement(t)  # E's result
+    p.pump()
+    assert p.lineages["E"].phase is Phase.VERIFYING
+    with pytest.raises(PlannerError, match=r"^SCOPE_COLLISION:E:"):
+        p.dispatch(qi("X"), **on(BASE2, "src/e"))
+    secret = (Finding(finding_id="S", category=FindingCategory.SECRET_REQUIRED),)
+    verify(t, Verdict.FAIL, secret)
+    p.pump()
+    assert p.lineages["E"].phase is Phase.OWNER_REQUIRED
+    with pytest.raises(PlannerError, match=r"^SCOPE_RETAINED:E:"):
+        p.dispatch(qi("X"), **on(BASE2, "src/e"))
+    assert obs.calls == [] and "X" not in p.lineages
+
+
+def test_a_journalled_handover_is_checked_on_replay(tmp_path):
+    from project_atlas.orchestration.autonomy.dev_contracts import make_work
+
+    t = InMemoryTransport()
+    p = planner(t, DirJournal(tmp_path / "j"))
+    p.dispatch(qi("A"), **FIELDS)
+    to_ready(t, p)  # A: INTEGRATION_READY with result REV1
+    p.dispatch(qi("A2"), **fields("src/w"))
+    to_ready(t, p)
+    p.dispatch(qi("V"), **fields("src/v"))
+    implement(t)
+    p.pump()  # V: VERIFYING, it has a result but no verdict
+    assert p.lineages["V"].phase is Phase.VERIFYING and p.lineages["V"].result is not None
+    p.dispatch(qi("K"), **fields("src/k"))
+    p.fail_execution("K", "runner lost")  # K: BLOCKED
+    p.dispatch(qi("Z"), **fields("src/z"))  # Z: executing
+    n, head = _head(tmp_path)
+    j = tmp_path / "j"
+
+    def w(base, *paths):
+        return encode(
+            make_work(
+                task_id="B",
+                execution_id="B-E1",
+                lineage_root="B",
+                acceptance_contract=("ok",),
+                **on(base, *paths),
+            )
+        )
+
+    def d(work, *handover):
+        body = dict(event="DISPATCH", root="B", work=work)
+        return body if not handover else body | {"handover": list(handover)}
+
+    not_verified = "is not a verified release"
+    cases = [
+        (d(w(BASE2, "src/x")), "SCOPE_COLLISION:A:"),
+        (d(w(BASE2, "src/k")), "SCOPE_RETAINED:K:"),
+        # a retained lineage and a holder both overlap: the holder is named, as before
+        (d(w(BASE2, "src/k", "src/z")), "SCOPE_COLLISION:Z:"),
+        (d(w(BASE2, "src/k"), _entry("K")), f"handover of K {not_verified}"),
+        (d(w(BASE2, "src/z"), _entry("Z")), f"handover of Z {not_verified}"),
+        (d(w(BASE2, "src/v"), _entry("V")), f"handover of V {not_verified}"),
+        (d(w(BASE2, "src/x"), _entry(result_revision=MERGED)), f"handover of A {not_verified}"),
+        (d(w(BASE2, "src/x"), _entry(base_revision=BASE)), f"handover of A {not_verified}"),
+        (d(w(BASE, "src/x"), _entry()), f"handover of A {not_verified}"),
+        (d(w(BASE2, "src/x"), _entry(basis="MERGED")), f"handover of A {not_verified}"),
+        (d(w(BASE2, "src/q"), _entry()), "does not collide with"),
+        (d(w(BASE2, "src/x"), _entry(), _entry("NOPE")), "does not collide with"),
+        (d(w(BASE2, "src/x"), _entry(), _entry()), "malformed or repeated"),
+        (d(w(BASE2, "src/x", "src/w"), _entry("A2"), _entry()), "ordered by lineage root"),
+        (d(w(BASE2, "src/x", "src/w"), _entry()), "SCOPE_COLLISION:A2:"),
+        (d(w(BASE2, "src/x"), _entry(evidence={})), "malformed or repeated"),
+        (d(w(BASE2, "src/x"), _entry(evidence={"k": 1})), "malformed or repeated"),
+        (d(w(BASE2, "src/x"), _entry(observer="")), "malformed or repeated"),
+        (d(w(BASE2, "src/x"), _entry() | {"extra": "1"}), "wrong fields"),
+        (d(w(BASE2, "src/x"), "A"), "wrong fields"),
+        (d(w(BASE2, "src/x")) | {"handover": {"root": "A"}}, "bounded list"),
+        (d(w(BASE2, "src/x")) | {"handover": [_entry()] * 65}, "bounded list"),
+        (d(w(BASE2, "src/x"), _entry(observer=" x")), "malformed or repeated"),
+        (d(w(BASE2, "src/x"), _entry(observer="x" * 201)), "malformed or repeated"),
+        # the version says whether a handover is inside: code from before the rule, which
+        # would ignore the entry, refuses version 2 instead of replaying the journal
+        (d(w(BASE2, "src/x"), _entry()) | {"v": 1}, "unsupported journal version 1"),
+        (d(w(BASE2, "src/q")) | {"v": 2}, "unsupported journal version 2"),
+        (dict(event="RELEASE", root="A", evidence=MERGED, handover=[]), "only a DISPATCH"),
+    ]
+    for body, why in cases:
+        _forge(j, n + 1, head, **body)
+        with pytest.raises(JournalCorrupt, match=why):
+            planner(InMemoryTransport(), DirJournal(j))
+        (j / f"{n + 1:012d}.json").unlink()
+    # control: the same event with exactly the right entries replays
+    _forge(j, n + 1, head, **d(w(BASE2, "src/x", "src/w"), _entry(), _entry("A2")))
+    q = planner(InMemoryTransport(), DirJournal(j))
+    assert q.lineages["A"].handed_over_to == ["B"] == q.lineages["A2"].handed_over_to
+    assert q.in_flight() == {"B", "V", "Z"}
+
+
+def test_a_released_scope_is_handed_over_on_the_observation_not_on_the_release(tmp_path):
+    t = InMemoryTransport()
+    p = observing(t, DirJournal(tmp_path / "j"), Observer((REV1, BASE2)))
+    p.dispatch(qi("A"), **FIELDS)
+    to_ready(t, p)
+    p.release_scope("A", merged_revision=MERGED)
+    with pytest.raises(PlannerError, match=r"^SCOPE_RETAINED:A:"):
+        p.dispatch(qi("B"), **on(MERGED, "src/x"))  # the asserted revision as base: not observed
+    p.dispatch(qi("B"), **on(BASE2, "src/x"))
+    a = p.lineages["A"]
+    assert a.scope_released == MERGED and a.handover == BASE2 and a.handed_over_to == ["B"]
+
+
+# ---- carried from the ATLAS-DEVQ-0008 verification ------------------------------------------
+
+
+def test_a_file_that_merely_has_a_repair_records_name_is_not_a_repair_record(tmp_path):
+    """Pre-placed junk at the head's record name: no acknowledgement is written over it."""
+    for junk in ("garbage", "[" * 200_000, json.dumps({"seq": True}), "{}"):
+        root = tmp_path / str(len(junk))
+        t = SpoolTransport(root / "spool")
+        p1 = planner(t, DirJournal(root / "j"), "plan-1")
+        p1.dispatch(qi("A"), **FIELDS)
+        p1.dispatch(qi("B"), **fields("src/y"))
+        anchor = root / "j.ack"
+        (anchor / "000000000002.repair").write_text(junk)
+        with pytest.raises(JournalCorrupt, match=r"repair record 000000000002\.repair"):
+            DirJournal(root / "j").repairs()  # also for deeply nested JSON (RecursionError)
+        (anchor / "000000000002.ack").unlink()
+        with pytest.raises(JournalCorrupt, match=r"repair record 000000000002\.repair"):
+            p1.select([qi("Z")])
+        assert not (anchor / "000000000002.ack").exists()
+
+
+def test_a_repair_record_of_another_event_does_not_cover_this_one(tmp_path):
+    _, p1 = _two_holders(tmp_path)
+    anchor = tmp_path / "j.ack"
+    other = {"v": 1, "seq": 2, "digest": "0" * 64, "kind": "RESTORED", "by": "someone"}
+    (anchor / "000000000002.repair").write_text(json.dumps(other))
+    (anchor / "000000000002.ack").unlink()
+    with pytest.raises(JournalCorrupt, match="repair record 2 is for a different event"):
+        p1.select([qi("Z")])
+    assert not (anchor / "000000000002.ack").exists()
+
+
+def test_limit_a_second_loss_of_the_same_acknowledgement_leaves_no_second_record(tmp_path):
+    _, p1 = _two_holders(tmp_path)
+    anchor = tmp_path / "j.ack"
+    ack, record = anchor / "000000000002.ack", anchor / "000000000002.repair"
+    ack.unlink()
+    p1.select([qi("Z")])
+    first = record.read_bytes()
+    ack.unlink()
+    p1.select([qi("Z")])
+    assert ack.exists() and record.read_bytes() == first
+    assert [r["seq"] for r in DirJournal(tmp_path / "j").repairs()] == [2]
+
+
+def test_after_adopting_a_planner_counts_the_head_as_seen_acknowledged(tmp_path):
+    """After adopting, the planner counts the head as seen acknowledged."""
+    t = SpoolTransport(tmp_path / "spool")
+    planner(t, DirJournal(tmp_path / "j"), "plan-1").dispatch(qi("A"), **FIELDS)
+    anchor = tmp_path / "j.ack"
+    (anchor / "000000000001.ack").unlink()
+    p2 = planner(t, DirJournal(tmp_path / "j"), "plan-2")
+    p2.recover()  # adopts event 1 (never saw it acknowledged)
+    assert [r["kind"] for r in DirJournal(tmp_path / "j").repairs()] == ["ADOPTED"]
+    assert p2.state.acked == 1
+
+
+def test_a_holder_is_reported_before_a_retained_lineage_and_entries_are_ordered(tmp_path):
+    t = InMemoryTransport()
+    obs = Observer((REV1, BASE2))
+    p = observing(t, DirJournal(tmp_path / "j"), obs)
+    p.dispatch(qi("A"), **fields("src/a"))
+    p.fail_execution("A", "runner lost")  # A: retained, sorts before the holder
+    p.dispatch(qi("H"), **fields("src/h"))  # H: executing holder
+    with pytest.raises(PlannerError, match=r"^SCOPE_COLLISION:H:src/h\|src/h$"):
+        p.dispatch(qi("X"), **on(BASE2, "src/a", "src/h"))
+    assert obs.calls == []
+    # a released lineage (retained) and a holder handed over in ONE dispatch: the planner
+    # writes the entries in root order although it looked at the holder first
+    p.dispatch(qi("R"), **fields("src/r"))
+    implement(t)  # A's work was still published: its late result is refused by the journal
+    implement(t)  # H's result
+    implement(t)  # R's result
+    p.pump()
+    verify(t)
+    verify(t)
+    p.pump()
+    assert {p.lineages[r].phase for r in ("H", "R")} == {Phase.INTEGRATION_READY}
+    p.release_scope("H", merged_revision=MERGED)  # H: retained now; R: still a holder
+    p.dispatch(qi("Y"), **on(BASE2, "src/h", "src/r"))
+    ev = json.loads((tmp_path / "j" / f"{p.state.seq:012d}.json").read_text())
+    assert [h["root"] for h in ev["handover"]] == ["H", "R"]
+
+
+def test_the_first_handover_base_is_kept(tmp_path):
+    base3 = "8" * 40
+    t = InMemoryTransport()
+    p = observing(t, DirJournal(tmp_path / "j"), Observer((REV1, BASE2), (REV1, base3)))
+    p.dispatch(qi("A"), **FIELDS)
+    to_ready(t, p)
+    p.dispatch(qi("B"), **on(BASE2, "src/x/b"))
+    p.dispatch(qi("C"), **on(base3, "src/x/c"))
+    a = p.lineages["A"]
+    assert a.handover == BASE2 and a.handed_over_to == ["B", "C"]
+    assert a.history[-2:] == [f"SCOPE_HANDED_OVER:B:{BASE2}", f"SCOPE_HANDED_OVER:C:{base3}"]
+
+
+def test_a_repair_record_needs_an_integer_sequence_number_and_a_string_digest(tmp_path):
+    _two_holders(tmp_path)
+    anchor = tmp_path / "j.ack"
+    digest = (anchor / "000000000001.ack").read_text()
+    good = {"v": 1, "seq": 1, "digest": digest, "kind": "RESTORED", "by": "plan-1"}
+    for bad in ({"seq": True}, {"seq": 1.0}, {"digest": int("1" * 64)}):
+        (anchor / "000000000001.repair").write_text(json.dumps(good | bad))
+        with pytest.raises(JournalCorrupt, match=r"repair record 000000000001\.repair"):
+            DirJournal(tmp_path / "j").repairs()
+    (anchor / "000000000001.repair").write_text(json.dumps(good))
+    assert [r["seq"] for r in DirJournal(tmp_path / "j").repairs()] == [1]

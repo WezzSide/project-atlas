@@ -368,6 +368,7 @@ def test_published_work_the_journal_does_not_know_stops_every_coordinator(tmp_pa
         "continuity_boundary",
         "live_conflicting_work_boundary",
         "repairs",
+        "scope_handover_observer",
     }
     assert status["repairs"] == []
     # contrast: the planner alone, without the witness, admits over the lost lineage
@@ -672,11 +673,12 @@ def test_the_coordinator_admits_nothing_over_the_scope_of_a_terminal_lineage(tmp
     # the verdict ended lineage A; it did not prove A's executor or result branch is gone
     assert st["deferred"] == [["X", "SCOPE_RETAINED:A:src/a/x|src/a"]] and st["admitted"] == ["Y"]
     assert {w1.task_id, w2.task_id} == {"A", "B"}
-    # the planner's own default is unchanged: asked directly, it admits over a terminal scope
+    # it is the journal's rule, not an option of the coordinator: asked directly, the planner
+    # refuses as well (ATLAS-DEVQ-0009)
     item, fields = cand("X", "src/a/x")
     with pytest.raises(PlannerError, match=r"^SCOPE_RETAINED:A:src/a/x\|src/a$"):
-        c.planner.dispatch(item, retain_terminal_scopes=True, **fields)
-    assert c.planner.dispatch(item, **fields).task_id == "X"
+        c.planner.dispatch(item, **fields)
+    assert "X" not in c.planner.lineages
 
 
 def test_blocked_and_caller_released_scopes_stay_closed_to_the_coordinator(tmp_path):
@@ -821,7 +823,6 @@ def test_a_malformed_candidate_list_raises_before_anything_is_read_or_written(tm
         ([(item, None)], pair),
         ([(item, {1: "x"})], "work field names must be strings"),
         ([(item, {**fields, "live_limit": 99})], "work fields may not set"),
-        ([(item, {**fields, "retain_terminal_scopes": False})], "work fields may not set"),
         ([(item, {**fields, "execution_ordinal": 5})], "work fields may not set"),
         ([(item, {**fields, "item": 1})], "work fields may not set"),
         ([(item, {**fields, "self": 1})], "work fields may not set"),
@@ -1063,3 +1064,120 @@ def test_a_repair_record_is_never_written_into_an_anchor_of_another_store(tmp_pa
     with pytest.raises(JournalCorrupt, match="STORE_IDENTITY"):
         j.repairs()
     assert not list(j.anchor.glob("*.repair"))
+
+
+# ---- verified scope handover (ATLAS-DEVQ-0009) ----------------------------------------------
+
+BASE2 = "9" * 40
+
+
+def cand2(task, *paths):
+    """A candidate that starts from BASE2 instead of BASE."""
+    item, work = cand(task, *paths)
+    return item, work | {"base_revision": BASE2}
+
+
+class Observer:
+    identity = "observer:test"
+
+    def __init__(self, *contained):
+        self.contained, self.calls = set(contained), []
+
+    def result_in_base(self, *, repository, result_revision, base_revision):
+        self.calls.append((result_revision, base_revision))
+        if (result_revision, base_revision) in self.contained:
+            return {"merge_base": result_revision}
+        return None
+
+
+def test_the_coordinator_hands_a_scope_over_only_on_its_observers_evidence(tmp_path):
+    store(tmp_path)
+    obs = Observer((REV1, BASE2))
+    c = coordinator(tmp_path, max_live=4, observer=obs)
+    st = c.tick([cand("A", "src/a")])
+    assert st["scope_handover_observer"] == "observer:test"
+    implement(tmp_path)
+    c.tick()
+    verify(tmp_path)
+    assert c.tick()["lineages"][0]["phase"] == "INTEGRATION_READY"
+    # the same base: nothing observed, A still owns src/a
+    st = c.tick([cand("X", "src/a/x")])
+    assert st["deferred"] == [["X", "SCOPE_COLLISION:A:src/a/x|src/a"]] and st["admitted"] == []
+    # a base the observer saw A's result in
+    st = c.tick([cand2("X", "src/a/x")])
+    assert st["admitted"] == ["X"] and st["deferred"] == []
+    rows = {r["lineage_root"]: r for r in st["lineages"]}
+    assert rows["A"]["holds_scope"] is False and rows["A"]["handover"] == BASE2
+    assert rows["A"]["handed_over_to"] == ("X",) and rows["X"]["holds_scope"] is True
+    assert obs.calls == [(REV1, BASE), (REV1, BASE2)]
+    # a coordinator without an observer reads the same journal and hands nothing over
+    plain = coordinator(tmp_path, identity="coord-2", max_live=4)
+    st = plain.tick([cand2("Y", "src/a/y")])
+    assert st["scope_handover_observer"] == "NONE"
+    assert st["deferred"] == [["Y", "SCOPE_RETAINED:A:src/a/y|src/a"]]
+    on_disk = json.loads((tmp_path / "status" / "status.json").read_text())
+    assert on_disk["lineages"] == json.loads(json.dumps(st["lineages"]))
+    assert on_disk["lineages"][0]["handed_over_to"] == ["X"]
+
+
+def test_an_io_error_in_the_constructor_leaves_a_halted_status(tmp_path, monkeypatch):
+    store(tmp_path)
+    assert coordinator(tmp_path).tick([cand("A", "src/a")])["state"] == "OK"
+
+    def unreadable(self, channel):
+        raise PermissionError(13, "spool is not readable")
+
+    monkeypatch.setattr(SpoolTransport, "published", unreadable)
+    with pytest.raises(PermissionError):
+        coordinator(tmp_path, identity="coord-2")
+    status = json.loads((tmp_path / "status" / "status.json").read_text())
+    assert status["state"] == "HALTED"
+    assert status["reason"].startswith("IO_ERROR:PermissionError")
+
+
+def test_a_pathological_repair_record_halts_instead_of_leaving_an_old_ok(tmp_path):
+    j = store(tmp_path)
+    c = coordinator(tmp_path)
+    assert c.tick([cand("A", "src/a")])["state"] == "OK"
+    (j.anchor / "000000000001.repair").write_text("[" * 200_000)
+    before = tree(tmp_path)
+    with pytest.raises(JournalCorrupt, match=r"repair record 000000000001\.repair"):
+        c.tick([cand("N", "src/n")])
+    assert tree(tmp_path) == before
+    status = json.loads((tmp_path / "status" / "status.json").read_text())
+    assert status["state"] == "HALTED"
+
+
+def test_limit_repair_records_are_trusted_as_files(tmp_path):
+    """Pinned limits: a record is not checked against the journal, and deleting it hides it."""
+    j = store(tmp_path)
+    c = coordinator(tmp_path)
+    c.tick([cand("A", "src/a")])
+    fabricated = {"v": 1, "seq": 999, "digest": "f" * 64, "kind": "ADOPTED", "by": "nobody"}
+    record = j.anchor / "000000000999.repair"
+    record.write_text(json.dumps(fabricated))
+    st = c.tick()
+    assert st["state"] == "DEGRADED" and [r["seq"] for r in st["repairs"]] == [999]
+    record.unlink()
+    st = c.tick()
+    assert st["state"] == "OK" and st["repairs"] == []
+
+
+def test_a_coordinator_checks_its_observer_before_anything_else(tmp_path):
+    class Nameless:
+        def result_in_base(self, **kw):
+            return {"merge_base": "x"}
+
+    store(tmp_path)
+    assert coordinator(tmp_path).tick()["state"] == "OK"
+    with pytest.raises(PlannerError, match="observer needs a non-empty identity"):
+        coordinator(tmp_path, identity="coord-2", observer=Nameless())
+    status = json.loads((tmp_path / "status" / "status.json").read_text())
+    assert status["state"] == "OK"  # a configuration refusal writes no status
+    # also when the store is unreadable: the refusal, not an error from writing a status
+    attached = store(tmp_path, create=False)
+    for f in attached.anchor.iterdir():
+        f.unlink()
+    attached.anchor.rmdir()
+    with pytest.raises(PlannerError, match="observer needs a non-empty identity"):
+        coordinator(tmp_path, attached, identity="coord-3", observer=Nameless())

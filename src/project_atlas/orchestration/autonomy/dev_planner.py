@@ -113,8 +113,9 @@ Limits (what this is NOT):
     way a repair record is written to the
     anchor BEFORE the acknowledgement and is never removed here; ``repairs()`` lists them and
     a coordinator's healthy tick reports ``DEGRADED`` while a record exists. An acknowledgement
-    therefore either
-    comes from the commit that appended its event or has a repair record next to it.
+    therefore either comes from the commit that appended its event or has a repair record
+    next to it (the record that stands must be a well-formed record of the same event; one
+    record per sequence number, so a second loss of the same acknowledgement adds none).
     Everything else fails closed: there is no other repair or re-anchoring tool, and nothing
     here clears a repair record; an operator has to restore the journal or judge the record;
   * ``recover`` must be called by whoever restarts a planner; ``Coordinator.tick`` does;
@@ -122,16 +123,44 @@ Limits (what this is NOT):
     an append is best effort (not available on Windows);
   * path overlap only: no semantic conflict detection (a generated file two lineages both
     rewrite, a whole-suite acceptance command);
-  * the planner cannot observe a merge: an INTEGRATION_READY lineage holds its scope until
-    ``release_scope`` is called with the merge revision, which the CALLER asserts; the planner
-    does not verify it. Releasing a scope grants nothing;
-  * no leases, heartbeats or executor assignment: a holder whose executor died stays a holder
-    until its lineage reaches a releasing phase. A phase, a timeout or a caller-supplied
-    revision is not proof that an old executor can no longer write or that integration
-    happened: ``fail_execution`` and ``release_scope`` release on the caller's word;
+  * the planner cannot observe a merge. ``release_scope`` records the merge revision the
+    CALLER asserts and ``fail_execution`` records a caller's failure report; since
+    ATLAS-DEVQ-0009 neither opens a scope for other work (see "Verified scope handover");
+  * no leases, heartbeats or executor assignment: a holder whose executor died stays a holder,
+    and the paths of a BLOCKED or OWNER_REQUIRED lineage stay closed, because nothing here
+    has evidence about an executor;
   * the quarantine list is evidence in memory only and is not journalled;
   * it does not lift the fabric adapter's serial-dispatch rule, and no live run has exercised
     two lineages.
+
+Verified scope handover (ATLAS-DEVQ-0009): a work item that overlaps the last work of ANY
+earlier lineage in the same repository (as ``works_collide`` compares it: a ``.git`` or URL
+spelling counts as a different repository) is admitted only when the DISPATCH event carries a
+verified handover of that lineage's scope. This is a rule of the journal (``_transition``), so
+it holds for every planner and on replay; there is no switch. A phase, a timeout, a failure
+report (``fail_execution``) or an asserted merge revision (``release_scope``) never opens a
+scope: such lineages are refused with ``SCOPE_RETAINED`` instead of ``SCOPE_COLLISION``, and
+that is the only difference. The one basis for a handover is ``RESULT_IN_BASE``: the earlier
+lineage is INTEGRATION_READY and its verified result revision is an ancestor of the new
+work's ``base_revision``. The new work then starts from history that contains the verified
+result revision, so it cannot conflict with that revision. The earlier lineage is terminal
+and the journal accepts no further result or verdict for it; its executor and its result
+branch are not fenced by anything else. The
+journal checks that an entry names exactly that lineage's result and exactly the new work's
+base. That the ancestry was OBSERVED is the statement of a ``HandoverObserver`` given to the
+planner at construction, called inside the dispatch decision and journalled with its identity
+and evidence; ``dispatch`` has no parameter through which a caller could pass such evidence.
+What this does not establish: the observer is trusted like the journal directory (whoever
+can construct a planner can construct a lying observer, and the entry is unkeyed); ancestry
+says nothing about the default branch or about who merged, and a handover does not mean the
+result was integrated: a base equal to, or built on, the unmerged result branch satisfies
+it; commits pushed to the earlier result branch AFTER the verified revision are not covered
+(only the verified revision is); a journal written before this rule that admitted work over
+a retained scope no longer replays (fail closed), and an event that carries a handover is
+written as journal version 2, which the previous code refuses, so a journal with a handover
+does not replay there either; events without one are still version 1; and the scope of
+a BLOCKED or OWNER_REQUIRED lineage, or of an INTEGRATION_READY lineage whose result is not
+an ancestor of the base a new work is given, cannot be handed over at all yet.
 
 Store identity and coordinator (ATLAS-DEVQ-0008): ``StoreJournal`` is a ``DirJournal`` whose
 journal and anchor directories are created once, carry one store id, and are afterwards only
@@ -139,7 +168,8 @@ attached, never created. ``Coordinator`` runs recover, pump and the preparation 
 compatible lineages as one ``tick`` on such a store and writes a journal-derived status file.
 It refuses a journal without store identity and a transport without the record-listing methods,
 checks that every published WORK record is known to the journal (a witness that does not
-depend on the anchor), and never dispatches an executor or hands a scope over. See both
+depend on the anchor), and never dispatches an executor; it hands a scope over only through
+the verified handover above. See both
 classes for what they do not establish: in particular, no continuity boundary adequate for
 live conflicting work is established here; a different filesystem for the anchor is evidence
 against one failure mode, not proof of independent storage.
@@ -208,7 +238,8 @@ SCOPE_HOLDING = frozenset(
 """Phases in which a lineage still holds its write scope: every non-terminal phase, plus
 INTEGRATION_READY. INTEGRATION_READY is terminal for the planner, but it means "a verified,
 UNMERGED candidate exists"; releasing its scope there would admit a second lineage over the same
-paths and move the conflict back to merge time. OWNER_REQUIRED and BLOCKED do not hold scope."""
+paths and move the conflict back to merge time. OWNER_REQUIRED and BLOCKED are not holders, but
+their paths stay closed to other work all the same (``SCOPE_RETAINED``, ATLAS-DEVQ-0009)."""
 
 
 @dataclass
@@ -222,6 +253,8 @@ class LineageState:
     scope_released: str = ""  # merge revision the caller asserted in ``release_scope``
     dispatched_by: str = ""  # planner identity that journalled the DISPATCH
     last_seq: int = 0  # journal sequence number of the lineage's latest event
+    handover: str = ""  # base revision of the first work admitted over this scope (journalled)
+    handed_over_to: list[str] = field(default_factory=list)  # lineage roots admitted over it
 
 
 class PlannerError(ContractError):
@@ -242,6 +275,10 @@ _REPAIR_SUFFIX = re.compile(r"-R[0-9]+$")  # reserved for planner-materialised r
 
 
 JOURNAL_VERSION = 1
+# An event that carries a scope handover is written as version 2, so that code from before
+# ATLAS-DEVQ-0009 (which would ignore the entry) refuses the journal instead of replaying it.
+HANDOVER_VERSION = 2
+MAX_OBSERVER_IDENTITY = 200
 MAX_COMMIT_RETRIES = 16  # lost exclusive-create races before a commit gives up (never spins)
 _EVENT_FILE = re.compile(r"[0-9]{12}\.json")
 _ACK_FILE = re.compile(r"[0-9]{12}\.ack")
@@ -257,9 +294,34 @@ ADOPT_GRACE_STEP = 0.05  # another planner adopts it: tries x seconds, 2 s. A li
 #                          that needs longer than this between append and acknowledgement
 #                          is adopted too and leaves an ADOPTED record
 _DIGEST = re.compile(r"[0-9a-f]{64}")
+# Verified scope handover (ATLAS-DEVQ-0009). The only basis: the verified result of the lineage
+# that owned the scope is an ancestor of the base revision the new work starts from.
+RESULT_IN_BASE = "RESULT_IN_BASE"
+MAX_HANDOVERS = 64  # lineages one DISPATCH may take a scope over from
+MAX_EVIDENCE_KEYS = 8
+MAX_EVIDENCE_CHARS = 256  # per key + value
+_HANDOVER_KEYS = frozenset(
+    {"root", "basis", "result_revision", "base_revision", "observer", "evidence"}
+)
 _REVISION = re.compile(r"[0-9a-f]{40}")
 _EXECUTING = frozenset({Phase.DISPATCHED, Phase.REPAIR_DISPATCHED})
 _LIVE = _EXECUTING | {Phase.VERIFYING}  # executing or being verified
+
+
+class HandoverObserver(Protocol):
+    """Observes, outside the journal, whether a scope can be handed over. Read-only.
+
+    ``result_in_base`` returns evidence (a small ``str -> str`` mapping, journalled with the
+    DISPATCH) when it OBSERVED that ``result_revision`` is an ancestor of ``base_revision`` in
+    ``repository``, and ``None`` when it did not or could not. ``identity`` names the source
+    of the observation. A planner without an observer hands no scope over.
+    """
+
+    identity: str
+
+    def result_in_base(
+        self, *, repository: str, result_revision: str, base_revision: str
+    ) -> Mapping[str, str] | None: ...
 
 
 class Journal(Protocol):
@@ -493,24 +555,32 @@ class DirJournal:
         _sync_dir(self.anchor)
         if not (self.anchor / f"{seq:012d}.repair").is_file():
             raise JournalCorrupt(f"JOURNAL_CORRUPT:repair record {seq} could not be written")
+        # the record that stands (this one, or an earlier one) must be a record of THIS event:
+        # a file that merely has the name is not evidence, and no acknowledgement follows it
+        if self._repair(f"{seq:012d}.repair")["digest"] != digest:
+            raise JournalCorrupt(f"JOURNAL_CORRUPT:repair record {seq} is for a different event")
+
+    def _repair(self, name: str) -> dict[str, Any]:
+        """One repair record, shape-checked (not compared with the journal)."""
+        try:
+            rec = json.loads((self.anchor / name).read_text(encoding="utf-8"))
+            if (
+                not isinstance(rec, dict)
+                or type(rec.get("seq")) is not int
+                or rec["seq"] != int(name[:12])
+                or rec.get("kind") not in (RESTORED, ADOPTED)
+                or not isinstance(rec.get("by"), str)
+                or not isinstance(rec.get("digest"), str)
+                or not _DIGEST.fullmatch(rec["digest"])
+            ):
+                raise ValueError("not a repair record")
+        except (OSError, ValueError, RecursionError) as exc:
+            raise JournalCorrupt(f"JOURNAL_CORRUPT:repair record {name}: {exc}") from exc
+        return {k: rec[k] for k in ("seq", "kind", "by", "digest")}
 
     def repairs(self) -> tuple[dict[str, Any], ...]:
-        out: list[dict[str, Any]] = []
-        for name in sorted(n for n in self._names(self.anchor) if _REPAIR_FILE.fullmatch(n)):
-            try:
-                rec = json.loads((self.anchor / name).read_text(encoding="utf-8"))
-                if (
-                    not isinstance(rec, dict)
-                    or rec.get("seq") != int(name[:12])
-                    or rec.get("kind") not in (RESTORED, ADOPTED)
-                    or not isinstance(rec.get("by"), str)
-                    or not _DIGEST.fullmatch(str(rec.get("digest")))
-                ):
-                    raise ValueError("not a repair record")
-            except (OSError, ValueError) as exc:
-                raise JournalCorrupt(f"JOURNAL_CORRUPT:repair record {name}: {exc}") from exc
-            out.append({k: rec[k] for k in ("seq", "kind", "by", "digest")})
-        return tuple(out)
+        names = sorted(n for n in self._names(self.anchor) if _REPAIR_FILE.fullmatch(n))
+        return tuple(self._repair(name) for name in names)
 
     def read(self, after: int) -> list[bytes]:
         last = 0
@@ -685,7 +755,7 @@ class StoreJournal(DirJournal):
         super().acknowledge(seq, digest)
 
     def record_repair(self, seq: int, digest: str, kind: str, by: str) -> None:
-        self.check_store()  # never into an anchor that is not this store's
+        self.check_store()  # checked immediately before the write, not atomically with it
         super().record_repair(seq, digest, kind, by)
 
     def repairs(self) -> tuple[dict[str, Any], ...]:
@@ -710,7 +780,71 @@ class FleetState:
 
 
 def holds_scope(st: LineageState) -> bool:
-    return st.phase in SCOPE_HOLDING and not st.scope_released
+    return st.phase in SCOPE_HOLDING and not st.scope_released and not st.handover
+
+
+def _collisions(pairs: tuple[tuple[str, str], ...]) -> str:
+    return ",".join(f"{a}|{b}" for a, b in pairs)
+
+
+def _handover_entries(ev: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """The ``handover`` entries of a DISPATCH event by lineage root; shape-checked only."""
+    raw = ev.get("handover", [])
+    if not isinstance(raw, list) or len(raw) > MAX_HANDOVERS:
+        raise PlannerError("DISPATCH handover must be a bounded list")
+    out: dict[str, dict[str, Any]] = {}
+    for h in raw:
+        if not isinstance(h, dict) or set(h) != _HANDOVER_KEYS:
+            raise PlannerError("DISPATCH handover entry has the wrong fields")
+        evidence = h["evidence"]
+        if (
+            not all(isinstance(h[k], str) and h[k] for k in _HANDOVER_KEYS - {"evidence"})
+            or not _evidence_ok(evidence)
+            or not _observer_identity_ok(h["observer"])
+            or h["root"] in out
+        ):
+            raise PlannerError("DISPATCH handover entry is malformed or repeated")
+        out[h["root"]] = h
+    if [h["root"] for h in raw] != sorted(out):
+        raise PlannerError("DISPATCH handover entries must be ordered by lineage root")
+    return out
+
+
+def _observer_identity_ok(identity: object) -> bool:
+    return (
+        isinstance(identity, str)
+        and 0 < len(identity) <= MAX_OBSERVER_IDENTITY
+        and identity == identity.strip()
+        and identity.isprintable()
+    )
+
+
+def _evidence_ok(evidence: object) -> bool:
+    return (
+        isinstance(evidence, dict)
+        and 0 < len(evidence) <= MAX_EVIDENCE_KEYS
+        and all(
+            isinstance(k, str) and isinstance(v, str) and 0 < len(k) + len(v) <= MAX_EVIDENCE_CHARS
+            for k, v in evidence.items()
+        )
+    )
+
+
+def _verified_release(holder: LineageState, h: dict[str, Any], work: WorkItem) -> bool:
+    """Whether ``h`` is a handover of ``holder``'s scope to ``work`` that the journal accepts.
+
+    Only one basis exists: the holder's verified result is contained in the base the new work
+    starts from. The journal checks that the entry names exactly that result and exactly that
+    base; that the containment was OBSERVED is the observer's statement, recorded with it.
+    """
+    res = holder.result
+    return (
+        holder.phase is Phase.INTEGRATION_READY
+        and res is not None
+        and h["basis"] == RESULT_IN_BASE
+        and h["result_revision"] == res.result_revision
+        and h["base_revision"] == work.base_revision
+    )
 
 
 def _record[T: Record](ev: dict[str, Any], key: str, kind: type[T]) -> T:
@@ -727,8 +861,10 @@ def _transition(state: FleetState, ev: dict[str, Any], raw: bytes) -> Callable[[
     for replay and, before the append, for the event a live planner is about to write: an event
     that could not be replayed is never written.
     """
-    if ev.get("v") != JOURNAL_VERSION:
+    if ev.get("v") != (HANDOVER_VERSION if "handover" in ev else JOURNAL_VERSION):
         raise PlannerError(f"unsupported journal version {ev.get('v')!r}")
+    if "handover" in ev and ev.get("event") != "DISPATCH":
+        raise PlannerError("only a DISPATCH carries a handover")
     if type(ev.get("seq")) is not int or ev["seq"] != state.seq + 1 or ev.get("prev") != state.head:
         raise PlannerError("journal sequence or hash chain is broken")
     kind, root, planner = ev["event"], ev["root"], ev["planner"]
@@ -751,16 +887,37 @@ def _transition(state: FleetState, ev: dict[str, Any], raw: bytes) -> Callable[[
             raise PlannerError("lineage/task id already in use")
         if _REPAIR_SUFFIX.search(root):
             raise PlannerError("task id suffix -R<n> is reserved for repair tasks")
-        for other in sorted(state.lineages):
-            holder = state.lineages[other]
-            if holds_scope(holder):
+        # Scope ownership. A work that overlaps the last work of ANY earlier lineage in the
+        # same repository is admitted only with a verified handover of that lineage's scope.
+        # Holders are reported first (SCOPE_COLLISION), then lineages that no longer hold
+        # their scope (SCOPE_RETAINED): BLOCKED, OWNER_REQUIRED, released on an assertion, or
+        # already handed over. Neither a phase nor an assertion opens a scope.
+        handed = _handover_entries(ev)
+        taken: list[tuple[LineageState, str]] = []
+        for holding in (True, False):
+            for other in sorted(state.lineages):
+                holder = state.lineages[other]
+                if holds_scope(holder) is not holding:
+                    continue
                 pairs = works_collide(work, holder.work)
-                if pairs:
-                    raise PlannerError(
-                        f"SCOPE_COLLISION:{other}:" + ",".join(f"{a}|{b}" for a, b in pairs)
-                    )
+                h = handed.get(other)
+                if not pairs:
+                    continue
+                if h is None:
+                    code = "SCOPE_COLLISION" if holding else "SCOPE_RETAINED"
+                    raise PlannerError(f"{code}:{other}:{_collisions(pairs)}")
+                if not _verified_release(holder, h, work):
+                    raise PlannerError(f"handover of {other} is not a verified release")
+                taken.append((holder, h["base_revision"]))
+        if len(taken) != len(handed):
+            raise PlannerError("handover for a lineage the work does not collide with")
 
         def do_dispatch() -> None:
+            for prior, base in taken:
+                prior.handover = prior.handover or base
+                prior.handed_over_to.append(root)
+                prior.history.append(f"SCOPE_HANDED_OVER:{root}:{base}")
+                prior.last_seq = seq
             state.lineages[root] = LineageState(
                 root,
                 Phase.DISPATCHED,
@@ -973,6 +1130,8 @@ def fleet_status(journal: Journal) -> tuple[dict[str, Any], ...]:
             "allowed_paths": st.work.allowed_paths,
             "holds_scope": holds_scope(st),
             "scope_released": st.scope_released,
+            "handover": st.handover,
+            "handed_over_to": tuple(st.handed_over_to),
             "dispatched_by": st.dispatched_by,
             "last_seq": st.last_seq,
         }
@@ -988,6 +1147,7 @@ class Planner:
         identity: str,
         verifier_identities: tuple[str, ...],
         journal: Journal | None = None,
+        observer: HandoverObserver | None = None,
     ) -> None:
         if not verifier_identities or not isinstance(verifier_identities, tuple | list):
             raise PlannerError("at least one verifier identity is required (as a tuple)")
@@ -1010,6 +1170,9 @@ class Planner:
         self.identity = identity
         self.verifiers = tuple(verifier_identities)  # own copy: later mutation cannot bypass checks
         self.journal: Journal = MemoryJournal() if journal is None else journal
+        if observer is not None and not _observer_identity_ok(getattr(observer, "identity", None)):
+            raise PlannerError("a handover observer needs a non-empty identity")
+        self.observer = observer  # None: this planner never admits over an earlier scope
         self.state = FleetState()
         # the replica's containers, under their established names (same objects, never rebound)
         self.lineages = self.state.lineages
@@ -1089,12 +1252,13 @@ class Planner:
         for _ in range(MAX_COMMIT_RETRIES):
             self.sync()
             self._anchor_head()  # a writer acknowledges what it builds on before it appends
+            decided = decide()
             ev = {
-                "v": JOURNAL_VERSION,
+                "v": HANDOVER_VERSION if "handover" in decided else JOURNAL_VERSION,
                 "seq": self.state.seq + 1,
                 "prev": self.state.head,
                 "planner": self.identity,
-                **decide(),
+                **decided,
             }
             raw = json.dumps(ev, sort_keys=True).encode()
             apply = _transition(self.state, ev, raw)
@@ -1182,7 +1346,6 @@ class Planner:
         *,
         execution_ordinal: int = 1,
         live_limit: int | None = None,
-        retain_terminal_scopes: bool = False,
         **work_fields: object,
     ) -> WorkItem:
         """Materialize + publish the sealed work for an admissible queue item.
@@ -1194,12 +1357,22 @@ class Planner:
         comparison keys in sorted order. Nothing is published, no state changes, and the task id
         stays usable for a later dispatch. A holder whose seal no longer verifies is an error.
         ``live_limit`` (optional) refuses with ``LIVE_LIMIT`` when that many lineages are
-        already executing or being verified. ``retain_terminal_scopes`` (optional) also
-        refuses, with ``SCOPE_RETAINED``, a work item that overlaps the last work of ANY
-        lineage that no longer holds its scope: BLOCKED, OWNER_REQUIRED, or INTEGRATION_READY
-        and released with ``release_scope``. Those end the lineage or record a caller's
-        assertion; none is evidence that an executor stopped writing, that a result branch is
-        gone or that a candidate was merged.
+        already executing or being verified.
+        A work item that overlaps the last work of a lineage that no longer holds its scope
+        (BLOCKED, OWNER_REQUIRED, INTEGRATION_READY released with ``release_scope``, or
+        already handed over) is refused with ``SCOPE_RETAINED`` unless the verified handover
+        below applies; for a BLOCKED or OWNER_REQUIRED lineage it never does. Those phases
+        end a lineage or record a caller's assertion, and none is evidence that an executor
+        stopped writing, that a result branch is gone or that a candidate was merged.
+        VERIFIED HANDOVER is the one way a scope passes on: when the overlapped lineage is
+        INTEGRATION_READY and this planner's ``observer`` reports that the lineage's verified
+        result revision is an ancestor of the new work's ``base_revision``, the DISPATCH event
+        carries that observation and the earlier lineage stops holding its scope. The new
+        work then starts from a base that contains the verified result revision, so it cannot
+        conflict with that revision. No caller can pass such evidence in; without an observer,
+        or when it reports nothing or raises ``ValueError`` (every ``ContractError``),
+        ``OSError`` or ``TypeError``, the refusal stands. Any other exception from the
+        observer propagates and nothing is written.
         The decision is taken against the journal and committed as its next event, so it also
         holds against other planners on the same journal. The DISPATCH event is written before
         the work is published; if publishing fails the lineage is DISPATCHED and ``recover``
@@ -1241,27 +1414,72 @@ class Planner:
                 max_attempts=item.max_attempts,
                 **work_fields,
             )
-            for holder in self.scope_holders():
-                pairs = works_collide(work, holder)
-                if pairs:
-                    raise PlannerError(
-                        f"SCOPE_COLLISION:{holder.lineage_root}:"
-                        + ",".join(f"{a}|{b}" for a, b in pairs)
-                    )
-            if retain_terminal_scopes:
+            handover: list[dict[str, Any]] = []
+            for holding in (True, False):  # holders first, as the journal rule reports them
                 for root, st in sorted(self.lineages.items()):
-                    if not holds_scope(st):  # BLOCKED, OWNER_REQUIRED, or released
-                        pairs = works_collide(work, st.work)
-                        if pairs:
-                            raise PlannerError(
-                                f"SCOPE_RETAINED:{root}:" + ",".join(f"{a}|{b}" for a, b in pairs)
-                            )
-            return {"event": "DISPATCH", "root": item.task_id, "work": encode(work)}
+                    if holds_scope(st) is not holding:
+                        continue
+                    pairs = works_collide(work, st.work)
+                    if not pairs:
+                        continue
+                    entry = self._observe_handover(st, work, observed)
+                    if entry is None:
+                        code = "SCOPE_COLLISION" if holding else "SCOPE_RETAINED"
+                        raise PlannerError(f"{code}:{root}:{_collisions(pairs)}")
+                    handover.append(entry)
+            ev: dict[str, Any] = {"event": "DISPATCH", "root": item.task_id, "work": encode(work)}
+            if handover:
+                ev["handover"] = sorted(handover, key=lambda h: str(h["root"]))
+            return ev
+
+        observed: dict[tuple[str, str], Mapping[str, str] | None] = {}  # one look per dispatch
 
         self._commit(decide)
         work = self.lineages[item.task_id].work
         self.transport.publish(work)
         return work
+
+    def _observe_handover(
+        self,
+        st: LineageState,
+        work: WorkItem,
+        observed: dict[tuple[str, str], Mapping[str, str] | None],
+    ) -> dict[str, Any] | None:
+        """A handover entry for ``st``'s scope if the observer establishes one, else ``None``.
+
+        Fail-closed: no observer, a lineage that is not INTEGRATION_READY, an observer that
+        reports nothing, raises ``ValueError`` / ``OSError`` / ``TypeError``, or returns
+        anything but a mapping that is bounded evidence all give ``None``, and the caller
+        refuses the dispatch. Another exception type propagates.
+        """
+        res = st.result
+        if self.observer is None or st.phase is not Phase.INTEGRATION_READY or res is None:
+            return None
+        key = (res.result_revision, work.base_revision)
+        if key not in observed:
+            found: dict[str, str] | None = None
+            try:
+                seen = self.observer.result_in_base(
+                    repository=work.repository,
+                    result_revision=res.result_revision,
+                    base_revision=work.base_revision,
+                )
+                if isinstance(seen, Mapping) and _evidence_ok(dict(seen)):
+                    found = dict(seen)
+            except (ValueError, OSError, TypeError):  # incl. ContractError: not established
+                found = None
+            observed[key] = found
+        evidence = observed[key]
+        if evidence is None:
+            return None
+        return {
+            "root": st.lineage_root,
+            "basis": RESULT_IN_BASE,
+            "result_revision": res.result_revision,
+            "base_revision": work.base_revision,
+            "observer": self.observer.identity,
+            "evidence": dict(sorted(evidence.items())),
+        }
 
     # -- pump -------------------------------------------------------------------------------
     def pump(self) -> int:
@@ -1422,9 +1640,9 @@ class Planner:
         REPAIR_DISPATCHED). A lineage that already has a result, is INTEGRATION_READY or is
         terminal is refused, and so is a superseded task id: a wrong-phase or stale failure
         report does not release a scope. That is all this guards. The planner does not confirm
-        that the remote executor has stopped or can no longer write; the scope is released on
-        the caller's word, so a caller must have established that (or fenced the executor)
-        before it calls this.
+        that the remote executor has stopped or can no longer write. For that reason the
+        report opens nothing: the lineage is BLOCKED and its paths stay closed to other work
+        (``SCOPE_RETAINED``); there is no handover of a BLOCKED lineage's scope yet.
         """
 
         def decide() -> dict[str, Any]:
@@ -1439,12 +1657,15 @@ class Planner:
         self._commit(decide)
 
     def release_scope(self, lineage_root: str, *, merged_revision: str) -> None:
-        """Release the scope of an INTEGRATION_READY lineage on the caller's merge assertion.
+        """Record the caller's merge assertion for an INTEGRATION_READY lineage.
 
         ``merged_revision`` (40-hex) is recorded as the evidence the CALLER asserts; the planner
         cannot observe a merge and does not verify it, so the revision is not proof that
-        integration occurred. This is not a merge, grants nothing and changes no phase: it only
-        stops the lineage from holding its write scope.
+        integration occurred. This is not a merge, grants nothing and changes no phase. The
+        lineage stops counting as a scope HOLDER (``in_flight``, ``scope_holders``), but its
+        paths stay closed to other work: an overlapping dispatch is refused with
+        ``SCOPE_RETAINED`` instead of ``SCOPE_COLLISION`` until a verified handover (see
+        ``dispatch``), for which this assertion is neither needed nor sufficient.
         """
 
         def decide() -> dict[str, Any]:
@@ -1496,17 +1717,20 @@ class Coordinator:
         published again, and whether that leads to a second workflow dispatch is decided by
         the adapter's own ledger (the crosswalk), which refuses a seal it already dispatched:
         that protection lasts exactly as long as that ledger does;
-      * it never hands a scope over: it does not call ``fail_execution`` or ``release_scope``,
-        and it admits nothing that overlaps the last work of a lineage that gave up its scope
-        (``SCOPE_RETAINED``): BLOCKED or OWNER_REQUIRED, which ``pump`` or another caller's
-        ``fail_execution`` produces, and INTEGRATION_READY released by another caller's
-        ``release_scope`` on a revision it merely asserts. None of these is evidence that an
-        executor stopped writing, that a result branch is gone or that a merge happened.
-        Until a verified release exists, a path any lineage of this journal has claimed in
-        the same repository stays closed to this coordinator (the repository is compared as
-        in ``works_collide``: a ``.git`` or URL spelling of the same repository counts as a
-        different one). A planner used directly, without this option, still admits over such
-        a scope;
+      * it hands a scope over only on a verified release (ATLAS-DEVQ-0009), which is the
+        journal's rule for every planner, not an option of this class: it does not call
+        ``fail_execution`` or ``release_scope``, and nothing that overlaps the last work of an
+        earlier lineage is admitted because of a phase, a timeout or an assertion. BLOCKED
+        and OWNER_REQUIRED lineages, and INTEGRATION_READY ones released by a caller's
+        ``release_scope``, keep their paths closed (``SCOPE_RETAINED``). The one handover:
+        the ``observer`` given to the constructor reports that an INTEGRATION_READY lineage's
+        verified result is an ancestor of the candidate's base revision (see
+        ``Planner.dispatch``). Without an observer this coordinator hands no scope over, and
+        its status says so (the lineage rows still show handovers other planners made). The scope
+        of a BLOCKED or OWNER_REQUIRED lineage cannot be handed
+        over at all yet: that needs evidence about its executor, which nothing here has (the
+        repository is compared as in ``works_collide``: a ``.git`` or URL spelling of the
+        same repository counts as a different one);
       * it does not fall back: it refuses a journal without store identity (``MemoryJournal``,
         a plain ``DirJournal``) and a transport that lacks ``claimed_records`` and
         ``published`` (a check of two method names, not of durability), and it refuses
@@ -1532,9 +1756,10 @@ class Coordinator:
         until its dependency is completed and is then reported as refused, because
         ``Planner.dispatch`` validates an item on its own: dependencies are not supported;
       * status ``state`` is ``OK``, ``DEGRADED`` (the anchor holds repair records; the tick
-        still ran) or ``HALTED`` (continuity
-        failed in the constructor or during a tick; written best effort). A failure of any
-        other kind leaves the previous status in place;
+        still ran) or ``HALTED`` (continuity failed, or an ``OSError`` from the store or the
+        transport stopped the constructor or a tick, reason ``IO_ERROR:...``; written best
+        effort). Any other failure, including a constructor refused for its configuration,
+        leaves the previous status in place;
       * the status file is last-writer-wins and names no coordinator: one that fails to start
         for a reason local to it (a wrong transport or store) overwrites a shared status with
         ``HALTED`` until a healthy tick rewrites it;
@@ -1551,7 +1776,11 @@ class Coordinator:
         status_path: Path,
         max_live: int = MAX_LIVE_DEFAULT,
         accept_same_filesystem: bool = False,
+        observer: HandoverObserver | None = None,
     ) -> None:
+        if observer is not None and not _observer_identity_ok(getattr(observer, "identity", None)):
+            raise PlannerError("a handover observer needs a non-empty identity")
+        self.observer = observer
         if not isinstance(journal, StoreJournal):
             raise PlannerError(
                 "COORDINATOR_NEEDS_STORE:a coordinator runs only on an attached StoreJournal "
@@ -1596,10 +1825,14 @@ class Coordinator:
                 identity=identity,
                 verifier_identities=verifier_identities,
                 journal=journal,
+                observer=observer,
             )
             self._continuity()
         except JournalCorrupt as exc:
             self._halted(exc)
+            raise
+        except OSError as exc:  # the store or the transport could not be read: never a stale OK
+            self._halted(JournalCorrupt(f"IO_ERROR:{type(exc).__name__}: {exc}"))
             raise
 
     def _continuity(self) -> None:
@@ -1645,9 +1878,11 @@ class Coordinator:
         acknowledgement repair, with its record, may have been written). An ``OSError`` from
         the journal, the anchor, the transport listing or a publish is raised as it is, after
         a ``HALTED`` status naming it (``IO_ERROR``) was written if it can be written, so a
-        tick that did not finish never leaves an earlier ``OK`` standing; one from the status
-        file itself is raised as it is; one from the transport's ``claim`` is quarantined by
-        ``pump``.
+        tick stopped by a ``JournalCorrupt`` or an ``OSError`` replaces an earlier ``OK``
+        whenever the status file can be written. A tick that raises anything else (an invalid
+        candidate list, an exception of another type) leaves the previous status in place.
+        An ``OSError`` from the status file itself is raised as it is; one from the
+        transport's ``claim`` is quarantined by ``pump``.
         """
         items = [self._candidate(c) for c in candidates]
         validate(item for item, _ in items)  # duplicate ids, cycles, malformed items
@@ -1673,7 +1908,7 @@ class Coordinator:
                 item, work = fields[sel.selected.task_id]
                 tried.add(item.task_id)
                 try:
-                    p.dispatch(item, live_limit=self.max_live, retain_terminal_scopes=True, **work)
+                    p.dispatch(item, live_limit=self.max_live, **work)
                 except JournalContended:
                     deferred.append((item.task_id, "JOURNAL_CONTENDED"))
                     break  # the journal is busy: leave the rest for the next tick
@@ -1713,9 +1948,7 @@ class Coordinator:
         self._write_status(status)
         return status
 
-    _RESERVED_WORK_KEYS = frozenset(
-        {"self", "item", "live_limit", "retain_terminal_scopes", "execution_ordinal"}
-    )
+    _RESERVED_WORK_KEYS = frozenset({"self", "item", "live_limit", "execution_ordinal"})
 
     def _halted(self, exc: JournalCorrupt) -> None:
         status = self._header("HALTED") | {"reason": str(exc)}
@@ -1745,6 +1978,8 @@ class Coordinator:
             "continuity_boundary": self.boundary,
             # one st_dev comparison is not an established boundary; nothing here claims one
             "live_conflicting_work_boundary": "NOT_ESTABLISHED",
+            # who observes for a verified scope handover; NONE: this coordinator hands none over
+            "scope_handover_observer": "NONE" if self.observer is None else self.observer.identity,
         }
 
     def _write_status(self, status: dict[str, Any]) -> None:
