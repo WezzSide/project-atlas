@@ -446,10 +446,7 @@ def test_a_claim_made_while_the_tombstone_was_being_written_is_reported_by_withd
     assert [r.seal for r in t.published(Channel.WORK)] == [a.seal]  # claimed: still listed
 
 
-@pytest.mark.parametrize("undo_fails", [False, True])
-def test_a_claim_gives_the_record_back_when_it_was_withdrawn_before_its_link(
-    tmp_path, monkeypatch, undo_fails
-):
+def test_a_claim_does_not_hand_out_a_record_withdrawn_before_its_link(tmp_path, monkeypatch):
     """ATLAS-DEVQ-0012: withdraw True and a claim of the same record never both happen."""
     from project_atlas.orchestration.autonomy import dev_spool_transport as mod
 
@@ -466,29 +463,53 @@ def test_a_claim_gives_the_record_back_when_it_was_withdrawn_before_its_link(
             monkeypatch.setattr(mod, "_release_pending", lambda path: None)
             withdrawn.append(SpoolTransport(tmp_path).withdraw(a))
             monkeypatch.setattr(mod, "_release_pending", real_release)
-            if undo_fails:
-                real_unlink = Path.unlink
-
-                def stuck(self, *args, **kw):
-                    if self.parent.name == "claimed":
-                        raise PermissionError("held open")
-                    return real_unlink(self, *args, **kw)
-
-                monkeypatch.setattr(Path, "unlink", stuck)
         return real_link(src, dest)
 
     monkeypatch.setattr(mod, "_claim_link", withdrawn_first)
     first = t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity="vps1-impl")
     monkeypatch.undo()
     assert withdrawn == [True]
-    # the claim of A was given back; the same call went on to the next record
+    # A was not handed out; the same call went on to the next record
     assert first is not None and first.seal == b.seal
     assert t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity="vps1-impl") is None
     assert [r.seal for r in t.claimed_records(Channel.WORK, identity="vps1-impl")] == [b.seal]
-    assert (tmp_path / "WORK" / "claimed" / f"{a.seal}.json").exists() is undo_fails
+    # the claimed name stays as the claimer's mark, without a claim meta, and nothing is parked
+    assert (tmp_path / "WORK" / "claimed" / f"{a.seal}.json").exists()
     assert not (tmp_path / "WORK" / "claimed" / f"{a.seal}.claim.json").exists()
+    assert not (tmp_path / "WORK" / f"{a.seal}.json").exists()
     assert not (tmp_path / "WORK" / "rejected").exists()
     assert t.withdraw(a) is False and t.publish(a, to="vps1-impl") is False
+
+
+def test_withdraw_is_not_true_for_a_record_a_recovery_already_saw(tmp_path, monkeypatch):
+    """A name linked into claimed/ is never removed, so withdraw cannot miss it.
+
+    The order: withdraw sees no claim; a claimer links the record; a ``claimed_records``
+    reader is given it (no meta yet); withdraw writes the tombstone. The claimer will then
+    not hand the record out, but the reader already has it: withdraw must not say True.
+    """
+    import tempfile
+
+    t = SpoolTransport(tmp_path)
+    a = work("A")
+    t.publish(a, to="vps1-impl")
+    pending = tmp_path / "WORK" / f"{a.seal}.json"
+    real = tempfile.mkstemp
+    seen = []
+
+    def linked_meanwhile(*args, **kw):
+        if "withdrawn" in str(kw.get("dir")) and not seen:
+            os.link(pending, tmp_path / "WORK" / "claimed" / pending.name)  # the claimer's link
+            seen.append(t.claimed_records(Channel.WORK, identity="vps1-impl"))
+        return real(*args, **kw)
+
+    monkeypatch.setattr(tempfile, "mkstemp", linked_meanwhile)
+    assert t.withdraw(a) is False
+    monkeypatch.undo()
+    assert [r.seal for r in seen[0]] == [a.seal]
+    assert (tmp_path / "WORK" / "withdrawn" / f"{a.seal}.json").exists()
+    assert t.claimed_records(Channel.WORK, identity="vps1-impl") == []  # not after the tombstone
+    assert t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity="vps1-impl") is None
 
 
 def test_republishing_with_a_case_variant_of_the_address_is_the_same_address(tmp_path):
@@ -587,8 +608,8 @@ def test_a_withdrawn_record_whose_name_cannot_be_removed_is_never_claimed(tmp_pa
     c = work("C")
     assert t.publish(c)
     assert t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity="other").seal == c.seal
-    # a claimed name next to a tombstone (a claim that could not be given back): listed as
-    # claimed, re-adopted by nobody
+    # a claimed name next to a tombstone (a claim that found the record withdrawn): listed
+    # as claimed, re-adopted by nobody
     os.link(pending / f"{b.seal}.json", pending / "claimed" / f"{b.seal}.json")
     assert [r.seal for r in t.published(Channel.WORK)] == sorted([b.seal, c.seal])
     assert [r.seal for r in t.claimed_records(Channel.WORK, identity="other")] == [c.seal]
