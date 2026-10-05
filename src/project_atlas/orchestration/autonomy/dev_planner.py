@@ -774,9 +774,10 @@ class StoreJournal(DirJournal):
             raise JournalCorrupt(
                 f"STORE_IDENTITY:{role} directory {directory} has no store marker"
             ) from None
-        except (OSError, ValueError, KeyError, TypeError) as exc:
+        except (OSError, ValueError, KeyError, TypeError, RecursionError) as exc:
             raise JournalCorrupt(
-                f"STORE_IDENTITY:{role} marker in {directory} is unusable: {exc}"
+                f"STORE_IDENTITY:{role} marker in {directory} is unusable: "
+                f"{type(exc).__name__}: {str(exc)[:200]}"
             ) from exc
         return store_id
 
@@ -2507,9 +2508,9 @@ class Activation:
       * a record inside the journal, anchor or spool directory (``ACTIVATION_RECORD``), or a
         status path inside one of them (``STATUS_PATH``): both are checked before anything
         can be written, so a ``HALTED`` status never lands in the store or the spool;
-      * a journal, anchor or spool that is missing or belongs to another store than the
-        record names: a ``JournalCorrupt`` / ``TransportError`` / ``OSError`` from the
-        attach, reported in a ``HALTED`` status;
+      * a journal, anchor or spool that is missing, unreadable or belongs to another store
+        than the record names: a ``JournalCorrupt`` / ``TransportError`` / ``OSError`` from
+        the attach, reported in a ``HALTED`` status;
       * a store that no longer holds the record's floor (``ACTIVATION_ROLLED_BACK``, a
         ``JournalCorrupt``, reported in a ``HALTED`` status).
 
@@ -2530,7 +2531,10 @@ class Activation:
     per record path, and nothing stops a second record for the same store elsewhere.
 
     Nothing here dispatches an executor, and declaring or opening an activation is not a
-    grant of any authority: see ``Coordinator`` for what a tick does and does not do.
+    grant of any authority: see ``Coordinator`` for what a tick does (it admits candidates
+    and publishes their work records into the spool) and does not do. A configuration
+    refusal, from this class or from the ``Coordinator`` constructor, writes no status and
+    leaves an earlier one in place.
     """
 
     def __init__(self, record: Path, coordinator: Coordinator, floor: tuple[int, str]) -> None:
@@ -2682,11 +2686,17 @@ class Activation:
         """Attach to the declared store and spool and build the coordinator. Creates nothing."""
         raw = cls._load(record)
         cls._outside(record, raw)
-        status_path = Path(status_path)
-        if status_path.resolve() == Path(record).resolve():
+        try:
+            status_path = Path(status_path)
+            same = status_path.resolve() == Path(record).resolve()
+            # before anything can be written: a HALTED status must not land in the store
+            cls._outside(status_path, raw, "STATUS_PATH")
+        except PlannerError:
+            raise
+        except (TypeError, ValueError) as exc:  # not a usable path (e.g. a NUL byte)
+            raise PlannerError(f"STATUS_PATH:not a usable path: {type(exc).__name__}") from exc
+        if same:
             raise PlannerError("STATUS_PATH:the status file and the activation record differ")
-        # before anything can be written: a HALTED status must not land in the store either
-        cls._outside(status_path, raw, "STATUS_PATH")
         try:
             journal, transport = cls._attach(raw)
             cls._check_floor(journal, raw)

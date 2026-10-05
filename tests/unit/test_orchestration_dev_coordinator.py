@@ -1932,12 +1932,21 @@ def test_an_unreadable_floor_event_or_marker_halts_instead_of_escaping(tmp_path)
     event.write_bytes(kept)
     marker = j.home / STORE_MARKER
     good = marker.read_bytes()
-    marker.write_text("[" * 200_000)
+    marker.write_text("[" * 200_000)  # json raises RecursionError on this one
     status.write_text(json.dumps({"state": "OK"}))
-    with pytest.raises((RecursionError, JournalCorrupt)):
+    with pytest.raises(JournalCorrupt, match=r"STORE_IDENTITY:journal marker .* is unusable"):
         _open(tmp_path, record, identity="coord-2")
     assert _status(tmp_path)["state"] == "HALTED"
+    status.write_text(json.dumps({"state": "OK"}))
+    with pytest.raises(JournalCorrupt, match=r"STORE_IDENTITY:journal marker .* is unusable"):
+        a.tick([cand("B", "src/b")])  # and under the running activation
+    assert _status(tmp_path)["state"] == "HALTED"
     marker.write_bytes(good)
+    assert a.tick([])["state"] == "OK"
+    with pytest.raises(PlannerError, match="STATUS_PATH:not a usable path"):
+        Activation.open(
+            record, identity="x", verifier_identities=(VER,), status_path="/a\x00b/status.json"
+        )
     # a record whose paths cannot be paths is a bad record, not a crash
     raw = json.loads(record.read_text())
     record.write_text(json.dumps(raw | {"journal": "/a\u0000b"}))

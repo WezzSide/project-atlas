@@ -17063,17 +17063,26 @@ recovery / duplicate semantics as listed in the backlog.
 
 Stacked on ATLAS-DEVQ-0013 (#1074, head `afdb847f`), which was not merged when this was
 written. Addresses the activation blocker "durable activation". Local only: no entrypoint
-script or CLI command, no dispatch, no live run, nothing run in more than one process.
+script or CLI command, no executor dispatched, no live run, nothing run in more than one
+process.
 A first head of this branch (`38fa1abb`) was superseded after independent verification
 (semantics FAIL): `open` wrote its HALTED status without checking where the status path
 points, so a status path inside the journal, anchor or spool was written there, over an
 event or a marker if so named; an unreadable floor event escaped `tick` as `OSError` with
 the old status left in place; a pathological store marker escaped `open` as
 `RecursionError`; a record path with a NUL byte escaped as `ValueError`; a record re-pointed
-during a tick was given this store's floor. This entry describes the branch after the
-second commit and replaces the entry that head carried.
+during a tick was given this store's floor. A second head (`765db7d1`) was superseded too:
+a pathologically nested store marker still escaped a RUNNING `Activation.tick` (and a plain
+`Coordinator.tick`) as `RecursionError` with the old status left in place, because
+`StoreJournal._marker` did not treat that as an unusable marker. This entry describes the
+branch after the third commit and replaces the entries those heads carried.
 
-Behaviour (`dev_planner.py`, class `Activation`; nothing else changes behaviour):
+Behaviour (`dev_planner.py`): the new class `Activation`, and one change to existing code:
+`StoreJournal._marker` reports a marker that makes the JSON parser raise `RecursionError` as
+`STORE_IDENTITY ... is unusable` (a `JournalCorrupt`) like the other unusable markers it
+already reported, and its message now carries the exception's type name and at most 200
+characters of its text. Tested for `Activation.open` and a running `Activation.tick`, which
+write HALTED and raise it; a plain `Coordinator` on such a marker was not tested here.
 - `Activation.declare(record, store_id=, journal=, anchor=, spool=,
   accept_same_filesystem=)` attaches to the named store and its bound spool (so all three
   must exist and belong to that store id), requires the same-filesystem boundary to be
@@ -17087,7 +17096,8 @@ Behaviour (`dev_planner.py`, class `Activation`; nothing else changes behaviour)
   (`ACTIVATION_RECORD`, no status written), and so is a status path inside one of the three
   (`STATUS_PATH`), which is checked before anything can be written. A missing or foreign
   journal, anchor or spool is reported in a HALTED status and raised; so is a store marker
-  or floor event that cannot be read.
+  or floor event that cannot be read. A status path that is not a usable path is a
+  configuration refusal.
 - The record keeps a floor: the highest event (sequence number and sha256) a completed tick
   of the activation has seen. `open`, and `Activation.tick` before every tick, refuse a
   store that does not hold that event (`ACTIVATION_ROLLED_BACK`, HALTED). A record that was
@@ -17105,14 +17115,17 @@ on the restored store ticks OK; the activation refuses it at `open` and in a run
 
 Measured locally at this change: coordinator file 65 passed; 20 consecutive runs 65 passed
 each; all `tests/unit/test_orchestration_dev_*.py` 1091 passed; `ruff check src tests`
-clean; `mypy src` clean (415 files). Seventeen mutants, each failing at least one test: no
+clean; `mypy src` clean (415 files). Nineteen mutants; eighteen each fail at least one test: no
 floor check; the floor never written; `declare` overwriting; a record inside the store
 accepted; any record shape accepted; `declare` without the spool; no store id comparison; a
 re-pointed record not noticed; no HALTED status from `open`; no boundary acceptance in
 `declare`; no floor check in `tick`; no HALTED status from `tick`; no status path check in
-`open`; `tick` not catching `OSError` from the floor check; `open` not catching
-`RecursionError`; the floor written into a re-pointed record; a NUL byte in a record path
-accepted.
+`open`; `tick` not catching `OSError` from the floor check; the floor written into a
+re-pointed record; a NUL byte in a record path accepted; `_marker` not catching
+`RecursionError`; an unusable status path not refused. One fails no test: `open` not
+catching `RecursionError` (it failed a test at `765db7d1`; since `_marker` reports that
+marker itself, no test makes `open` or `tick` see a `RecursionError`, and the two `except`
+entries are untested code).
 
 Still open after this: the floor is only as new as the last completed tick that could write
 it, so a rollback to a point at or after the floor is not seen; several coordinators on one
@@ -17122,8 +17135,12 @@ store from a backup older than the floor needs an operator to remove the record 
 again; only the three named directories are excluded as the record's location (a record in a
 common parent of journal and anchor can be taken back with them), and `declare` is exclusive
 per record path, not per store; a record removed during a tick that appends nothing is
-noticed by the next tick; a rollback of the spool alone is not seen by the floor; nothing calls `Activation` outside tests (no script, no CLI command, no service), and
-declaring or opening one grants no authority and dispatches nothing; executors and adapters
+noticed by the next tick; a rollback of the spool alone is not seen by the floor;
+nothing calls `Activation` outside tests (no script, no CLI command, no service), and
+declaring or opening one grants no authority and dispatches no executor (a tick given
+candidates admits them and publishes their work records into the spool, as a `Coordinator`
+tick does); a configuration refusal leaves an earlier status in place; a change of
+`accept_same_filesystem` in the record is not noticed by a running activation; executors and adapters
 still have to be given the store id and spool directory by other means; everything listed
 as open under ATLAS-DEVQ-0013; nothing here was run by several processes or hosts.
 
