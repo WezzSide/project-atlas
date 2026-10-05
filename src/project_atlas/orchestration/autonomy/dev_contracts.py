@@ -444,20 +444,75 @@ def scope_overlap(a: tuple[str, ...], b: tuple[str, ...]) -> tuple[tuple[str, st
     )
 
 
+_REPO_OWNER = r"[A-Za-z0-9][A-Za-z0-9-]{0,38}"
+_REPO_NAME = r"[A-Za-z0-9._-]{1,100}"
+_REPO_HOST = r"[Gg][Ii][Tt][Hh][Uu][Bb]\.[Cc][Oo][Mm]"
+# The supported spellings of ONE repository identity. Everything is anchored and ASCII; one
+# optional ``.git`` and one optional trailing slash are the only decorations.
+_REPO_FORMS = tuple(
+    re.compile(prefix + rf"({_REPO_OWNER})/({_REPO_NAME}?)(?:\.git)?/?")
+    for prefix in (
+        r"",  # owner/name
+        rf"{_REPO_HOST}/",  # github.com/owner/name
+        rf"[Hh][Tt][Tt][Pp][Ss]?://{_REPO_HOST}/",  # https://github.com/owner/name
+        rf"ssh://git@{_REPO_HOST}/",  # ssh://git@github.com/owner/name
+        rf"git@{_REPO_HOST}:",  # git@github.com:owner/name
+    )
+)
+
+
+def repository_key(repository: str) -> str:
+    """Canonical identity of a repository spelling: ``owner/name`` in lower case. Fail closed.
+
+    Different spellings of one repository must not be different collision domains merely
+    because their strings differ. Supported, and all mapped to the same key: ``owner/name``,
+    ``github.com/owner/name``, ``http(s)://github.com/owner/name``,
+    ``ssh://git@github.com/owner/name`` and ``git@github.com:owner/name``, each optionally
+    followed by ONE ``.git`` and then ONE trailing slash; owner, name and host compare
+    case-insensitively (as GitHub does). Anything else raises ``ContractError``: another
+    host, a port, user info other than ``git@``, a query or fragment, more or fewer path
+    segments, surrounding whitespace, non-ASCII, a name of ``.`` or ``..``, and a name that
+    still ends in ``.git`` after one was removed or ends in it in another case (GitHub does
+    not allow such names, so the spelling is ambiguous). An identity that cannot be
+    canonicalised is never "a different repository".
+
+    Pure and deterministic; it reads nothing and contacts nothing, so it does NOT follow
+    renames, transfers or redirects: two names GitHub serves as one repository are two keys
+    here. The sealed ``repository`` field of a record is not rewritten: the key is derived
+    when a decision needs it.
+    """
+    if not isinstance(repository, str):
+        raise ContractError(f"unsupported repository identity {repository!r} (not a string)")
+    for form in _REPO_FORMS:
+        m = form.fullmatch(repository)
+        if m is None:
+            continue
+        owner, name = m.group(1), m.group(2)
+        if not name or name in (".", "..") or name.lower().endswith(".git"):
+            break
+        return f"{owner}/{name}".lower()
+    raise ContractError(
+        f"unsupported repository identity {repository!r}: expected owner/name or a "
+        "github.com URL form of it"
+    )
+
+
 def works_collide(a: WorkItem, b: WorkItem) -> tuple[tuple[str, str], ...]:
     """Overlapping ``allowed_paths`` of two sealed work items of DIFFERENT lineages, else ``()``.
 
     Both seals are verified first (``ContractError`` when either fails): an unverifiable work
     item is an error, never "no collision". Work in different repositories never collides, and
     work of the same lineage never collides with itself (a repair keeps its lineage's scope by
-    construction, see ``materialize_repair``). The repository is compared case-insensitively
-    (GitHub ``owner/name`` is case-insensitive); no other spelling is unified (a ``.git`` suffix
-    or a URL form is a different repository here). The lineage root is compared exactly, as
-    sealed. Pure; grants nothing.
+    construction, see ``materialize_repair``). Repositories are compared by ``repository_key``
+    (ATLAS-DEVQ-0010): every supported spelling of one repository is the same repository, and
+    a spelling that cannot be canonicalised raises ``ContractError`` instead of counting as a
+    different one. The lineage root is compared exactly, as sealed. Pure; grants nothing.
     """
     a.verify_seal()
     b.verify_seal()
-    if a.repository.lower() != b.repository.lower() or a.lineage_root == b.lineage_root:
+    if repository_key(a.repository) != repository_key(b.repository):
+        return ()
+    if a.lineage_root == b.lineage_root:
         return ()
     return scope_overlap(a.allowed_paths, b.allowed_paths)
 

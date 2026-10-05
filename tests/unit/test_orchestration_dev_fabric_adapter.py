@@ -6,7 +6,12 @@ from dataclasses import dataclass, field
 
 import pytest
 
-from project_atlas.orchestration.autonomy.dev_contracts import Role, Verdict, make_work
+from project_atlas.orchestration.autonomy.dev_contracts import (
+    ContractError,
+    Role,
+    Verdict,
+    make_work,
+)
 from project_atlas.orchestration.autonomy.dev_crosswalk import Crosswalk
 from project_atlas.orchestration.autonomy.dev_fabric_adapter import (
     AdapterError,
@@ -1866,13 +1871,17 @@ def test_result_in_base_observer_reports_only_an_observed_ancestor():
     assert obs.result_in_base(**ask) == {"compare": f"{R2}...{R1}", "merge_base": R1}
     assert gh.compared == [(R2, R1)]
     assert obs.result_in_base(**ask | {"repository": repo.upper()}) is not None
+    # every supported spelling of the same repository is that repository (ATLAS-DEVQ-0010)
+    for same in (repo + ".git", repo + "/", f"https://github.com/{repo}.git"):
+        assert obs.result_in_base(**ask | {"repository": same}) is not None
     gh.merge_base = BASE  # they only share an older commit: not contained
     assert obs.result_in_base(**ask) is None
     gh.merge_base = R1
     n = len(gh.compared)
     for bad in (
         ask | {"repository": "WezzSide/other"},
-        ask | {"repository": repo + ".git"},
+        ask | {"repository": f"https://gitlab.com/{repo}"},
+        ask | {"repository": " " + repo},
         ask | {"result_revision": "main"},
         ask | {"base_revision": R2[:39]},
         ask | {"base_revision": R2.upper()},
@@ -1883,6 +1892,8 @@ def test_result_in_base_observer_reports_only_an_observed_ancestor():
     assert len(gh.compared) == n  # refused without asking the port
     with pytest.raises(AdapterError, match="repository and an identity"):
         ResultInBaseObserver(gh, repository=repo, identity="")
+    with pytest.raises(ContractError, match="unsupported repository identity"):
+        ResultInBaseObserver(gh, repository="not a repository", identity="github:compare")
 
 
 def test_a_port_error_keeps_the_scope_closed_and_dispatches_nothing(tmp_path):

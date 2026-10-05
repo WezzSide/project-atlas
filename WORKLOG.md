@@ -16571,3 +16571,76 @@ unreadable store raised `AttributeError` while writing the `HALTED` status), and
 `ResultInBaseObserver` matches revisions with `fullmatch`.
 
 Independent verification and exact-head CI are recorded on the PR, not here.
+
+## 2026-10-05 — ATLAS-DEVQ-0010: repository identity
+
+What / why: owner direction after PR #1070 (merged as main `00871e88`): different spellings
+of the same repository "must not create independent collision domains merely because their
+strings differ"; an ambiguous or unsupported identity must fail closed; normalization must be
+deterministic and applied wherever ownership / collision decisions depend on repository
+identity; historical evidence must not be rewritten; stop before changing a sealed identity.
+Before this, `works_collide` compared `repository.lower()`: a work item spelled
+`owner/name.git`, with a trailing slash or as a URL was admitted over any scope, held or
+retained (measured by the #1070 verifiers at main and at that head). Base: main `00871e88`.
+
+Changes (`dev_contracts.py`, `dev_planner.py`, `dev_fabric_adapter.py`; no new module):
+- `dev_contracts.repository_key(repository)`: the canonical identity `owner/name` in lower
+  case. Supported spellings, all giving the same key: `owner/name`, `github.com/owner/name`,
+  `http(s)://github.com/owner/name`, `ssh://git@github.com/owner/name`,
+  `git@github.com:owner/name`, each optionally followed by one `.git` and then one trailing
+  slash; owner, name and host compare case-insensitively. Owner and name follow the
+  character and length rule `dev_package` already uses for a package's repository.
+  Everything else raises `ContractError`: another host, a port, user info other than `git@`,
+  a query or fragment, more or fewer path segments, surrounding whitespace, non-ASCII, a name
+  of `.` or `..`, a name that still ends in `.git` after one was removed or ends in it in
+  another case. Pure: anchored regular expressions, no I/O.
+- `works_collide` compares `repository_key` of both work items; a work item whose identity
+  cannot be keyed raises instead of counting as another repository.
+- Planner: a DISPATCH whose repository cannot be keyed is refused with
+  `REPOSITORY_UNSUPPORTED`, in the dispatch decision and in the journal rule (so also on
+  replay, and also when no earlier lineage exists). `fleet_status` rows gain
+  `repository_key` next to the sealed `repository`.
+- `ResultInBaseObserver` compares by key and refuses, at construction, a repository it
+  cannot key.
+
+Sealed identities: none changed. `WorkItem` has no new field and no new validator, so every
+record that could be built or decoded before still can, with the same seal; the key is
+derived when a decision needs it and is never stored in a record. `dev_package.py` is
+untouched. `tests/unit/test_orchestration_dev_package.py` and
+`test_orchestration_dev_package_repair.py` (the goldens) are unchanged and pass.
+
+Limits:
+- The key follows no rename, transfer or redirect: two names GitHub serves as one repository
+  are two keys. Only github.com forms are supported; any other host is refused, not aliased.
+- A journal written before this rule replays unless it contains a DISPATCH with an
+  unsupported repository identity (`REPOSITORY_UNSUPPORTED`) or one that was admitted over
+  another spelling of a held or retained scope (`SCOPE_COLLISION` / `SCOPE_RETAINED`); those
+  no longer replay. Earlier code on the same journal can still append such an event.
+- Result and repair records are still compared with the work's repository string exactly
+  (they are derived from the work item, so they carry its spelling).
+- The fabric adapter does not check a work item's repository against the repository its
+  port is bound to; `dev_package` accepts only the plain `owner/name` form (unchanged).
+- Local tests only. No live run.
+
+Existing tests changed (vs main `00871e88`, by test name and body): two changed in place,
+`test_fleet_status_is_derived_from_the_journal_alone` (new row key) and
+`test_result_in_base_observer_reports_only_an_observed_ancestor` (it asserted that a `.git`
+spelling is another repository). Test functions: loop-contracts file 66 -> 72, journal file
+75 -> 76, adapter file 83 -> 83, coordinator file unchanged.
+
+Commands and results (`PYTHONPATH=<worktree>/src`, `--no-cov -o addopts=""`):
+- `test_orchestration_dev_loop_contracts.py` 149 passed (15 supported and 45 unsupported
+  spellings plus three non-strings are parametrised or looped), `_dev_planner_journal.py` 91,
+  `_dev_fabric_adapter.py` 141, `_dev_coordinator.py` 42.
+- The nine DEVQ files: 948 passed. Broad selection (`-k "orchestration_dev or dev_package or
+  executor or agent_execute or workflow or autonomy or global_foundation or github_port"`):
+  1646 passed, 5152 deselected.
+- `ruff check .` clean; `ruff format --check` on the six changed Python files clean;
+  `mypy src`: no issues in 415 source files.
+- 22 scratch mutants of the key and of its three users, against the four DEVQ test files
+  touched or exercising them (two layout-dependent adapter tests deselected): 21 failed at
+  least one test; the 22nd (an unescaped dot in the host pattern) survived until two
+  spellings were added to the unsupported list.
+- The full test suite was not run locally.
+
+Independent verification and exact-head CI are recorded on the PR, not here.

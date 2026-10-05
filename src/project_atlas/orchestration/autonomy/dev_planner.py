@@ -134,8 +134,10 @@ Limits (what this is NOT):
     two lineages.
 
 Verified scope handover (ATLAS-DEVQ-0009): a work item that overlaps the last work of ANY
-earlier lineage in the same repository (as ``works_collide`` compares it: a ``.git`` or URL
-spelling counts as a different repository) is admitted only when the DISPATCH event carries a
+earlier lineage in the same repository (by ``dev_contracts.repository_key``, ATLAS-DEVQ-0010:
+every supported spelling of a repository is that repository, and a DISPATCH whose repository
+identity cannot be keyed is refused, ``REPOSITORY_UNSUPPORTED``, also on replay; the key
+follows no rename or redirect) is admitted only when the DISPATCH event carries a
 verified handover of that lineage's scope. This is a rule of the journal (``_transition``), so
 it holds for every planner and on replay; there is no switch. A phase, a timeout, a failure
 report (``fail_execution``) or an asserted merge revision (``release_scope``) never opens a
@@ -202,6 +204,7 @@ from project_atlas.orchestration.autonomy.dev_contracts import (
     make_verification_request,
     make_work,
     materialize_repair,
+    repository_key,
     same_identity,
     validate_identity,
     works_collide,
@@ -887,6 +890,10 @@ def _transition(state: FleetState, ev: dict[str, Any], raw: bytes) -> Callable[[
             raise PlannerError("lineage/task id already in use")
         if _REPAIR_SUFFIX.search(root):
             raise PlannerError("task id suffix -R<n> is reserved for repair tasks")
+        try:  # also with no earlier lineage: the journal never holds an identity it cannot key
+            repository_key(work.repository)
+        except ContractError as exc:
+            raise PlannerError(f"REPOSITORY_UNSUPPORTED:{exc}") from exc
         # Scope ownership. A work that overlaps the last work of ANY earlier lineage in the
         # same repository is admitted only with a verified handover of that lineage's scope.
         # Holders are reported first (SCOPE_COLLISION), then lineages that no longer hold
@@ -1126,6 +1133,7 @@ def fleet_status(journal: Journal) -> tuple[dict[str, Any], ...]:
             "execution_id": st.work.execution_id,
             "work_seal": st.work.seal,
             "repository": st.work.repository,
+            "repository_key": repository_key(st.work.repository),
             "base_revision": st.work.base_revision,
             "allowed_paths": st.work.allowed_paths,
             "holds_scope": holds_scope(st),
@@ -1414,6 +1422,10 @@ class Planner:
                 max_attempts=item.max_attempts,
                 **work_fields,
             )
+            try:
+                repository_key(work.repository)
+            except ContractError as exc:
+                raise PlannerError(f"REPOSITORY_UNSUPPORTED:{exc}") from exc
             handover: list[dict[str, Any]] = []
             for holding in (True, False):  # holders first, as the journal rule reports them
                 for root, st in sorted(self.lineages.items()):
@@ -1728,9 +1740,8 @@ class Coordinator:
         ``Planner.dispatch``). Without an observer this coordinator hands no scope over, and
         its status says so (the lineage rows still show handovers other planners made). The scope
         of a BLOCKED or OWNER_REQUIRED lineage cannot be handed
-        over at all yet: that needs evidence about its executor, which nothing here has (the
-        repository is compared as in ``works_collide``: a ``.git`` or URL spelling of the
-        same repository counts as a different one);
+        over at all yet: that needs evidence about its executor, which nothing here has
+        (repositories are compared by ``repository_key``, as in ``works_collide``);
       * it does not fall back: it refuses a journal without store identity (``MemoryJournal``,
         a plain ``DirJournal``) and a transport that lacks ``claimed_records`` and
         ``published`` (a check of two method names, not of durability), and it refuses

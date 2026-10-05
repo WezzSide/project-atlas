@@ -62,6 +62,7 @@ from project_atlas.orchestration.autonomy.dev_contracts import (
     VerificationRequest,
     WorkItem,
     make_verdict,
+    repository_key,
     same_identity,
 )
 from project_atlas.orchestration.autonomy.dev_crosswalk import (
@@ -212,8 +213,10 @@ class ResultInBaseObserver:
     ``result_in_base`` reports evidence only when one ``compare`` of the port shows that
     ``result_revision`` is an ancestor of ``base_revision`` (their merge base is the result
     revision itself), for the one repository this observer was constructed for (the caller
-    must pass a port that is bound to that repository; that is not checked here). Anything
-    else is ``None``: another repository, a revision that is not 40 lowercase hex digits, a
+    must pass a port that is bound to that repository; that is not checked here). The
+    repository is compared by ``repository_key``: any supported spelling of it matches, and
+    the constructor refuses one that cannot be keyed. Anything else is ``None``: another
+    repository or an unsupported spelling, a revision that is not 40 lowercase hex digits, a
     merge base that differs. A port error (``AdapterError``, including a truncated compare)
     is raised and the planner treats it as "not established". It calls nothing but
     ``compare``; it dispatches, merges and writes nothing. What it does NOT establish: that
@@ -225,11 +228,15 @@ class ResultInBaseObserver:
         if not repository or not identity:
             raise AdapterError("a handover observer needs a repository and an identity")
         self.port, self.repository, self.identity = port, repository, identity
+        self._key = repository_key(repository)  # an unsupported identity is refused here
 
     def result_in_base(
         self, *, repository: str, result_revision: str, base_revision: str
     ) -> dict[str, str] | None:
-        if repository.lower() != self.repository.lower():  # as works_collide compares it
+        try:
+            if repository_key(repository) != self._key:  # as works_collide compares it
+                return None
+        except ContractError:
             return None
         if not _SHA.fullmatch(result_revision) or not _SHA.fullmatch(base_revision):
             return None

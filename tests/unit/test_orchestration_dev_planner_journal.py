@@ -596,6 +596,7 @@ def test_fleet_status_is_derived_from_the_journal_alone(tmp_path):
             "execution_id": "A-E1",
             "work_seal": wa.seal,
             "repository": "WezzSide/project-atlas",
+            "repository_key": "wezzside/project-atlas",
             "base_revision": BASE,
             "allowed_paths": ("src/x",),
             "holds_scope": True,
@@ -613,6 +614,7 @@ def test_fleet_status_is_derived_from_the_journal_alone(tmp_path):
             "execution_id": "B-E1",
             "work_seal": wb.seal,
             "repository": "WezzSide/project-atlas",
+            "repository_key": "wezzside/project-atlas",
             "base_revision": BASE,
             "allowed_paths": ("src/y",),
             "holds_scope": False,
@@ -2155,3 +2157,50 @@ def test_a_repair_record_needs_an_integer_sequence_number_and_a_string_digest(tm
             DirJournal(tmp_path / "j").repairs()
     (anchor / "000000000001.repair").write_text(json.dumps(good))
     assert [r["seq"] for r in DirJournal(tmp_path / "j").repairs()] == [1]
+
+
+# ---- ATLAS-DEVQ-0010: repository identity on replay -----------------------------------------
+
+
+def test_replay_applies_repository_identity_like_a_live_dispatch(tmp_path):
+    from project_atlas.orchestration.autonomy.dev_contracts import make_work
+
+    t = InMemoryTransport()
+    p = planner(t, DirJournal(tmp_path / "j"))
+    p.dispatch(qi("A"), **FIELDS)
+    p.dispatch(qi("K"), **fields("src/k"))
+    p.fail_execution("K", "runner lost")
+    n, head = _head(tmp_path)
+    j = tmp_path / "j"
+
+    def d(repository, *paths):
+        work = make_work(
+            task_id="B",
+            execution_id="B-E1",
+            lineage_root="B",
+            acceptance_contract=("ok",),
+            **{**fields(*paths), "repository": repository},
+        )
+        return dict(event="DISPATCH", root="B", work=encode(work))
+
+    repo = FIELDS["repository"]
+    cases = [
+        # a journal from before the rule that admitted another spelling over a held scope
+        (d(repo + ".git", "src/x"), "SCOPE_COLLISION:A:"),
+        (d(f"https://github.com/{repo}", "src/x"), "SCOPE_COLLISION:A:"),
+        (d(f"git@github.com:{repo}.git", "src/k"), "SCOPE_RETAINED:K:"),
+        # an identity that cannot be keyed, also where nothing overlaps
+        (d(f"https://gitlab.com/{repo}", "src/q"), "REPOSITORY_UNSUPPORTED:"),
+        (d(repo + ".git.git", "src/q"), "REPOSITORY_UNSUPPORTED:"),
+    ]
+    for body, why in cases:
+        _forge(j, n + 1, head, **body)
+        with pytest.raises(JournalCorrupt, match=why):
+            planner(InMemoryTransport(), DirJournal(j))
+        (j / f"{n + 1:012d}.json").unlink()
+    _forge(j, n + 1, head, **d(repo + ".git", "src/q"))  # control: a disjoint scope replays
+    q = planner(InMemoryTransport(), DirJournal(j))
+    assert q.lineages["B"].work.repository == repo + ".git"
+    rows = {r["lineage_root"]: r for r in fleet_status(DirJournal(j))}
+    assert rows["B"]["repository"] == repo + ".git"
+    assert rows["B"]["repository_key"] == rows["A"]["repository_key"] == repo.lower()
