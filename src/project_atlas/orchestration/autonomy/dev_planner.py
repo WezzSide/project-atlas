@@ -2696,7 +2696,9 @@ class Activation:
     ) -> Activation:
         """Attach to the declared store and spool and build the coordinator.
 
-        Creates no store and no spool; on a refusal it writes the HALTED status file.
+        Creates no store and no spool. A refusal from the attach, the floor check or the
+        store checks of the coordinator writes the HALTED status file; a configuration
+        refusal writes none.
         """
         raw = cls._load(record)
         cls._outside(record, raw)
@@ -2715,7 +2717,21 @@ class Activation:
         try:
             journal, transport = cls._attach(raw)
             cls._check_floor(journal, raw)
-        except (JournalCorrupt, TransportError, OSError, RecursionError) as exc:
+            # built inside the guard: its own path checks can fail on a store directory that
+            # changed since the attach (a symlink loop is a RuntimeError before Python 3.13)
+            coordinator = Coordinator(
+                journal,
+                transport,
+                identity=identity,
+                verifier_identities=verifier_identities,
+                status_path=status_path,
+                max_live=max_live,
+                accept_same_filesystem=raw["accept_same_filesystem"],
+                observer=observer,
+                executors=executors,
+                executor_limit=executor_limit,
+            )
+        except (JournalCorrupt, TransportError, OSError, RecursionError, RuntimeError) as exc:
             reason = str(exc) if isinstance(exc, JournalCorrupt) else None
             if reason is None:
                 kind = "TRANSPORT_ERROR" if isinstance(exc, TransportError) else "IO_ERROR"
@@ -2729,19 +2745,9 @@ class Activation:
             }
             with contextlib.suppress(OSError):  # the refusal is what must surface
                 _write_json(status_path, status)
+            if isinstance(exc, (RecursionError, RuntimeError)):
+                raise JournalCorrupt(reason) from exc
             raise
-        coordinator = Coordinator(
-            journal,
-            transport,
-            identity=identity,
-            verifier_identities=verifier_identities,
-            status_path=status_path,
-            max_live=max_live,
-            accept_same_filesystem=raw["accept_same_filesystem"],
-            observer=observer,
-            executors=executors,
-            executor_limit=executor_limit,
-        )
         return cls(record, coordinator, (raw["seq"], raw["head"]))
 
     def tick(

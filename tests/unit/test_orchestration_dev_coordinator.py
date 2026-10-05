@@ -2002,3 +2002,28 @@ def test_a_symlink_loop_halts_an_activation_on_every_supported_python(tmp_path, 
     with pytest.raises((JournalCorrupt, OSError)):
         _open(tmp_path, record, identity="coord-2")
     assert _status(tmp_path)["state"] == "HALTED"
+
+
+def test_a_store_directory_looped_after_the_floor_check_halts_open(tmp_path, monkeypatch):
+    """A symlink loop that appears between the floor check and the coordinator (Python 3.12)."""
+    j, record = _declared(tmp_path)
+    a = _open(tmp_path, record)
+    a.tick([cand("A", "src/a")])
+    assert _status(tmp_path)["state"] == "OK"
+    real_floor, real_resolve = Activation._check_floor, Path.resolve
+
+    def floor_then_loop(journal, raw):
+        real_floor(journal, raw)
+        os.rename(j.home, str(j.home) + ".x")
+        os.symlink(j.home, j.home)
+
+    def resolve_312(self, strict=False):
+        if str(self).startswith(str(j.home)) and os.path.islink(j.home):
+            raise RuntimeError(f"Symlink loop from {self}")
+        return real_resolve(self, strict=strict)
+
+    monkeypatch.setattr(Activation, "_check_floor", staticmethod(floor_then_loop))
+    monkeypatch.setattr(Path, "resolve", resolve_312)
+    with pytest.raises((JournalCorrupt, OSError)):
+        _open(tmp_path, record, identity="coord-2")
+    assert _status(tmp_path)["state"] == "HALTED"
