@@ -16856,8 +16856,10 @@ because that name could disappear, `withdraw` could return True for a record a
 `claimed_records` reader had already been given, and a second claimer could park the record
 in `rejected/`) and `d9b76bb6` (behaviour as described here; two sentences in the code were
 found false or stale: the `published` docstring left out the ordinary withdrawal, and a
-comment in `claimed_records` said a `claimed/` name without a meta means a crash). This
-entry describes the branch after the fourth commit and replaces the entries those heads
+comment in `claimed_records` said a `claimed/` name without a meta means a crash) and
+`a09df306` (same behaviour; three more sentences found false: who has the record when
+`withdraw` returns False after its tombstone, what a failing look does, and the causes of
+a missing claim meta). This entry describes the branch after the fifth commit and replaces the entries those heads
 carried.
 
 Behaviour (`dev_spool_transport.py`):
@@ -16877,12 +16879,14 @@ Behaviour (`dev_spool_transport.py`):
   listed, tombstone or not.
 - Consequence: `withdraw` returning False no longer implies that the record is deliverable
   or that somebody has it. When a `claimed/` name is found after the tombstone was written,
-  the claimer has the record only if its look after the link came before the tombstone;
-  otherwise nobody has it. The planner withdraws only fenced work records and uses the
+  the record may be with the claimer (if its look after the link came before the
+  tombstone), with a `claimed_records` reader that read it before the tombstone, or with
+  nobody. The planner withdraws only fenced work records and uses the
   result only to report `WITHDRAWN`.
 
 Wording only (`dev_spool_transport.py`, `dev_transport.py`, `dev_planner.py`,
-`dev_fabric_adapter.py`): what `withdraw` returns; what `published` lists;
+`dev_fabric_adapter.py`): the module, `publish`, `claimed_records` and protocol notes of
+the transports; what `withdraw` returns; what `published` lists;
 `_release_pending`; the Coordinator note on `TransportError` (publishing and recovery stop
 the tick with HALTED, `claim` errors are quarantined by `pump`); `recover` reports
 `WITHDRAWN` only when that call withdrew the record; the adapter's re-adoption note.
@@ -16911,8 +16915,9 @@ removing its `claimed/` name when it finds the record withdrawn.
 Still open after this: a record can end up with nobody (tombstone and `claimed/` name, see
 above; it is fenced work, and `published` still lists it); a claimer that was handed a
 record just before its tombstone was written does not get it back from `claimed_records`
-after a crash; the looks are `Path.exists`, so a
-look that fails reads as "absent"; whoever can write the spool directory can create or
+after a crash; the looks are `Path.exists`, and what a look that raises (a permission
+error, say) does to each call was neither designed nor tested here; when the temporary file
+of a tombstone cannot be removed it stays in `withdrawn/`; whoever can write the spool directory can create or
 remove tombstones and addresses; a claimer running code from before this change honours no
 tombstone, and one from before ATLAS-DEVQ-0011 no address either; two stores sharing one
 spool; an address file next to a RESULT or VERDICT record; the duplicate publish race (a

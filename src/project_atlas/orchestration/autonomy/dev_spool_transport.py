@@ -332,15 +332,15 @@ class SpoolTransport:
         ever removed, so at least one of the two sees the other's.
         False: a ``claimed/`` name existed before this call (no tombstone is written then,
         unless the seal has one already), or one was found after the tombstone was written,
-        or the seal already had a tombstone, or the tombstone could not be written. In the
-        second case the claimer
-        has the record only if its look after the link came before the tombstone; otherwise
-        nobody has it, and either way it is not re-adopted through ``claimed_records``. So
+        or the seal already had a tombstone, or the tombstone could not be written (an
+        ``OSError`` while writing it gives False, not an exception). In the second case the
+        record may be with the claimer (if its look after the link came before the
+        tombstone), with a ``claimed_records`` reader that read it before the tombstone, or
+        with nobody; once the tombstone exists ``claimed_records`` does not return it. So
         False does not mean "still deliverable", and it does not mean "somebody runs it".
-        Best effort: it does not raise for a spool it cannot write. Limits: whoever can
-        write the spool directory can create or remove a tombstone, as with an address; the
-        looks are ``Path.exists`` (a directory at the tombstone's path counts, a dangling
-        symbolic link does not, and a look that fails reads as "absent").
+        Limits: whoever can write the spool directory can create or remove a tombstone, as
+        with an address; the looks are ``Path.exists`` (a directory at the tombstone's path
+        counts, a dangling symbolic link does not).
         """
         channel = CHANNEL_FOR_KIND[record.KIND]
         wire = encode(record)
@@ -371,14 +371,12 @@ class SpoolTransport:
         return fresh and not (d / _CLAIMED / name).exists()
 
     def published(self, channel: Channel) -> list[Record]:
-        """Every decodable record this spool holds on ``channel``, pending or claimed.
+        """The decodable records this spool holds on ``channel``, pending or claimed.
 
-        Read-only: what the spool directory holds now. Records are kept after a claim, so
-        absent loss this is what was published and neither rejected nor withdrawn before
-        anybody linked it: a withdrawn record whose pending name was removed is gone, one
-        whose pending name is still there (it has a tombstone) is not listed, and a name in
-        ``claimed/`` is listed, tombstone or not (see ``withdraw`` for when it has one). A
-        file that cannot be
+        Read-only: what the spool directory holds now, namely every record with a name in
+        ``claimed/`` (tombstone or not) and every pending record whose seal has no
+        tombstone. Records are kept after a claim. A withdrawn record is therefore listed
+        only if a claimer linked it. A file that cannot be
         decoded, or whose name or channel does not match its record, is skipped (it would be
         parked on a claim, never handed out).
         """
@@ -413,9 +411,10 @@ class SpoolTransport:
                 who = _claimer(meta)
                 if who is not None and not same_identity(who, identity):
                     continue  # owned by another identity: only its claimer may re-adopt it
-                # no meta => a crash between the claim's link and its meta write, or a claim
-                # that found the record withdrawn (skipped below). The caller must check that
-                # the record is addressed to it (the adapter does, for VERIFICATION)
+                # no meta: the claim did not write one (a crash after its link, a meta write
+                # that failed) or it found the record withdrawn (skipped below). The caller
+                # must check that the record is addressed to it (the adapter does, for
+                # VERIFICATION)
                 rec = decode(rec_path.read_text(encoding="utf-8"))
                 if rec.seal != seal:
                     continue

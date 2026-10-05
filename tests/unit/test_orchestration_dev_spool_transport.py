@@ -519,6 +519,7 @@ def test_a_claim_that_linked_before_the_tombstone_and_looked_after_it_hands_noth
     assert t.withdraw(a) is False
     tombstoned.set()
     thread.join(30)
+    assert not thread.is_alive()
     monkeypatch.undo()
     assert got == [None]
     assert (tmp_path / "WORK" / "claimed" / f"{a.seal}.json").exists()

@@ -1741,7 +1741,7 @@ class Planner:
         ev = self._commit(decide)
         st = self.lineages[ev["root"]]
         self._publish_work(st)
-        for seal in sorted(self.state.superseded):  # idempotent; only unclaimed records move
+        for seal in sorted(self.state.superseded):  # repeatable; see the transport's withdraw
             self._withdraw(self.state.superseded[seal])
         return st.work
 
