@@ -1423,7 +1423,9 @@ class Planner:
     def recover(self) -> list[str]:
         """After a restart: finish what a crash may have left between journal and transport.
 
-        Withdraws fenced work records nobody claimed (``WITHDRAWN:<root>:WORK``), re-publishes
+        Withdraws fenced work records nobody claimed (reported as ``WITHDRAWN:<root>:WORK``
+        only when this call is the one that withdrew the record, so not on a later recovery
+        and not for a transport without ``withdraw``), re-publishes
         the current work of every executing lineage and the issued request of every verifying
         one (idempotent: an already published record is a no-op), then re-feeds RESULT
         and VERDICT records this identity had claimed from a transport that keeps them
@@ -2093,9 +2095,11 @@ class Coordinator:
         status lists the live lineages each executor owns, from the journal. That needs a
         transport whose attribute ``addressed`` is ``True`` (an attribute check, not a
         test of delivery). The coordinator never calls ``reassign``: it detects no dead
-        executor and replaces none. A transport that refuses a record (``TransportError``,
-        e.g. an address that cannot be read) stops the tick with a ``HALTED`` status; the
-        event of that record, if it was just journalled, stays journalled.
+        executor and replaces none. A transport that refuses to publish a record, in
+        recovery or for a new event (``TransportError``, e.g. an address that cannot be
+        read), stops the tick with a ``HALTED`` status; the event of that record, if it was
+        just journalled, stays journalled. A ``TransportError`` from ``claim`` does not stop
+        the tick: ``pump`` reports it as a quarantined record.
     """
 
     def __init__(

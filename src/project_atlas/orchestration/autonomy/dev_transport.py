@@ -194,9 +194,12 @@ class InMemoryTransport:
         return None
 
     def withdraw(self, record: Record) -> bool:
-        """Take a record back for good unless it was claimed; True when this call did.
+        """Take a record back for good unless it was claimed.
 
-        Also for a record that was never published: a later ``publish`` of it is refused.
+        True when this call marked the seal withdrawn; False when the record was claimed or
+        the seal was withdrawn before. Also for a record that was never published: a later
+        ``publish`` of it is refused. One process, one step: ``publish`` looks for the mark
+        once (the spool transport, whose calls interleave, looks twice).
         """
         channel = CHANNEL_FOR_KIND[record.KIND]
         wire = encode(record)

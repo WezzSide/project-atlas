@@ -100,9 +100,11 @@ def _release_pending(path: Path) -> None:
     """Best-effort removal of the winner's own pending name (never decides ownership).
 
     A concurrent claimer may still hold the pending file open for reading; on Windows that makes
-    the delete fail transiently, so retry boundedly. If it still cannot be removed, the record
-    stays in ``claimed/`` (ownership is already decided) and the leftover pending name is inert:
-    every later claimer loses the exclusive create.
+    the delete fail transiently, so retry boundedly. After a claim, a name that still cannot
+    be removed is inert: the record is in ``claimed/`` (ownership is already decided) and
+    every later claimer loses the exclusive create. ``withdraw`` and ``publish`` call this
+    too, for a record nobody claimed; there a leftover name stays in the spool and it is the
+    tombstone that keeps ``claim`` from handing it out.
     """
     with contextlib.suppress(OSError):
         _retry_transient(path.unlink, still_valid=path.exists)
@@ -246,6 +248,8 @@ class SpoolTransport:
                     continue  # addressed to someone else: leave it, never wedge this claimer
                 if same_identity(identity, rec.executor_identity):
                     raise TransportError("executor identity may not claim its own verification")
+            if (d / _WITHDRAWN / path.name).exists():
+                continue  # taken back by its publisher; the name is a leftover, never delivered
             try:
                 addressee = self._addressee(channel, rec.seal)
             except TransportError:
@@ -296,7 +300,10 @@ class SpoolTransport:
         return True
 
     def withdraw(self, record: Record) -> bool:
-        """Take a record back for good unless somebody claimed it; True when this call did.
+        """Take a record back for good unless somebody claimed it.
+
+        True when this call wrote the tombstone and saw no claim; False when the record is
+        claimed, when the seal already had a tombstone, or when the spool cannot be written.
 
         A tombstone ``withdrawn/<seal>.json`` is created first (exclusively; it holds the
         record as evidence), then the pending name, if there is one, is removed. The
@@ -306,8 +313,15 @@ class SpoolTransport:
         removes its own name when it finds one. A record that a claimer already has stays
         the claimer's: this returns False and removes the tombstone again. Returns False as
         well when the seal was withdrawn before. Best effort: it does not raise for a spool
-        it cannot write. What it cannot do is take a record back from a claimer that linked
-        it between ``publish`` creating the name and ``publish`` seeing the tombstone.
+        it cannot write, and a pending name it cannot remove stays in the spool next to its
+        tombstone; ``claim`` skips a pending record whose seal has a tombstone, and
+        ``published`` does not list it. Two windows remain, both between two steps of
+        different calls: a claimer that linked the record between ``publish`` creating the
+        name and ``publish`` seeing the tombstone keeps it, and so does a claimer that looked
+        for the tombstone before this call wrote it and links a name this call could not
+        remove after this call looked for a claim; in the second case this call has returned
+        True. Neither makes the claimed execution's result acceptable: that is decided by the
+        journal, not here.
         """
         channel = CHANNEL_FOR_KIND[record.KIND]
         wire = encode(record)
@@ -346,8 +360,9 @@ class SpoolTransport:
         """Every decodable record this spool holds on ``channel``, pending or claimed.
 
         Read-only: what the spool directory holds now. Records are kept after a claim, so
-        absent loss this is what was published and neither rejected nor withdrawn (a
-        withdrawn record is not listed); a file that cannot be
+        absent loss this is what was published and neither rejected nor withdrawn (a pending
+        record whose seal has a tombstone is not listed; a claimed one is, tombstone or not,
+        which matters only inside the windows ``withdraw`` documents); a file that cannot be
         decoded, or whose name or channel does not match its record, is skipped (it would be
         parked on a claim, never handed out).
         """
@@ -357,6 +372,8 @@ class SpoolTransport:
             for path in sorted(folder.glob("*.json")):
                 if path.name.endswith(".claim.json") or path.name.startswith("."):
                     continue
+                if folder is d and (d / _WITHDRAWN / path.name).exists():
+                    continue  # a leftover name of a withdrawn record
                 try:
                     rec = decode(_read_wire(path))
                 except (OSError, ValueError, ContractError, RecursionError):

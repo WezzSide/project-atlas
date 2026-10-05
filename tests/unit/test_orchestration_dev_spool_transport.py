@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 from pathlib import Path
 
@@ -428,11 +429,13 @@ def test_withdraw_never_keeps_a_tombstone_for_a_record_a_claimer_took(tmp_path, 
     claimed = []
 
     def claimer_first(path):
-        # a claimer links the record after the tombstone was written, before the name is removed
+        # a claimer that looked for the tombstone before it was written links the record
+        # now, before the name is removed (a claim that STARTS now skips the record)
         if not claimed:
-            claimed.append(True)  # (the claim releases its own pending name through here too)
-            got = SpoolTransport(tmp_path).claim(Channel.WORK, role=Role.IMPLEMENTER, identity="x")
-            assert got is not None and got.seal == a.seal
+            claimed.append(True)
+            other = SpoolTransport(tmp_path)
+            assert other.claim(Channel.WORK, role=Role.IMPLEMENTER, identity="x") is None
+            os.link(path, path.parent / "claimed" / path.name)
         real(path)
 
     monkeypatch.setattr(mod, "_release_pending", claimer_first)
@@ -504,3 +507,36 @@ def test_an_addressee_is_a_bounded_identity(tmp_path):
         assert t.publish(work("A"), to="e" * 200) is True
     assert not list((tmp_path / "WORK").glob("*.tmp*"))
     assert [p.name for p in (tmp_path / "WORK").glob("*.to")] == [f"{work('A').seal}.to"]
+
+
+def test_a_withdrawn_record_whose_name_cannot_be_removed_is_never_claimed(tmp_path, monkeypatch):
+    """ATLAS-DEVQ-0012: the tombstone, not the removal of the name, keeps a record back."""
+    from project_atlas.orchestration.autonomy import dev_spool_transport as mod
+
+    t = SpoolTransport(tmp_path)
+    a, b = work("A"), work("B")
+    assert t.publish(a, to="vps1-impl") and t.publish(b)
+    monkeypatch.setattr(mod, "_release_pending", lambda path: None)  # the unlink fails
+    assert t.withdraw(a) is True and t.withdraw(b) is True
+    monkeypatch.undo()
+    pending = tmp_path / "WORK"
+    assert (pending / f"{a.seal}.json").exists() and (pending / f"{b.seal}.json").exists()
+    for who in ("vps1-impl", "other"):
+        assert t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity=who) is None
+        assert (
+            SpoolTransport(tmp_path).claim(Channel.WORK, role=Role.IMPLEMENTER, identity=who)
+            is None
+        )
+    assert t.published(Channel.WORK) == []
+    assert t.claimed_records(Channel.WORK, identity="vps1-impl") == []
+    assert not list((pending / "claimed").glob("*.json"))
+    assert not (pending / "rejected").exists()  # skipped, not parked as a bad record
+    assert t.publish(a, to="vps1-impl") is False and t.withdraw(a) is False
+    # a record that is not withdrawn is still delivered past the leftovers
+    c = work("C")
+    assert t.publish(c)
+    assert t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity="other").seal == c.seal
+    # the second window `withdraw` documents: a claimer past its tombstone check links a
+    # leftover name. The record is then a claimed one and is listed as such.
+    os.link(pending / f"{b.seal}.json", pending / "claimed" / f"{b.seal}.json")
+    assert [r.seal for r in t.published(Channel.WORK)] == sorted([b.seal, c.seal])

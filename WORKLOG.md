@@ -16843,3 +16843,45 @@ creating its name and `publish` seeing the tombstone keeps it (then the earlier 
 runs the fenced execution; its result is refused); the `publish` existence check and its
 link are two steps, as on main, so a racing duplicate publish of a CLAIMED record can leave
 a second pending copy that the next claimer parks in `rejected/` (never delivered twice).
+
+
+## 2026-10-05 — ATLAS-DEVQ-0012: a withdrawn spool record is kept back by its tombstone
+
+Base: main `e2f2b3f732edcbdcef8564e1fcf98af1e0469f3a` (#1072 merged). Follow-up to the open
+findings reported with ATLAS-DEVQ-0011. Local only: no entrypoint, no dispatch, no live run.
+
+Behaviour (`dev_spool_transport.py`):
+- `claim` skips a pending record whose seal has a tombstone (`withdrawn/<seal>.json`). Before,
+  a withdrawn record whose pending name could not be removed (`withdraw` and `publish` remove
+  it best effort) stayed claimable. It is skipped, not parked in `rejected/`.
+- `published` does not list a pending record whose seal has a tombstone. A claimed record is
+  listed, tombstone or not.
+
+Wording only (`dev_spool_transport.py`, `dev_transport.py`, `dev_planner.py`): what `withdraw`
+returns; what `published` lists; `_release_pending` (a leftover name is inert after a claim,
+not after a withdrawal); the Coordinator note on `TransportError` (publishing and recovery
+stop the tick with HALTED, `claim` errors are quarantined by `pump`); `recover` reports
+`WITHDRAWN` only when that call withdrew the record. Correction to the ATLAS-DEVQ-0011 entry
+above, which is left as written: the in-memory transport looks for the withdrawal mark once
+in `publish`, not twice as the spool transport does.
+
+Tests (`tests/unit/test_orchestration_dev_spool_transport.py`): 26 -> 27 test functions.
+New: `test_a_withdrawn_record_whose_name_cannot_be_removed_is_never_claimed`. Changed in
+place: `test_withdraw_never_keeps_a_tombstone_for_a_record_a_claimer_took` (its claimer used
+to call `claim` after the tombstone was written; such a claim now returns nothing, the test
+asserts that and links the record directly to stand for a claimer past its tombstone check).
+
+Measured locally at this change: spool file 27 passed; 30 consecutive runs of the spool file
+27 passed each; journal, coordinator, loop-contracts and fabric-adapter files 455 passed;
+`ruff check src tests` clean; `mypy src` clean (415 files). Three mutants of the two new
+checks (claim ignores the tombstone; `published` ignores it; `published` applies it to
+claimed records too) each fail at least one test.
+
+Still open after this: a claimer that looked for the tombstone before `withdraw` wrote it,
+and links a name `withdraw` could not remove after `withdraw` looked for a claim, keeps the
+record while `withdraw` has returned True (needs a failed removal and that interleaving);
+the window between `publish` creating a name and seeing the tombstone, as before; two stores
+sharing one spool; a claimer running code from before ATLAS-DEVQ-0011 honours neither
+addresses nor tombstones; an address file next to a RESULT or VERDICT record; the duplicate
+publish race; same-executor reassignment with the fabric adapter; BLOCKED / OWNER_REQUIRED
+scopes cannot be handed over; the four activation blockers.
