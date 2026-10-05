@@ -59,6 +59,7 @@ from project_atlas.orchestration.autonomy.dev_transport import (
     Channel,
     Record,
     TransportError,
+    TransportUnavailable,
     check_address,
     decode,
     encode,
@@ -87,6 +88,14 @@ def _retry_transient[T](op: Callable[[], T], *, still_valid: Callable[[], bool])
                 raise
             time.sleep(_TRANSIENT_BACKOFF_S[min(attempt, len(_TRANSIENT_BACKOFF_S) - 1)])
     raise AssertionError("unreachable")  # pragma: no cover - loop always returns or raises
+
+
+def _real_dir(path: Path) -> bool:
+    """A directory that is not a symbolic link (``lstat``); False when it cannot be looked at."""
+    try:
+        return stat.S_ISDIR(os.lstat(path).st_mode)
+    except OSError:
+        return False
 
 
 def _read_wire(path: Path) -> str:
@@ -138,59 +147,76 @@ class SpoolTransport:
     """See the module docstring. Unbound (``SpoolTransport(root)``) or bound to one store.
 
     Bound (ATLAS-DEVQ-0013): ``create(home, store_id)`` once, then ``attach(home, store_id)``
-    in every process that shares the spool. All of a bound transport's files live under
-    ``<home>/<store_id>/``, so two stores that are given the same spool directory never see,
-    claim, withdraw or collide with each other's records, and a record of this store is
-    never written anywhere else. ``attach`` creates nothing, and every call of a bound
-    transport first checks that the store's directories are still there
-    (``SPOOL_BINDING``): a spool that went missing reads as an error, not as "no records".
-    The check is an observation; what keeps a write inside the store is its path. The
-    store id is not secret and not authenticated: whoever can write the spool directory and
-    knows the id can write into it.
+    (or ``SpoolTransport(home, store_id=...)``, which attaches too) in every process that
+    shares the spool. All of a bound transport's files live under ``<home>/<store_id>/``,
+    so two stores whose BOUND transports are given the same spool directory never see,
+    claim, withdraw or collide with each other's records. Attaching creates nothing, and
+    every call of a bound transport first checks that the store's directories are there
+    and are real directories, not symbolic links (``SPOOL_BINDING``, raised as
+    ``TransportUnavailable``): a spool that is missing when a call starts is an error,
+    not "no records". Limits: the check and the operation are two steps (directories
+    removed in between read as empty, or fail with ``OSError``; nothing re-creates them);
+    nothing remembers that a spool existed, so ``create`` after a removal makes a new,
+    empty one under the same id; the store id is not secret and not authenticated, and
+    whoever can write the spool directory can write into it or plant a link in it.
     """
 
     addressed = True  # ``publish(record, to=identity)`` delivers only to that identity
 
-    def __init__(self, root: Path, *, store_id: str | None = None, _create: bool = True) -> None:
+    def __init__(self, root: Path, *, store_id: str | None = None) -> None:
         self.home = Path(root)
         self.store_id = store_id
         if store_id is None:
             self.root = self.home
-        elif isinstance(store_id, str) and _STORE_ID.fullmatch(store_id):
-            self.root = self.home / store_id
-        else:
-            raise TransportError("SPOOL_BINDING:a store id is 32 lowercase hex digits")
-        if _create:
             for ch in Channel:
                 (self.root / ch.value / _CLAIMED).mkdir(parents=True, exist_ok=True)
-        self._check_binding()
+            return
+        self.root = self.home / self._valid(store_id)
+        self._check_binding()  # bound: this constructor creates nothing, see ``create``
+
+    @staticmethod
+    def _valid(store_id: object) -> str:
+        if not isinstance(store_id, str) or not _STORE_ID.fullmatch(store_id):
+            raise TransportError("SPOOL_BINDING:a store id is 32 lowercase hex digits")
+        return store_id
 
     @classmethod
     def create(cls, home: Path, store_id: str) -> SpoolTransport:
-        """Create the directories of ``store_id`` in ``home``. Refuses if they exist."""
-        if not isinstance(store_id, str) or not _STORE_ID.fullmatch(store_id):
-            raise TransportError("SPOOL_BINDING:a store id is 32 lowercase hex digits")
-        if (Path(home) / store_id).exists():
+        """Create the directories of ``store_id`` in ``home``; of several callers one wins.
+
+        The store's directory is made with one exclusive ``mkdir``; whoever does not make it
+        gets ``SPOOL_EXISTS``. A spool whose creation was interrupted after that step can be
+        neither attached nor created again; an operator has to remove it. Nothing remembers
+        that a spool existed: after its directory was removed, ``create`` makes a new, empty
+        one for the same id.
+        """
+        top = Path(home) / cls._valid(store_id)
+        Path(home).mkdir(parents=True, exist_ok=True)
+        try:
+            os.mkdir(top)
+        except FileExistsError:
             raise TransportError(
-                f"SPOOL_EXISTS:{Path(home) / store_id} exists; the spool of a store is "
-                "created once and then attached"
-            )
+                f"SPOOL_EXISTS:{top} exists; the spool of a store is created once and then attached"
+            ) from None
+        for ch in Channel:
+            (top / ch.value / _CLAIMED).mkdir(parents=True)
         return cls(home, store_id=store_id)
 
     @classmethod
     def attach(cls, home: Path, store_id: str) -> SpoolTransport:
         """Attach to the existing directories of ``store_id`` in ``home``. Creates nothing."""
-        return cls(home, store_id=store_id, _create=False)
+        return cls(home, store_id=cls._valid(store_id))
 
     def _check_binding(self) -> None:
         if self.store_id is None:
             return
         for ch in Channel:
-            if not (self.root / ch.value / _CLAIMED).is_dir():
-                raise TransportError(
-                    f"SPOOL_BINDING:{self.home} has no {ch.value} directories of store "
-                    f"{self.store_id}"
-                )
+            for d in (self.root, self.root / ch.value, self.root / ch.value / _CLAIMED):
+                if not _real_dir(d):
+                    raise TransportUnavailable(
+                        f"SPOOL_BINDING:{self.home} has no {ch.value} directories of store "
+                        f"{self.store_id} (missing, or not a real directory: {d.name})"
+                    )
 
     def _dir(self, channel: Channel) -> Path:
         return self.root / channel.value

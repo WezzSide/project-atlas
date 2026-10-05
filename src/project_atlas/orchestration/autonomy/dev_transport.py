@@ -79,6 +79,12 @@ class TransportError(ContractError):
     code = "DEV_TRANSPORT_REFUSED"
 
 
+class TransportUnavailable(TransportError):
+    """The transport itself is not there (not: this record is refused). Never quarantined."""
+
+    code = "DEV_TRANSPORT_UNAVAILABLE"
+
+
 class DevTransport(Protocol):
     def publish(self, record: Record, *, to: str | None = None) -> bool:
         """Publish a sealed record; False when an identical record was already published.

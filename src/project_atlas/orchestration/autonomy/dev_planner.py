@@ -224,6 +224,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import tempfile
 import time
 import uuid
@@ -261,6 +262,7 @@ from project_atlas.orchestration.autonomy.dev_transport import (
     DevTransport,
     Record,
     TransportError,
+    TransportUnavailable,
     decode,
     encode,
 )
@@ -689,23 +691,28 @@ class StoreJournal(DirJournal):
     """A ``DirJournal`` whose journal and anchor directories carry one explicit store identity.
 
     A coordination store is CREATED once (``create``: both directories absent or empty; each
-    gets a ``STORE.json`` marker with the same random store id and an empty data directory
-    named after that id) and afterwards only ATTACHED (``attach``: both directories, both
-    markers and both data directories must exist and agree). Layout (marker version 2)::
+    gets a ``STORE.json`` marker with the same random store id and a data directory named
+    after that id, which holds a copy of the marker) and afterwards only ATTACHED
+    (``attach``: both directories, both data directories and all four markers must exist
+    and agree; a data directory that is a symbolic link is refused). Layout (marker
+    version 2)::
 
         <journal>/STORE.json               <anchor>/STORE.json
+        <journal>/<store id>/STORE.json    <anchor>/<store id>/STORE.json
         <journal>/<store id>/<seq>.json    <anchor>/<store id>/<seq>.ack and <seq>.repair
 
-    ``home`` and ``anchor_home`` are the two directories that hold the markers; ``root`` and
-    ``anchor`` are the data directories under them, which is where every ``DirJournal``
-    method reads and writes. So the store id is part of the path of every event,
-    acknowledgement and repair record this object writes (ATLAS-DEVQ-0013): a write never
-    lands in a directory that is not named after this store, whatever happened to the
-    markers since they were last checked, and only ``create`` ever makes a data directory.
-    If the directory was exchanged for another store's, the write fails with ``OSError``
-    (there is no data directory of this id there); if only the marker changed, the write
-    stays in this store's own data directory and the next check refuses the store. Two
-    stores have different ids and therefore different data directories.
+    ``home`` and ``anchor_home`` are the two outer directories; ``root`` and ``anchor`` are
+    the data directories under them, which is where every ``DirJournal`` method reads and
+    writes. So the store id is part of the path of every event, acknowledgement and repair
+    record this object writes (ATLAS-DEVQ-0013), and only ``create`` ever makes a data
+    directory. What that gives in the window between ``check_store`` and a write: if only
+    a marker was rewritten, the write stays in this store's own data directory; if an
+    outer directory was exchanged for another store's, there is no directory of this id
+    in it and nothing is written (an acknowledgement, a repair record or a first event
+    raise ``OSError``; a later event is a refused append); either way the next check
+    refuses the store. It does not help against whoever puts something named after this
+    store's id into the exchanged directory (an empty directory, a symbolic link): a write
+    inside the window then lands there, and only the next check sees it.
     Nothing here creates a directory or a marker implicitly, so a journal or anchor that
     went missing is never mistaken for, or re-created as, a fresh start:
       * a missing or foreign anchor fails at attach and at every later read, append,
@@ -724,11 +731,11 @@ class StoreJournal(DirJournal):
     a writer who copies them (a copy of a whole directory IS this store as far as this class
     can tell), and they say nothing about the acknowledgement FILES: with marker and data
     directory intact and the ``.ack`` files gone, the plain ``DirJournal`` rules apply. A
-    plain ``DirJournal`` pointed at the two data directories reads them without any of
-    these checks. A store with a version 1 marker (events next to the marker) is refused;
-    there is no migration.
+    plain ``DirJournal`` does not replay either pair of directories (a marker or a data
+    directory is not an event). A store with a version 1 marker (events next to the one
+    marker) is refused; there is no migration.
 
-    ``boundary`` reports whether the two directories are on different filesystems
+    ``boundary`` reports whether the two outer directories are on different filesystems
     (``st_dev``). Same filesystem means one snapshot or rollback of a common parent can take
     journal and anchor back together, which the continuity check cannot see. Different
     filesystems is evidence against that one failure, not proof of independent storage.
@@ -767,10 +774,11 @@ class StoreJournal(DirJournal):
         return store_id
 
     def check_store(self) -> None:
-        """Both directories still carry this store's marker and its data directory.
+        """Both outer directories carry this store's marker and its data directory.
 
-        Otherwise ``JournalCorrupt``. This is an observation before a write, not what keeps
-        a write inside the store: that is the path, see the class docstring.
+        The data directory must be a real directory (not a symbolic link) holding the same
+        marker. Otherwise ``JournalCorrupt``. This is an observation before a write, not
+        what keeps a write inside the store: that is the path, see the class docstring.
         """
         for directory, role in ((self.home, "journal"), (self.anchor_home, "anchor")):
             found = self._marker(directory, role)
@@ -778,10 +786,19 @@ class StoreJournal(DirJournal):
                 raise JournalCorrupt(
                     f"STORE_IDENTITY:{role} directory belongs to store {found}, not {self.store_id}"
                 )
-            if not (directory / self.store_id).is_dir():
+            data = directory / self.store_id
+            try:
+                real = stat.S_ISDIR(os.lstat(data).st_mode)  # a symbolic link is not it
+            except OSError:
+                real = False
+            if not real:
                 raise JournalCorrupt(
                     f"STORE_IDENTITY:{role} directory {directory} has no data directory of "
                     f"store {self.store_id}"
+                )
+            if self._marker(data, role) != self.store_id:
+                raise JournalCorrupt(
+                    f"STORE_IDENTITY:{role} data directory {data} carries another store's marker"
                 )
 
     @classmethod
@@ -801,22 +818,25 @@ class StoreJournal(DirJournal):
         for directory, role in ((root, "journal"), (anchor, "anchor")):
             directory.mkdir(parents=True, exist_ok=True)
             body = json.dumps({"v": STORE_VERSION, "role": role, "store": store_id}, sort_keys=True)
-            fd, tmp = tempfile.mkstemp(dir=directory, prefix=".tmp-")
-            try:
-                with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                    fh.write(body)
-                    fh.flush()
-                    os.fsync(fh.fileno())
-                os.link(tmp, directory / STORE_MARKER)  # exclusive: never overwrites a marker
-            finally:
-                _drop_tmp(tmp)
-            (directory / store_id).mkdir()  # the only place a data directory is ever created
+            for where in (directory, directory / store_id):
+                if where != directory:
+                    where.mkdir()  # the only place a data directory is ever created
+                fd, tmp = tempfile.mkstemp(dir=where, prefix=".tmp-")
+                try:
+                    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                        fh.write(body)
+                        fh.flush()
+                        os.fsync(fh.fileno())
+                    os.link(tmp, where / STORE_MARKER)  # exclusive: never overwrites a marker
+                finally:
+                    _drop_tmp(tmp)
+                _sync_dir(where)
             _sync_dir(directory)
         return cls(root, anchor, store_id)
 
     @classmethod
     def attach(cls, root: Path, anchor: Path) -> StoreJournal:
-        """Attach to an EXISTING store. Creates nothing; both markers must exist and agree."""
+        """Attach to an EXISTING store. Creates nothing; see ``check_store`` for what must exist."""
         root, anchor = Path(root), Path(anchor)
         return cls(root, anchor, cls._marker(root, "journal"))
 
@@ -1834,7 +1854,8 @@ class Planner:
         an event this pass has just journalled is re-raised too (the consumed record is
         neither quarantined nor deferred; ``recover`` publishes the record). An error from
         the transport's ``claim`` is quarantined instead, at most ``MAX_RAISES_PER_PASS``
-        times per channel and pass.
+        times per channel and pass, except ``TransportUnavailable`` (the transport itself
+        is gone, e.g. a bound spool without its directories), which is raised.
         """
         self.sync()
         n = 0
@@ -1854,6 +1875,8 @@ class Planner:
             while True:
                 try:
                     rec = self.transport.claim(channel, role=Role.PLANNER, identity=self.identity)
+                except TransportUnavailable:  # the transport is gone: not a bad record
+                    raise
                 except (ContractError, OSError) as exc:  # poisoned wire: rejected once / IO trouble
                     self._quarantine(channel.value, "UNDECODABLE", str(exc))
                     n += 1
@@ -2127,7 +2150,8 @@ class Coordinator:
         other failure, including a constructor refused for its configuration, leaves the
         previous status in place;
       * the status file is last-writer-wins and names no coordinator: one that fails to start
-        for a reason local to it (a wrong transport or store) overwrites a shared status with
+        on a continuity, IO or transport error of its own (not on a refused configuration
+        such as ``STORE_BINDING``, which writes nothing) overwrites a shared status with
         ``HALTED`` until a healthy tick rewrites it;
       * executors are assigned only when the constructor is given ``executors``: each
         candidate then goes to the pool member that owns the fewest live lineages, and this
@@ -2140,7 +2164,8 @@ class Coordinator:
         recovery or for a new event (``TransportError``, e.g. an address that cannot be
         read), stops the tick with a ``HALTED`` status; the event of that record, if it was
         just journalled, stays journalled. A ``TransportError`` from ``claim`` does not stop
-        the tick: ``pump`` reports it as a quarantined record.
+        the tick: ``pump`` reports it as a quarantined record, unless it is
+        ``TransportUnavailable``, which stops the tick with ``HALTED`` like the others.
     """
 
     def __init__(
@@ -2409,7 +2434,8 @@ class Coordinator:
             "v": STATUS_VERSION,
             "state": state,
             "store": self.journal.store_id,
-            # the store the transport writes under, or UNBOUND (accepted explicitly)
+            # what the transport says it is bound to, or UNBOUND. In a HALTED status written
+            # by the constructor this is reported before the binding was accepted or refused
             "transport_store": self.transport_store,
             "continuity_boundary": self.boundary,
             # one st_dev comparison is not an established boundary; nothing here claims one

@@ -16935,78 +16935,111 @@ only through CI.
 Base: main `469341555baad8184dc5df9094213bd0664e28c2` (#1073 merged). Addresses the activation
 blocker "store-identity / write coherence" and the open item "two stores sharing one spool".
 Local only: no entrypoint, no dispatch, no live run, nothing run in more than one process.
+A first head of this branch (`d3d0b0aa`) was superseded after independent verification:
+`pump` quarantined the spool's own "directories missing" error, so a tick that dispatched
+nothing wrote an OK status over a spool that had just disappeared; a symbolic link in place
+of a data directory was accepted; `SpoolTransport.create` was not exclusive and the public
+constructor re-created a bound spool; a plain `DirJournal` could replay the data
+directories; three sentences were false. This entry describes the branch after the second
+commit and replaces the entry that head carried.
 
 Behaviour (`dev_planner.py`):
-- `StoreJournal` layout, marker version 2: the marker stays in the journal and anchor
-  directories (`home`, `anchor_home`); events live in `<journal>/<store id>/`,
-  acknowledgements and repair records in `<anchor>/<store id>/` (`root`, `anchor`). `create`
-  makes the two data directories; nothing else ever does. `check_store` also requires them.
-  A version 1 marker is refused; there is no migration, and no store exists outside tests.
+- `StoreJournal` layout, marker version 2: each of the two outer directories (`home`,
+  `anchor_home`) holds `STORE.json` and one data directory named after the store id, which
+  holds a copy of the marker and the files: events in `<journal>/<store id>/`,
+  acknowledgements and repair records in `<anchor>/<store id>/` (`root`, `anchor`). Only
+  `create` makes a data directory. `check_store` requires, in both outer directories, the
+  marker, a data directory that is a real directory (`lstat`: not a symbolic link), and the
+  same marker inside it. A version 1 marker is refused; there is no migration, and no store
+  exists outside tests.
 - So the id is part of the path of every event, acknowledgement and repair record. In the
-  window between the identity check and the write: if the anchor directory was exchanged for
-  another store's, the write fails with `OSError` (no data directory of this id there); if
-  only the marker was rewritten, the write stays in this store's own data directory, and the
-  next check refuses the store. The check before each write is still not atomic with it.
+  window between the identity check and the write: if only a marker was rewritten, the write
+  stays in this store's own data directory; if an outer directory was exchanged for another
+  store's, nothing is written (an acknowledgement, a repair record or a first event raise
+  `OSError`; a later event is a refused append); either way the next check refuses the
+  store. The check before each write is still a separate step.
+- `Planner.pump` raises `TransportUnavailable` from the transport's `claim` instead of
+  quarantining it.
 - `Coordinator` refuses a transport whose `store_id` is another store's (always) or missing
-  unless `accept_unbound_transport=True` (`STORE_BINDING`). The status has `transport_store`
-  (the id, or `UNBOUND`). The status file may not live inside `home`, `anchor_home` or the
-  spool's `home`.
+  unless `accept_unbound_transport=True` (`STORE_BINDING`, no status written). The status
+  has `transport_store` (what the transport says: the id, or `UNBOUND`; `STATUS_VERSION` is
+  unchanged). The status file may not live inside `home`, `anchor_home` or the spool's
+  `home`.
 
-Behaviour (`dev_spool_transport.py`):
-- `SpoolTransport.create(home, store_id)` (once; `SPOOL_EXISTS` otherwise) and
-  `SpoolTransport.attach(home, store_id)` (creates nothing) give a transport all of whose
-  files are under `<home>/<store id>/`. Two stores given the same spool directory do not
-  see, claim, withdraw or collide with each other's records. Every call of a bound transport
-  first checks that its directories exist (`SPOOL_BINDING`, a `TransportError`); the
-  coordinator halts on it (`TRANSPORT_ERROR`) instead of reading a missing spool as empty.
+Behaviour (`dev_spool_transport.py`, `dev_transport.py`):
+- `SpoolTransport.create(home, store_id)` makes the store's directory with one exclusive
+  `mkdir` (of several callers one wins, the others get `SPOOL_EXISTS`);
+  `SpoolTransport.attach(home, store_id)` and `SpoolTransport(home, store_id=...)` create
+  nothing. All files of a bound transport are under `<home>/<store id>/`; two stores whose
+  bound transports are given the same spool directory do not see, claim, withdraw or collide
+  with each other's records.
+- Every call of a bound transport first checks that its directories exist and are real
+  directories (`SPOOL_BINDING`, raised as the new `TransportUnavailable`, a
+  `TransportError`); a coordinator tick ends HALTED on it, also when it is `pump` that meets
+  it.
 - `SpoolTransport(root)` is unchanged (unbound, `store_id` is `None`).
 
-Tests (`tests/unit/test_orchestration_dev_coordinator.py`): 49 -> 54 test functions (55
+Tests (`tests/unit/test_orchestration_dev_coordinator.py`): 49 -> 55 test functions (56
 collected; one new test is parametrized twice). New:
 `test_events_and_acknowledgements_live_under_the_store_id`,
 `test_a_write_after_the_identity_changed_never_lands_in_the_other_store` (marker rewritten;
 directory exchanged), `test_a_bound_spool_is_created_once_then_attached_and_never_recreated`,
 `test_two_stores_given_one_spool_directory_never_touch_each_others_records`,
-`test_a_coordinator_publishes_only_into_a_transport_bound_to_its_store`.
-Changed in place, 17 existing tests and the `coordinator` helper:
-- `accept_unbound_transport=True` added wherever a `Coordinator` is built on the unbound
-  test spool (the helper and every test that builds one directly);
-- paths of the marker, and the arguments of `StoreJournal` subclass constructors, `attach`
-  and `create`, moved from `root`/`anchor` to `home`/`anchor_home`;
-and, beyond those two mechanical edits:
+`test_a_coordinator_publishes_only_into_a_transport_bound_to_its_store`,
+`test_a_spool_that_disappears_during_a_tick_is_never_reported_as_ok`.
+Changed in place, 17 existing tests and the `coordinator` helper, by two mechanical edits:
+- `accept_unbound_transport=True` added where a `Coordinator` is built on the unbound test
+  spool with `accept_same_filesystem=True` (the helper and the tests that build one
+  directly);
+- paths of the outer marker, and the arguments of `StoreJournal` subclass constructors,
+  `attach` and `create`, moved from `root`/`anchor` to `home`/`anchor_home`;
+and, beyond those:
 - `test_attach_creates_nothing_and_refuses_a_missing_or_foreign_part`: marker versions in
-  the list of bad markers (1 is now a bad one), and the plain `DirJournal` is pointed at the
-  marker directories;
+  the list of bad markers (1 is now a bad one, 3 added);
 - `test_a_lost_anchor_stops_a_running_planner_and_is_never_recreated` and
   `test_unreadable_store_directories_at_construction_leave_a_halted_status`: the whole
-  anchor directory is removed (`shutil.rmtree`) instead of its files and itself;
+  outer anchor directory is removed (`shutil.rmtree`) instead of its files and itself;
 - `test_boundary_reports_whether_journal_and_anchor_share_a_filesystem`: cleanup only;
-- `test_identity_lost_between_append_and_acknowledgement_is_never_published`: the marker is
-  no longer next to the event file;
+- `test_identity_lost_between_append_and_acknowledgement_is_never_published`: the anchor
+  data directory holds its marker and no acknowledgement (it was empty);
 - `test_published_work_the_journal_does_not_know_stops_every_coordinator`: the HALTED status
   has the key `transport_store`.
+Not changed in text but different in what they exercise: tests that remove `j.anchor`'s
+files and the directory itself (for example
+`test_an_anchor_directory_removed_under_a_running_coordinator_leaves_a_halted_status`) now
+remove the anchor's data directory, not the outer directory with its marker; they pass with
+the same `STORE_IDENTITY` refusal.
 
-Measured locally at this change: coordinator file 55 passed; 20 consecutive runs 55 passed
-each; all `tests/unit/test_orchestration_dev_*.py` 1081 passed; `ruff check src tests`
-clean; `mypy src` clean (415 files). Fourteen mutants, each failing at least one test:
+Measured locally at this change: coordinator file 56 passed; 20 consecutive runs 56 passed
+each; all `tests/unit/test_orchestration_dev_*.py` 1082 passed; `ruff check src tests`
+clean; `mypy src` clean (415 files). Nineteen mutants, each failing at least one test:
 journal data not under the id; anchor data not under the id; `check_store` without the data
 directory; no binding check; the flag accepting another store's transport; an unbound
-transport accepted by default; no spool directory check; `attach` creating; `create` twice;
-spool data not under the id; status path checked against the data directories only; status
-path not checked against the spool home; no shape check of the journal's store id; a
-constant `transport_store`.
+transport accepted by default; no spool directory check; the bound constructor creating;
+`create` not exclusive; spool data not under the id; status path checked against the data
+directories only; status path not checked against the spool home; no shape check of the
+journal's store id; a constant `transport_store`; the journal following a symbolic link; no
+check of the inner marker; the spool following a symbolic link; `pump` quarantining
+`TransportUnavailable`; `attach` accepting no store id.
 
 Correction to the ATLAS-DEVQ-0012 entry above, which is left as written: it says `withdraw`
 returning False "no longer" implies that the record is deliverable or that somebody has it.
 On main before that change a second `withdraw` of a withdrawn seal already returned False
-for a record nobody had; what changed is that False can now also follow a tombstone this
-call wrote.
+for a record nobody had, and a call could already write a tombstone and return False; what
+changed is that such a tombstone now stays.
 
-Still open after this: the identity check and the write are two steps (what changed is
-where the write can land); ids, markers and directory names are unkeyed, and a copy of a
-whole store directory is that store as far as the code can tell; a plain `DirJournal` on the
-data directories bypasses the checks; the coordinator reads the transport's binding once;
-executors and adapters must be given the store id to attach the spool, and nothing here
-distributes it; journal and anchor rolled back together are not detected; no entrypoint;
-nothing here was run by several processes or hosts; BLOCKED / OWNER_REQUIRED scopes cannot
-be handed over; recovery / duplicate semantics as listed in the backlog.
+Still open after this: the identity check and the write are two steps, for the store and for
+the spool (a bound spool whose directories are removed between its check and the operation
+reads as empty or fails with `OSError`; nothing re-creates them); whoever can write an
+exchanged directory or the spool can put a directory or a symbolic link named after the
+store's id there, and a write inside the window then lands in it; ids, markers and directory
+names are unkeyed, and a copy of a whole store directory is that store as far as the code
+can tell; nothing remembers that a spool existed, so `create` after a removal makes a new,
+empty one under the same id, and the coordinator then republishes into it; the coordinator
+reads the transport's binding once, a bare `Planner` checks no binding, and a transport
+object whose attributes are changed afterwards is not noticed; the fabric adapter reports a
+missing bound spool as refused accepts each tick and is not stopped by it; executors and
+adapters must be given the store id to attach the spool, and nothing here distributes it;
+journal and anchor rolled back together are not detected; no entrypoint; nothing here was
+run by several processes or hosts; BLOCKED / OWNER_REQUIRED scopes cannot be handed over;
+recovery / duplicate semantics as listed in the backlog.
