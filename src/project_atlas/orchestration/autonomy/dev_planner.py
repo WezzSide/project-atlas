@@ -206,8 +206,10 @@ Store identity and coordinator (ATLAS-DEVQ-0008): ``StoreJournal`` is a ``DirJou
 journal and anchor directories are created once, carry one store id, and are afterwards only
 attached, never created. ``Coordinator`` runs recover, pump and the preparation of further
 compatible lineages as one ``tick`` on such a store and writes a journal-derived status file.
-It refuses a journal without store identity and a transport without the record-listing methods,
-checks that every published WORK record is known to the journal (a witness that does not
+It refuses a journal without store identity, a transport without the record-listing methods
+and (ATLAS-DEVQ-0013) a transport that is bound to another store or, unless accepted
+explicitly, to none; it checks that every published WORK record is known to the journal
+(a witness that does not
 depend on the anchor), and never dispatches an executor; it hands a scope over only through
 the verified handover above. See both
 classes for what they do not establish: in particular, no continuity boundary adequate for
@@ -346,6 +348,7 @@ ADOPT_GRACE_STEP = 0.05  # another planner adopts it: tries x seconds, 2 s. A li
 #                          that needs longer than this between append and acknowledgement
 #                          is adopted too and leaves an ADOPTED record
 _DIGEST = re.compile(r"[0-9a-f]{64}")
+_STORE_ID = re.compile(r"[0-9a-f]{32}")
 # Verified scope handover (ATLAS-DEVQ-0009). The only basis: the verified result of the lineage
 # that owned the scope is an ancestor of the base revision the new work starts from.
 RESULT_IN_BASE = "RESULT_IN_BASE"
@@ -677,7 +680,7 @@ class DirJournal:
 
 
 STORE_MARKER = "STORE.json"
-STORE_VERSION = 1
+STORE_VERSION = 2  # 2: events and acknowledgements live in a directory named after the store
 SEPARATE_FILESYSTEM = "SEPARATE_FILESYSTEM"
 SAME_FILESYSTEM = "SAME_FILESYSTEM"
 
@@ -686,10 +689,25 @@ class StoreJournal(DirJournal):
     """A ``DirJournal`` whose journal and anchor directories carry one explicit store identity.
 
     A coordination store is CREATED once (``create``: both directories absent or empty; each
-    gets a ``STORE.json`` marker with the same random store id) and afterwards only ATTACHED
-    (``attach``: both directories and both markers must exist and agree). Nothing here creates
-    a directory or a marker implicitly, so a journal or anchor that went missing is never
-    mistaken for, or re-created as, a fresh start:
+    gets a ``STORE.json`` marker with the same random store id and an empty data directory
+    named after that id) and afterwards only ATTACHED (``attach``: both directories, both
+    markers and both data directories must exist and agree). Layout (marker version 2)::
+
+        <journal>/STORE.json               <anchor>/STORE.json
+        <journal>/<store id>/<seq>.json    <anchor>/<store id>/<seq>.ack and <seq>.repair
+
+    ``home`` and ``anchor_home`` are the two directories that hold the markers; ``root`` and
+    ``anchor`` are the data directories under them, which is where every ``DirJournal``
+    method reads and writes. So the store id is part of the path of every event,
+    acknowledgement and repair record this object writes (ATLAS-DEVQ-0013): a write never
+    lands in a directory that is not named after this store, whatever happened to the
+    markers since they were last checked, and only ``create`` ever makes a data directory.
+    If the directory was exchanged for another store's, the write fails with ``OSError``
+    (there is no data directory of this id there); if only the marker changed, the write
+    stays in this store's own data directory and the next check refuses the store. Two
+    stores have different ids and therefore different data directories.
+    Nothing here creates a directory or a marker implicitly, so a journal or anchor that
+    went missing is never mistaken for, or re-created as, a fresh start:
       * a missing or foreign anchor fails at attach and at every later read, append,
         acknowledgement, repair record and repair listing (``STORE_IDENTITY``), also for a journal
         of zero or one event and
@@ -701,10 +719,14 @@ class StoreJournal(DirJournal):
     records are listed. An identity lost between a commit's append and its
     acknowledgement leaves the event linked, unacknowledged and unpublished. A store whose
     creation was interrupted after the first marker can be neither attached nor re-created;
-    an operator has to remove it. Like every seal here the marker is unkeyed: it guards
-    against loss, mix-up and re-creation, not against a writer who copies the marker, and it
-    says nothing about the acknowledgement FILES: with the marker intact and the ``.ack``
-    files gone, the plain ``DirJournal`` rules apply.
+    an operator has to remove it. Like every seal here the marker is unkeyed, and so is the
+    name of the data directory: they guard against loss, mix-up and re-creation, not against
+    a writer who copies them (a copy of a whole directory IS this store as far as this class
+    can tell), and they say nothing about the acknowledgement FILES: with marker and data
+    directory intact and the ``.ack`` files gone, the plain ``DirJournal`` rules apply. A
+    plain ``DirJournal`` pointed at the two data directories reads them without any of
+    these checks. A store with a version 1 marker (events next to the marker) is refused;
+    there is no migration.
 
     ``boundary`` reports whether the two directories are on different filesystems
     (``st_dev``). Same filesystem means one snapshot or rollback of a common parent can take
@@ -716,8 +738,12 @@ class StoreJournal(DirJournal):
 
     def __init__(self, root: Path, anchor: Path, store_id: str) -> None:
         # deliberately not DirJournal.__init__: nothing is created here
-        self.root = Path(root)
-        self.anchor = Path(anchor)
+        if not isinstance(store_id, str) or not _STORE_ID.fullmatch(store_id):
+            raise JournalCorrupt("STORE_IDENTITY:store id is not 32 hex digits")
+        self.home = Path(root)  # holds the journal marker
+        self.anchor_home = Path(anchor)  # holds the anchor marker
+        self.root = self.home / store_id  # every event file is written under the store's id
+        self.anchor = self.anchor_home / store_id  # and so is every acknowledgement and repair
         self.store_id = store_id
         self.check_store()
 
@@ -728,7 +754,7 @@ class StoreJournal(DirJournal):
             if raw["v"] != STORE_VERSION or raw["role"] != role:
                 raise ValueError(f"marker is not a v{STORE_VERSION} {role} marker")
             store_id = raw["store"]
-            if not isinstance(store_id, str) or not re.fullmatch(r"[0-9a-f]{32}", store_id):
+            if not isinstance(store_id, str) or not _STORE_ID.fullmatch(store_id):
                 raise ValueError("store id is not 32 hex digits")
         except FileNotFoundError:
             raise JournalCorrupt(
@@ -741,12 +767,21 @@ class StoreJournal(DirJournal):
         return store_id
 
     def check_store(self) -> None:
-        """Both directories still carry this store's marker; otherwise ``JournalCorrupt``."""
-        for directory, role in ((self.root, "journal"), (self.anchor, "anchor")):
+        """Both directories still carry this store's marker and its data directory.
+
+        Otherwise ``JournalCorrupt``. This is an observation before a write, not what keeps
+        a write inside the store: that is the path, see the class docstring.
+        """
+        for directory, role in ((self.home, "journal"), (self.anchor_home, "anchor")):
             found = self._marker(directory, role)
             if found != self.store_id:
                 raise JournalCorrupt(
                     f"STORE_IDENTITY:{role} directory belongs to store {found}, not {self.store_id}"
+                )
+            if not (directory / self.store_id).is_dir():
+                raise JournalCorrupt(
+                    f"STORE_IDENTITY:{role} directory {directory} has no data directory of "
+                    f"store {self.store_id}"
                 )
 
     @classmethod
@@ -775,6 +810,7 @@ class StoreJournal(DirJournal):
                 os.link(tmp, directory / STORE_MARKER)  # exclusive: never overwrites a marker
             finally:
                 _drop_tmp(tmp)
+            (directory / store_id).mkdir()  # the only place a data directory is ever created
             _sync_dir(directory)
         return cls(root, anchor, store_id)
 
@@ -787,7 +823,7 @@ class StoreJournal(DirJournal):
     @property
     def boundary(self) -> str:
         try:
-            same = os.stat(self.root).st_dev == os.stat(self.anchor).st_dev
+            same = os.stat(self.home).st_dev == os.stat(self.anchor_home).st_dev
         except OSError as exc:
             raise JournalCorrupt(
                 f"STORE_IDENTITY:store directories are not readable: {exc}"
@@ -2057,9 +2093,14 @@ class Coordinator:
         (repositories are compared by ``repository_key``, as in ``works_collide``);
       * it does not fall back: it refuses a journal without store identity (``MemoryJournal``,
         a plain ``DirJournal``) and a transport that lacks ``claimed_records`` and
-        ``published`` (a check of two method names, not of durability), and it refuses
+        ``published`` (a check of two method names, not of durability), it refuses a
+        transport whose ``store_id`` is another store's (always) or missing (unless the
+        caller passes ``accept_unbound_transport=True``; the status then says
+        ``transport_store: UNBOUND``), and it refuses
         a store whose journal and anchor share a filesystem unless the caller explicitly
-        accepts that. Either way the status file says that an adequate continuity boundary
+        accepts that. The transport's binding is read once, at construction; a bound spool
+        transport checks its own directories on every call. Either way the status file
+        says that an adequate continuity boundary
         for live conflicting work is NOT established: a different filesystem is one ``st_dev``
         comparison, taken once at construction, not proof of independent storage.
     Limits:
@@ -2112,12 +2153,15 @@ class Coordinator:
         status_path: Path,
         max_live: int = MAX_LIVE_DEFAULT,
         accept_same_filesystem: bool = False,
+        accept_unbound_transport: bool = False,
         observer: HandoverObserver | None = None,
         executors: Sequence[str] = (),
         executor_limit: int = 1,
     ) -> None:
         if observer is not None and not _observer_identity_ok(getattr(observer, "identity", None)):
             raise PlannerError("a handover observer needs a non-empty identity")
+        bound = getattr(transport, "store_id", None)
+        self.transport_store = "UNBOUND" if bound is None else str(bound)
         self.observer = observer
         self.executors = Planner._pool(executors, executor_limit)
         self.executor_limit = executor_limit
@@ -2140,7 +2184,11 @@ class Coordinator:
             raise PlannerError("max_live must be an integer >= 1")
         self.status_path = Path(status_path)
         where = self.status_path.resolve()
-        owned = [journal.root, journal.anchor, getattr(transport, "root", None)]
+        owned = [
+            journal.home,
+            journal.anchor_home,
+            getattr(transport, "home", getattr(transport, "root", None)),
+        ]
         for directory in owned:
             if directory is not None and where.is_relative_to(Path(directory).resolve()):
                 raise PlannerError(
@@ -2160,6 +2208,13 @@ class Coordinator:
                 "it takes both back together, which the continuity check cannot detect. Put "
                 "the anchor on a different filesystem or accept the reduced boundary "
                 "explicitly (accept_same_filesystem=True)"
+            )
+        if bound != journal.store_id and (bound is not None or not accept_unbound_transport):
+            raise PlannerError(
+                f"STORE_BINDING:the transport is bound to store {bound}, the journal is store "
+                f"{journal.store_id}; a coordinator publishes only into a transport bound to "
+                "its own store, or into an unbound one that is accepted explicitly "
+                "(accept_unbound_transport=True)"
             )
         self.max_live = max_live
         if self.status_path.is_dir():
@@ -2354,6 +2409,8 @@ class Coordinator:
             "v": STATUS_VERSION,
             "state": state,
             "store": self.journal.store_id,
+            # the store the transport writes under, or UNBOUND (accepted explicitly)
+            "transport_store": self.transport_store,
             "continuity_boundary": self.boundary,
             # one st_dev comparison is not an established boundary; nothing here claims one
             "live_conflicting_work_boundary": "NOT_ESTABLISHED",

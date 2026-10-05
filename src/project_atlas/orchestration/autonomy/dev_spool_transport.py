@@ -18,6 +18,9 @@ Layout::
                                                   linked by a claim that found it withdrawn
     <root>/<CHANNEL>/claimed/<seal>.claim.json    who claimed it
 
+``<root>`` is the directory given to ``SpoolTransport(root)``, or, for a transport bound to a
+store (``SpoolTransport.create`` / ``attach``), ``<home>/<store id>``: see the class.
+
 Guarantees: atomic publish (temp + ``os.link``: never overwrites, never half-written);
 consume-once across concurrent claimers: the ownership transition is the EXCLUSIVE CREATION of
 the ``claimed/<seal>.json`` name with ``os.link`` (it fails with ``FileExistsError`` for every
@@ -37,6 +40,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import re
 import stat
 import tempfile
 import time
@@ -62,6 +66,7 @@ from project_atlas.orchestration.autonomy.dev_transport import (
 
 _CLAIMED = "claimed"
 _WITHDRAWN = "withdrawn"
+_STORE_ID = re.compile(r"[0-9a-f]{32}")
 MAX_ADDRESS_BYTES = 256
 
 # A concurrent claimer's open/rename can make a read or rename fail TRANSIENTLY with
@@ -130,12 +135,62 @@ def _lost_race(path: Path, dest: Path) -> bool:
 
 
 class SpoolTransport:
+    """See the module docstring. Unbound (``SpoolTransport(root)``) or bound to one store.
+
+    Bound (ATLAS-DEVQ-0013): ``create(home, store_id)`` once, then ``attach(home, store_id)``
+    in every process that shares the spool. All of a bound transport's files live under
+    ``<home>/<store_id>/``, so two stores that are given the same spool directory never see,
+    claim, withdraw or collide with each other's records, and a record of this store is
+    never written anywhere else. ``attach`` creates nothing, and every call of a bound
+    transport first checks that the store's directories are still there
+    (``SPOOL_BINDING``): a spool that went missing reads as an error, not as "no records".
+    The check is an observation; what keeps a write inside the store is its path. The
+    store id is not secret and not authenticated: whoever can write the spool directory and
+    knows the id can write into it.
+    """
+
     addressed = True  # ``publish(record, to=identity)`` delivers only to that identity
 
-    def __init__(self, root: Path) -> None:
-        self.root = Path(root)
+    def __init__(self, root: Path, *, store_id: str | None = None, _create: bool = True) -> None:
+        self.home = Path(root)
+        self.store_id = store_id
+        if store_id is None:
+            self.root = self.home
+        elif isinstance(store_id, str) and _STORE_ID.fullmatch(store_id):
+            self.root = self.home / store_id
+        else:
+            raise TransportError("SPOOL_BINDING:a store id is 32 lowercase hex digits")
+        if _create:
+            for ch in Channel:
+                (self.root / ch.value / _CLAIMED).mkdir(parents=True, exist_ok=True)
+        self._check_binding()
+
+    @classmethod
+    def create(cls, home: Path, store_id: str) -> SpoolTransport:
+        """Create the directories of ``store_id`` in ``home``. Refuses if they exist."""
+        if not isinstance(store_id, str) or not _STORE_ID.fullmatch(store_id):
+            raise TransportError("SPOOL_BINDING:a store id is 32 lowercase hex digits")
+        if (Path(home) / store_id).exists():
+            raise TransportError(
+                f"SPOOL_EXISTS:{Path(home) / store_id} exists; the spool of a store is "
+                "created once and then attached"
+            )
+        return cls(home, store_id=store_id)
+
+    @classmethod
+    def attach(cls, home: Path, store_id: str) -> SpoolTransport:
+        """Attach to the existing directories of ``store_id`` in ``home``. Creates nothing."""
+        return cls(home, store_id=store_id, _create=False)
+
+    def _check_binding(self) -> None:
+        if self.store_id is None:
+            return
         for ch in Channel:
-            (self.root / ch.value / _CLAIMED).mkdir(parents=True, exist_ok=True)
+            if not (self.root / ch.value / _CLAIMED).is_dir():
+                raise TransportError(
+                    f"SPOOL_BINDING:{self.home} has no {ch.value} directories of store "
+                    f"{self.store_id}"
+                )
 
     def _dir(self, channel: Channel) -> Path:
         return self.root / channel.value
@@ -181,6 +236,7 @@ class SpoolTransport:
         for it, before and after creating the record's name (a name it created and cannot
         remove again stays, and is not handed out).
         """
+        self._check_binding()
         channel = CHANNEL_FOR_KIND[record.KIND]
         wire = encode(record)  # verifies the seal
         d = self._dir(channel)
@@ -223,6 +279,7 @@ class SpoolTransport:
         return True
 
     def claim(self, channel: Channel, *, role: Role, identity: str) -> Record | None:
+        self._check_binding()
         if ROLE_FOR_CHANNEL[channel] is not role:
             raise TransportError(f"role {role.value} may not claim from {channel.value}")
         d = self._dir(channel)
@@ -344,6 +401,7 @@ class SpoolTransport:
         with an address; the looks are ``Path.exists`` (a directory at the tombstone's path
         counts, a dangling symbolic link does not).
         """
+        self._check_binding()
         channel = CHANNEL_FOR_KIND[record.KIND]
         wire = encode(record)
         d = self._dir(channel)
@@ -382,6 +440,7 @@ class SpoolTransport:
         decoded, or whose name or channel does not match its record, is skipped (it would be
         parked on a claim, never handed out).
         """
+        self._check_binding()
         d = self._dir(channel)
         out: dict[str, Record] = {}
         for folder in (d, d / _CLAIMED):
@@ -404,6 +463,7 @@ class SpoolTransport:
         A record whose seal has a tombstone is not returned (see ``withdraw``): a withdrawn
         record that a claimer linked but did not persist is not re-adopted.
         """
+        self._check_binding()
         d = self._dir(channel) / _CLAIMED
         out: list[Record] = []
         for rec_path in sorted(p for p in d.glob("*.json") if not p.name.endswith(".claim.json")):

@@ -16928,3 +16928,85 @@ which the next claim parks; unchanged from main); same-executor reassignment wit
 fabric adapter; BLOCKED / OWNER_REQUIRED scopes cannot be handed over; the four activation
 blockers. Not run: several processes or hosts on one spool, a network filesystem; Windows
 only through CI.
+
+
+## 2026-10-05 — ATLAS-DEVQ-0013: the store id is the directory every store write goes into
+
+Base: main `469341555baad8184dc5df9094213bd0664e28c2` (#1073 merged). Addresses the activation
+blocker "store-identity / write coherence" and the open item "two stores sharing one spool".
+Local only: no entrypoint, no dispatch, no live run, nothing run in more than one process.
+
+Behaviour (`dev_planner.py`):
+- `StoreJournal` layout, marker version 2: the marker stays in the journal and anchor
+  directories (`home`, `anchor_home`); events live in `<journal>/<store id>/`,
+  acknowledgements and repair records in `<anchor>/<store id>/` (`root`, `anchor`). `create`
+  makes the two data directories; nothing else ever does. `check_store` also requires them.
+  A version 1 marker is refused; there is no migration, and no store exists outside tests.
+- So the id is part of the path of every event, acknowledgement and repair record. In the
+  window between the identity check and the write: if the anchor directory was exchanged for
+  another store's, the write fails with `OSError` (no data directory of this id there); if
+  only the marker was rewritten, the write stays in this store's own data directory, and the
+  next check refuses the store. The check before each write is still not atomic with it.
+- `Coordinator` refuses a transport whose `store_id` is another store's (always) or missing
+  unless `accept_unbound_transport=True` (`STORE_BINDING`). The status has `transport_store`
+  (the id, or `UNBOUND`). The status file may not live inside `home`, `anchor_home` or the
+  spool's `home`.
+
+Behaviour (`dev_spool_transport.py`):
+- `SpoolTransport.create(home, store_id)` (once; `SPOOL_EXISTS` otherwise) and
+  `SpoolTransport.attach(home, store_id)` (creates nothing) give a transport all of whose
+  files are under `<home>/<store id>/`. Two stores given the same spool directory do not
+  see, claim, withdraw or collide with each other's records. Every call of a bound transport
+  first checks that its directories exist (`SPOOL_BINDING`, a `TransportError`); the
+  coordinator halts on it (`TRANSPORT_ERROR`) instead of reading a missing spool as empty.
+- `SpoolTransport(root)` is unchanged (unbound, `store_id` is `None`).
+
+Tests (`tests/unit/test_orchestration_dev_coordinator.py`): 49 -> 54 test functions (55
+collected; one new test is parametrized twice). New:
+`test_events_and_acknowledgements_live_under_the_store_id`,
+`test_a_write_after_the_identity_changed_never_lands_in_the_other_store` (marker rewritten;
+directory exchanged), `test_a_bound_spool_is_created_once_then_attached_and_never_recreated`,
+`test_two_stores_given_one_spool_directory_never_touch_each_others_records`,
+`test_a_coordinator_publishes_only_into_a_transport_bound_to_its_store`.
+Changed in place, 17 existing tests and the `coordinator` helper:
+- `accept_unbound_transport=True` added wherever a `Coordinator` is built on the unbound
+  test spool (the helper and every test that builds one directly);
+- paths of the marker, and the arguments of `StoreJournal` subclass constructors, `attach`
+  and `create`, moved from `root`/`anchor` to `home`/`anchor_home`;
+and, beyond those two mechanical edits:
+- `test_attach_creates_nothing_and_refuses_a_missing_or_foreign_part`: marker versions in
+  the list of bad markers (1 is now a bad one), and the plain `DirJournal` is pointed at the
+  marker directories;
+- `test_a_lost_anchor_stops_a_running_planner_and_is_never_recreated` and
+  `test_unreadable_store_directories_at_construction_leave_a_halted_status`: the whole
+  anchor directory is removed (`shutil.rmtree`) instead of its files and itself;
+- `test_boundary_reports_whether_journal_and_anchor_share_a_filesystem`: cleanup only;
+- `test_identity_lost_between_append_and_acknowledgement_is_never_published`: the marker is
+  no longer next to the event file;
+- `test_published_work_the_journal_does_not_know_stops_every_coordinator`: the HALTED status
+  has the key `transport_store`.
+
+Measured locally at this change: coordinator file 55 passed; 20 consecutive runs 55 passed
+each; all `tests/unit/test_orchestration_dev_*.py` 1081 passed; `ruff check src tests`
+clean; `mypy src` clean (415 files). Fourteen mutants, each failing at least one test:
+journal data not under the id; anchor data not under the id; `check_store` without the data
+directory; no binding check; the flag accepting another store's transport; an unbound
+transport accepted by default; no spool directory check; `attach` creating; `create` twice;
+spool data not under the id; status path checked against the data directories only; status
+path not checked against the spool home; no shape check of the journal's store id; a
+constant `transport_store`.
+
+Correction to the ATLAS-DEVQ-0012 entry above, which is left as written: it says `withdraw`
+returning False "no longer" implies that the record is deliverable or that somebody has it.
+On main before that change a second `withdraw` of a withdrawn seal already returned False
+for a record nobody had; what changed is that False can now also follow a tombstone this
+call wrote.
+
+Still open after this: the identity check and the write are two steps (what changed is
+where the write can land); ids, markers and directory names are unkeyed, and a copy of a
+whole store directory is that store as far as the code can tell; a plain `DirJournal` on the
+data directories bypasses the checks; the coordinator reads the transport's binding once;
+executors and adapters must be given the store id to attach the spool, and nothing here
+distributes it; journal and anchor rolled back together are not detected; no entrypoint;
+nothing here was run by several processes or hosts; BLOCKED / OWNER_REQUIRED scopes cannot
+be handed over; recovery / duplicate semantics as listed in the backlog.
