@@ -2493,7 +2493,7 @@ class Activation:
 
     The way a coordinator is meant to be started outside tests. Two steps:
 
-    ``declare`` (an operator act, once per store): names the store id, the journal and anchor
+    ``declare`` (an operator act, once per record): names the store id, the journal and anchor
     directories and the spool directory, attaches to all three to check that they exist and
     belong to that store, and writes the activation record (exclusively: a record is never
     overwritten by ``declare``). It creates no store and no spool.
@@ -2504,7 +2504,9 @@ class Activation:
     written into the store or the spool:
       * no record, an unreadable one, or one of another version (``ACTIVATION_RECORD``, a
         ``PlannerError``: a configuration refusal, no status is written);
-      * a record inside the journal, anchor or spool directory (``ACTIVATION_RECORD``);
+      * a record inside the journal, anchor or spool directory (``ACTIVATION_RECORD``), or a
+        status path inside one of them (``STATUS_PATH``): both are checked before anything
+        can be written, so a ``HALTED`` status never lands in the store or the spool;
       * a journal, anchor or spool that is missing or belongs to another store than the
         record names: a ``JournalCorrupt`` / ``TransportError`` / ``OSError`` from the
         attach, reported in a ``HALTED`` status;
@@ -2522,7 +2524,10 @@ class Activation:
     another just raised (never one that did not exist); the record is an unkeyed file, and
     whoever can write it can lower the floor or point it at another store; it is not taken
     back or forward with the store, which is its purpose, so restoring a store from a backup
-    older than the floor needs the operator to remove the record and declare again.
+    older than the floor needs the operator to remove the record and declare again; only the
+    three named directories are excluded as its location, so a record kept in a common
+    parent of journal and anchor can still be taken back with them; ``declare`` is exclusive
+    per record path, and nothing stops a second record for the same store elsewhere.
 
     Nothing here dispatches an executor, and declaring or opening an activation is not a
     grant of any authority: see ``Coordinator`` for what a tick does and does not do.
@@ -2546,6 +2551,7 @@ class Activation:
                 and _STORE_ID.fullmatch(raw["store"]) is not None
                 and all(isinstance(raw[k], str) and raw[k] for k in ("journal", "anchor", "spool"))
                 and all(Path(raw[k]).is_absolute() for k in ("journal", "anchor", "spool"))
+                and all(os.fsencode(raw[k]).find(b"\0") < 0 for k in ("journal", "anchor", "spool"))
                 and type(raw["accept_same_filesystem"]) is bool
                 and type(raw["seq"]) is int
                 and raw["seq"] >= 0
@@ -2570,14 +2576,18 @@ class Activation:
         return dict(raw)
 
     @staticmethod
-    def _outside(record: Path, raw: Mapping[str, Any]) -> None:
-        where = Path(record).resolve()
+    def _outside(path: Path, raw: Mapping[str, Any], code: str = "ACTIVATION_RECORD") -> None:
+        where = Path(path).resolve()
         for key in ("journal", "anchor", "spool"):
             if where.is_relative_to(Path(raw[key]).resolve()):
                 raise PlannerError(
-                    f"ACTIVATION_RECORD:{record} is inside the {key} directory; the record "
-                    "must not be taken back together with what it witnesses"
+                    f"{code}:{path} is inside the {key} directory; neither the activation "
+                    "record nor the status file may live in what the record names"
                 )
+
+    @staticmethod
+    def _names(raw: Mapping[str, Any]) -> tuple[str, str, str, str]:
+        return (raw["store"], raw["journal"], raw["anchor"], raw["spool"])
 
     @staticmethod
     def _attach(raw: Mapping[str, Any]) -> tuple[StoreJournal, Any]:
@@ -2675,14 +2685,16 @@ class Activation:
         status_path = Path(status_path)
         if status_path.resolve() == Path(record).resolve():
             raise PlannerError("STATUS_PATH:the status file and the activation record differ")
+        # before anything can be written: a HALTED status must not land in the store either
+        cls._outside(status_path, raw, "STATUS_PATH")
         try:
             journal, transport = cls._attach(raw)
             cls._check_floor(journal, raw)
-        except (JournalCorrupt, TransportError, OSError) as exc:
+        except (JournalCorrupt, TransportError, OSError, RecursionError) as exc:
             reason = str(exc) if isinstance(exc, JournalCorrupt) else None
             if reason is None:
                 kind = "TRANSPORT_ERROR" if isinstance(exc, TransportError) else "IO_ERROR"
-                reason = f"{kind}:{exc}"
+                reason = f"{kind}:{type(exc).__name__}: {exc}"
             status = {
                 "v": STATUS_VERSION,
                 "state": "HALTED",
@@ -2714,19 +2726,10 @@ class Activation:
         c = self.coordinator
         try:
             raw = self._load(self.record)  # another coordinator may have raised the floor
-            if (raw["store"], raw["journal"], raw["anchor"], raw["spool"]) != (
-                c.journal.store_id,
-                str(c.journal.home.resolve()),
-                str(c.journal.anchor_home.resolve()),
-                str(Path(getattr(c.planner.transport, "home", "")).resolve()),
-            ):
-                raise JournalCorrupt(
-                    "ACTIVATION_CHANGED:the activation record no longer names the store and "
-                    "spool this coordinator was opened on"
-                )
+            self._same(raw)
             self._check_floor(c.journal, raw)
-        except PlannerError as exc:
-            lost = exc if isinstance(exc, JournalCorrupt) else JournalCorrupt(str(exc))
+        except (PlannerError, OSError, RecursionError) as exc:
+            lost = self._lost(exc)
             c._halted(lost)
             raise lost from exc
         status = c.tick(candidates)
@@ -2734,6 +2737,7 @@ class Activation:
         if state.seq > raw["seq"]:
             try:
                 now = self._load(self.record)
+                self._same(now)  # never stamp this store's floor onto a re-pointed record
                 if state.seq > now["seq"]:
                     _write_json(self.record, now | {"seq": state.seq, "head": state.head})
                     self.floor = (state.seq, state.head)
@@ -2742,3 +2746,24 @@ class Activation:
                 c._halted(lost)
                 raise lost from exc
         return status
+
+    @staticmethod
+    def _lost(exc: BaseException) -> JournalCorrupt:
+        if isinstance(exc, JournalCorrupt):
+            return exc
+        if isinstance(exc, PlannerError):
+            return JournalCorrupt(str(exc))
+        return JournalCorrupt(f"IO_ERROR:{type(exc).__name__}: {exc}")
+
+    def _same(self, raw: Mapping[str, Any]) -> None:
+        c = self.coordinator
+        if self._names(raw) != (
+            c.journal.store_id,
+            str(c.journal.home.resolve()),
+            str(c.journal.anchor_home.resolve()),
+            str(Path(getattr(c.planner.transport, "home", "")).resolve()),
+        ):
+            raise JournalCorrupt(
+                "ACTIVATION_CHANGED:the activation record no longer names the store and "
+                "spool this coordinator was opened on"
+            )

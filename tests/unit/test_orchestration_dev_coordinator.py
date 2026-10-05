@@ -1891,3 +1891,81 @@ def test_a_running_activation_follows_its_record(tmp_path):
     assert a1.tick([cand("C", "src/c")])["admitted"] == ["C"]
     assert json.loads(record.read_text())["seq"] == 3
     assert not (tmp_path / "elsewhere").exists()
+
+
+def test_a_halted_activation_never_writes_its_status_into_the_store(tmp_path):
+    """ATLAS-DEVQ-0014: the status path is checked before the refusal can be reported."""
+    j, record = _declared(tmp_path)
+    a = _open(tmp_path, record)
+    a.tick([cand("A", "src/a")])
+    shutil.rmtree(tmp_path / "spool" / j.store_id)  # the store is now refused at open
+    before = tree(tmp_path)
+    inside = (
+        j.root / "000000000002.json",
+        j.root / "000000000001.json",
+        j.anchor_home / STORE_MARKER,
+        tmp_path / "spool" / "newdir" / "status.json",
+    )
+    for path in inside:
+        with pytest.raises(PlannerError, match=r"STATUS_PATH:.* is inside"):
+            Activation.open(record, identity="x", verifier_identities=(VER,), status_path=path)
+    assert tree(tmp_path) == before and not (tmp_path / "spool" / "newdir").exists()
+    with pytest.raises(TransportError, match="SPOOL_BINDING"):
+        _open(tmp_path, record, identity="x")  # outside: refused and reported
+    assert _status(tmp_path)["state"] == "HALTED" and tree(tmp_path) == before
+
+
+def test_an_unreadable_floor_event_or_marker_halts_instead_of_escaping(tmp_path):
+    j, record = _declared(tmp_path)
+    a = _open(tmp_path, record)
+    a.tick([cand("A", "src/a")])
+    status = tmp_path / "status" / "status.json"
+    event = j.root / "000000000001.json"
+    kept = event.read_bytes()
+    event.unlink()
+    event.mkdir()  # not a file: reading it is an OSError, not a missing event
+    status.write_text(json.dumps({"state": "OK"}))
+    with pytest.raises(JournalCorrupt, match=r"IO_ERROR|ACTIVATION_ROLLED_BACK"):
+        a.tick([cand("B", "src/b")])
+    assert _status(tmp_path)["state"] == "HALTED"
+    event.rmdir()
+    event.write_bytes(kept)
+    marker = j.home / STORE_MARKER
+    good = marker.read_bytes()
+    marker.write_text("[" * 200_000)
+    status.write_text(json.dumps({"state": "OK"}))
+    with pytest.raises((RecursionError, JournalCorrupt)):
+        _open(tmp_path, record, identity="coord-2")
+    assert _status(tmp_path)["state"] == "HALTED"
+    marker.write_bytes(good)
+    # a record whose paths cannot be paths is a bad record, not a crash
+    raw = json.loads(record.read_text())
+    record.write_text(json.dumps(raw | {"journal": "/a\u0000b"}))
+    with pytest.raises(PlannerError, match="ACTIVATION_RECORD"):
+        _open(tmp_path, record, identity="coord-3")
+
+
+def test_a_record_repointed_during_a_tick_is_not_given_this_stores_floor(tmp_path):
+    _j, record = _declared(tmp_path)
+    a = _open(tmp_path, record)
+    other = StoreJournal.create(tmp_path / "o" / "journal", tmp_path / "o" / "anchor")
+    SpoolTransport.create(tmp_path / "o" / "spool", other.store_id)
+    raw = json.loads(record.read_text())
+    moved = raw | {
+        "store": other.store_id,
+        "journal": str(other.home.resolve()),
+        "anchor": str(other.anchor_home.resolve()),
+        "spool": str((tmp_path / "o" / "spool").resolve()),
+    }
+    real = a.coordinator.tick
+
+    def tick_then_repoint(candidates=()):
+        out = real(candidates)
+        record.write_text(json.dumps(moved))  # between the tick and the floor update
+        return out
+
+    a.coordinator.tick = tick_then_repoint
+    with pytest.raises(JournalCorrupt, match="ACTIVATION_RECORD:the floor could not be written"):
+        a.tick([cand("A", "src/a")])
+    assert json.loads(record.read_text()) == moved  # still seq 0: nothing of this store in it
+    assert _status(tmp_path)["state"] == "HALTED"

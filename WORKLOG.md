@@ -17064,6 +17064,14 @@ recovery / duplicate semantics as listed in the backlog.
 Stacked on ATLAS-DEVQ-0013 (#1074, head `afdb847f`), which was not merged when this was
 written. Addresses the activation blocker "durable activation". Local only: no entrypoint
 script or CLI command, no dispatch, no live run, nothing run in more than one process.
+A first head of this branch (`38fa1abb`) was superseded after independent verification
+(semantics FAIL): `open` wrote its HALTED status without checking where the status path
+points, so a status path inside the journal, anchor or spool was written there, over an
+event or a marker if so named; an unreadable floor event escaped `tick` as `OSError` with
+the old status left in place; a pathological store marker escaped `open` as
+`RecursionError`; a record path with a NUL byte escaped as `ValueError`; a record re-pointed
+during a tick was given this store's floor. This entry describes the branch after the
+second commit and replaces the entry that head carried.
 
 Behaviour (`dev_planner.py`, class `Activation`; nothing else changes behaviour):
 - `Activation.declare(record, store_id=, journal=, anchor=, spool=,
@@ -17076,34 +17084,45 @@ Behaviour (`dev_planner.py`, class `Activation`; nothing else changes behaviour)
   them with the bound transport. There is no default location, no in-memory journal and no
   unbound transport on this path. A missing, unreadable or other-version record, or a record
   inside the journal, anchor or spool directory, is a configuration refusal
-  (`ACTIVATION_RECORD`, no status written). A missing or foreign journal, anchor or spool is
-  reported in a HALTED status and raised.
+  (`ACTIVATION_RECORD`, no status written), and so is a status path inside one of the three
+  (`STATUS_PATH`), which is checked before anything can be written. A missing or foreign
+  journal, anchor or spool is reported in a HALTED status and raised; so is a store marker
+  or floor event that cannot be read.
 - The record keeps a floor: the highest event (sequence number and sha256) a completed tick
   of the activation has seen. `open`, and `Activation.tick` before every tick, refuse a
   store that does not hold that event (`ACTIVATION_ROLLED_BACK`, HALTED). A record that was
-  removed, damaged or re-pointed under a running activation halts it too.
+  removed, damaged or re-pointed under a running activation halts it too, and a record
+  re-pointed during a tick is not given this store's floor.
 
-Tests (`tests/unit/test_orchestration_dev_coordinator.py`): 55 -> 61 test functions (62
-collected), no existing test changed. New: six tests named `test_an_activation_...`,
+Tests (`tests/unit/test_orchestration_dev_coordinator.py`): 55 -> 64 test functions (65
+collected), no existing test changed. New: nine tests (`test_an_activation_...`,
 `test_nothing_is_activated_...`, `test_declare_needs_...`, `test_a_store_taken_back_...`,
-`test_an_activation_halts_...`, `test_a_running_activation_...`, and three helpers.
+`test_an_activation_halts_...`, `test_a_running_activation_...`,
+`test_a_halted_activation_never_writes_...`, `test_an_unreadable_floor_event_or_marker_...`,
+`test_a_record_repointed_during_a_tick_...`) and three helpers.
 The rollback test restores journal, anchor and spool from one snapshot: a plain `Coordinator`
 on the restored store ticks OK; the activation refuses it at `open` and in a running tick.
 
-Measured locally at this change: coordinator file 62 passed; 20 consecutive runs 62 passed
-each; all `tests/unit/test_orchestration_dev_*.py` 1088 passed; `ruff check src tests`
-clean; `mypy src` clean (415 files). Twelve mutants, each failing at least one test: no floor
-check; the floor never written; `declare` overwriting; a record inside the store accepted;
-any record shape accepted; `declare` without the spool; no store id comparison; a re-pointed
-record not noticed; no HALTED status from `open`; no boundary acceptance in `declare`; no
-floor check in `tick`; no HALTED status from `tick`.
+Measured locally at this change: coordinator file 65 passed; 20 consecutive runs 65 passed
+each; all `tests/unit/test_orchestration_dev_*.py` 1091 passed; `ruff check src tests`
+clean; `mypy src` clean (415 files). Seventeen mutants, each failing at least one test: no
+floor check; the floor never written; `declare` overwriting; a record inside the store
+accepted; any record shape accepted; `declare` without the spool; no store id comparison; a
+re-pointed record not noticed; no HALTED status from `open`; no boundary acceptance in
+`declare`; no floor check in `tick`; no HALTED status from `tick`; no status path check in
+`open`; `tick` not catching `OSError` from the floor check; `open` not catching
+`RecursionError`; the floor written into a re-pointed record; a NUL byte in a record path
+accepted.
 
 Still open after this: the floor is only as new as the last completed tick that could write
 it, so a rollback to a point at or after the floor is not seen; several coordinators on one
 record read, compare and replace it, so a lower floor that existed can be put back; the
 record is an unkeyed file that whoever can write it can lower or re-point, and restoring a
 store from a backup older than the floor needs an operator to remove the record and declare
-again; nothing calls `Activation` outside tests (no script, no CLI command, no service), and
+again; only the three named directories are excluded as the record's location (a record in a
+common parent of journal and anchor can be taken back with them), and `declare` is exclusive
+per record path, not per store; a record removed during a tick that appends nothing is
+noticed by the next tick; a rollback of the spool alone is not seen by the floor; nothing calls `Activation` outside tests (no script, no CLI command, no service), and
 declaring or opening one grants no authority and dispatches nothing; executors and adapters
 still have to be given the store id and spool directory by other means; everything listed
 as open under ATLAS-DEVQ-0013; nothing here was run by several processes or hosts.
