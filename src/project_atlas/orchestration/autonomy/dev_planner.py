@@ -134,7 +134,8 @@ Limits (what this is NOT):
     two lineages.
 
 Verified scope handover (ATLAS-DEVQ-0009): a work item that overlaps the last work of ANY
-earlier lineage in the same repository is admitted only when the DISPATCH event carries a
+earlier lineage in the same repository (as ``works_collide`` compares it: a ``.git`` or URL
+spelling counts as a different repository) is admitted only when the DISPATCH event carries a
 verified handover of that lineage's scope. This is a rule of the journal (``_transition``), so
 it holds for every planner and on replay; there is no switch. A phase, a timeout, a failure
 report (``fail_execution``) or an asserted merge revision (``release_scope``) never opens a
@@ -155,8 +156,9 @@ says nothing about the default branch or about who merged, and a handover does n
 result was integrated: a base equal to, or built on, the unmerged result branch satisfies
 it; commits pushed to the earlier result branch AFTER the verified revision are not covered
 (only the verified revision is); a journal written before this rule that admitted work over
-a retained scope no longer replays, and the previous code cannot replay a journal that
-contains a handover (both fail closed; the journal version is unchanged); and the scope of
+a retained scope no longer replays (fail closed), and an event that carries a handover is
+written as journal version 2, which the previous code refuses, so a journal with a handover
+does not replay there either; events without one are still version 1; and the scope of
 a BLOCKED or OWNER_REQUIRED lineage, or of an INTEGRATION_READY lineage whose result is not
 an ancestor of the base a new work is given, cannot be handed over at all yet.
 
@@ -273,6 +275,10 @@ _REPAIR_SUFFIX = re.compile(r"-R[0-9]+$")  # reserved for planner-materialised r
 
 
 JOURNAL_VERSION = 1
+# An event that carries a scope handover is written as version 2, so that code from before
+# ATLAS-DEVQ-0009 (which would ignore the entry) refuses the journal instead of replaying it.
+HANDOVER_VERSION = 2
+MAX_OBSERVER_IDENTITY = 200
 MAX_COMMIT_RETRIES = 16  # lost exclusive-create races before a commit gives up (never spins)
 _EVENT_FILE = re.compile(r"[0-9]{12}\.json")
 _ACK_FILE = re.compile(r"[0-9]{12}\.ack")
@@ -794,6 +800,7 @@ def _handover_entries(ev: dict[str, Any]) -> dict[str, dict[str, Any]]:
         if (
             not all(isinstance(h[k], str) and h[k] for k in _HANDOVER_KEYS - {"evidence"})
             or not _evidence_ok(evidence)
+            or not _observer_identity_ok(h["observer"])
             or h["root"] in out
         ):
             raise PlannerError("DISPATCH handover entry is malformed or repeated")
@@ -801,6 +808,15 @@ def _handover_entries(ev: dict[str, Any]) -> dict[str, dict[str, Any]]:
     if [h["root"] for h in raw] != sorted(out):
         raise PlannerError("DISPATCH handover entries must be ordered by lineage root")
     return out
+
+
+def _observer_identity_ok(identity: object) -> bool:
+    return (
+        isinstance(identity, str)
+        and 0 < len(identity) <= MAX_OBSERVER_IDENTITY
+        and identity == identity.strip()
+        and identity.isprintable()
+    )
 
 
 def _evidence_ok(evidence: object) -> bool:
@@ -845,8 +861,10 @@ def _transition(state: FleetState, ev: dict[str, Any], raw: bytes) -> Callable[[
     for replay and, before the append, for the event a live planner is about to write: an event
     that could not be replayed is never written.
     """
-    if ev.get("v") != JOURNAL_VERSION:
+    if ev.get("v") != (HANDOVER_VERSION if "handover" in ev else JOURNAL_VERSION):
         raise PlannerError(f"unsupported journal version {ev.get('v')!r}")
+    if "handover" in ev and ev.get("event") != "DISPATCH":
+        raise PlannerError("only a DISPATCH carries a handover")
     if type(ev.get("seq")) is not int or ev["seq"] != state.seq + 1 or ev.get("prev") != state.head:
         raise PlannerError("journal sequence or hash chain is broken")
     kind, root, planner = ev["event"], ev["root"], ev["planner"]
@@ -1152,9 +1170,7 @@ class Planner:
         self.identity = identity
         self.verifiers = tuple(verifier_identities)  # own copy: later mutation cannot bypass checks
         self.journal: Journal = MemoryJournal() if journal is None else journal
-        if observer is not None and not (
-            isinstance(getattr(observer, "identity", None), str) and observer.identity
-        ):
+        if observer is not None and not _observer_identity_ok(getattr(observer, "identity", None)):
             raise PlannerError("a handover observer needs a non-empty identity")
         self.observer = observer  # None: this planner never admits over an earlier scope
         self.state = FleetState()
@@ -1236,12 +1252,13 @@ class Planner:
         for _ in range(MAX_COMMIT_RETRIES):
             self.sync()
             self._anchor_head()  # a writer acknowledges what it builds on before it appends
+            decided = decide()
             ev = {
-                "v": JOURNAL_VERSION,
+                "v": HANDOVER_VERSION if "handover" in decided else JOURNAL_VERSION,
                 "seq": self.state.seq + 1,
                 "prev": self.state.head,
                 "planner": self.identity,
-                **decide(),
+                **decided,
             }
             raw = json.dumps(ev, sort_keys=True).encode()
             apply = _transition(self.state, ev, raw)
@@ -1343,9 +1360,10 @@ class Planner:
         already executing or being verified.
         A work item that overlaps the last work of a lineage that no longer holds its scope
         (BLOCKED, OWNER_REQUIRED, INTEGRATION_READY released with ``release_scope``, or
-        already handed over) is refused with ``SCOPE_RETAINED``, always: those phases end a
-        lineage or record a caller's assertion, and none is evidence that an executor stopped
-        writing, that a result branch is gone or that a candidate was merged.
+        already handed over) is refused with ``SCOPE_RETAINED`` unless the verified handover
+        below applies; for a BLOCKED or OWNER_REQUIRED lineage it never does. Those phases
+        end a lineage or record a caller's assertion, and none is evidence that an executor
+        stopped writing, that a result branch is gone or that a candidate was merged.
         VERIFIED HANDOVER is the one way a scope passes on: when the overlapped lineage is
         INTEGRATION_READY and this planner's ``observer`` reports that the lineage's verified
         result revision is an ancestor of the new work's ``base_revision``, the DISPATCH event
@@ -1760,9 +1778,7 @@ class Coordinator:
         accept_same_filesystem: bool = False,
         observer: HandoverObserver | None = None,
     ) -> None:
-        if observer is not None and not (
-            isinstance(getattr(observer, "identity", None), str) and observer.identity
-        ):
+        if observer is not None and not _observer_identity_ok(getattr(observer, "identity", None)):
             raise PlannerError("a handover observer needs a non-empty identity")
         self.observer = observer
         if not isinstance(journal, StoreJournal):
@@ -1962,7 +1978,7 @@ class Coordinator:
             "continuity_boundary": self.boundary,
             # one st_dev comparison is not an established boundary; nothing here claims one
             "live_conflicting_work_boundary": "NOT_ESTABLISHED",
-            # who observes for a verified scope handover; NONE: no scope is ever handed over
+            # who observes for a verified scope handover; NONE: this coordinator hands none over
             "scope_handover_observer": "NONE" if self.observer is None else self.observer.identity,
         }
 

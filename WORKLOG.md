@@ -16453,6 +16453,8 @@ seal change, no workflow / CLI change):
   only for lineages the work collides with. Applying the event marks the earlier lineage
   (`handover`, `handed_over_to`, history line `SCOPE_HANDED_OVER:<root>:<base>`); it stops
   holding its scope and stays closed to any later work without its own entry.
+- An observer identity is a printable string of 1 to 200 characters without surrounding
+  whitespace, checked at construction and in every journalled entry.
 - `HandoverObserver` protocol (`identity`, `result_in_base(repository=, result_revision=,
   base_revision=)`), given to `Planner(observer=)` / `Coordinator(observer=)` at
   construction and called inside the dispatch decision, once per (result, base) per dispatch.
@@ -16504,9 +16506,13 @@ What this does NOT establish (limits):
   closed in that journal.
   That needs evidence about the executor (leases / executor assignment, next increment).
 - A journal written before this rule that admitted work over a retained scope no longer
-  replays (`JOURNAL_CORRUPT ... SCOPE_RETAINED`), and the previous code cannot replay a
-  journal that contains a handover (`JOURNAL_CORRUPT ... SCOPE_COLLISION`). The journal
-  version was not changed, so only the replay tells the two apart.
+  replays (`JOURNAL_CORRUPT ... SCOPE_RETAINED`). An event that carries a handover is
+  written as journal version 2 (`HANDOVER_VERSION`); events without one stay version 1. The
+  previous code refuses version 2, so a journal with a handover does not replay there
+  (measured with main's module on two head-written journals, one with the handed-over
+  lineage released first: `JOURNAL_CORRUPT: ... unsupported journal version 2` for both).
+  At the second pushed head `d5db582a` the version was still 1 and the released case replayed
+  on main's code with the entry ignored; an evidence verifier found that.
 - Each dispatch re-observes every INTEGRATION_READY lineage it overlaps; the observer is
   called between the replay and the append of a commit, so a slow observer widens the window
   in which another writer wins the sequence number (retried, then `JOURNAL_CONTENDED`).
@@ -16517,7 +16523,7 @@ What this does NOT establish (limits):
   semantics) are open and listed in `docs/backlog.md`.
 
 Existing tests changed (compared with main `f3dcdba4` by test name and body):
-- `test_orchestration_dev_planner_journal.py`: 60 -> 75 test functions (89 collected with
+- `test_orchestration_dev_planner_journal.py`: 60 -> 75 test functions (90 collected with
   parametrised cases); two changed in place
   (`test_release_scope_needs_integration_ready_and_a_merge_revision`: a released scope is
   now refused; `test_fleet_status_is_derived_from_the_journal_alone`: two new row keys).
@@ -16531,14 +16537,14 @@ Existing tests changed (compared with main `f3dcdba4` by test name and body):
 - `test_orchestration_dev_fabric_adapter.py`: 81 -> 83 test functions, none changed.
 
 Commands and results (`PYTHONPATH=<worktree>/src`, `--no-cov -o addopts=""`):
-- `test_orchestration_dev_planner_journal.py` 89 passed, `_dev_coordinator.py` 42 passed
+- `test_orchestration_dev_planner_journal.py` 90 passed, `_dev_coordinator.py` 42 passed
   (these two together 30 consecutive runs, no failure), `_dev_fabric_adapter.py` 141 passed,
   `_dev_loop_contracts.py` 96 passed (the counts include parametrised cases).
 - The nine DEVQ files (`_dev_loop_contracts`, `_dev_queue`, `_dev_fabric_adapter`,
   `_dev_package`, `_dev_package_repair`, `_dev_crosswalk`, `_dev_spool_transport`,
-  `_dev_planner_journal`, `_dev_coordinator`): 893 passed.
+  `_dev_planner_journal`, `_dev_coordinator`): 894 passed.
 - `pytest tests/unit -k "orchestration_dev or dev_package or executor or agent_execute or
-  workflow or autonomy or global_foundation or github_port"`: 1591 passed, 5152 deselected.
+  workflow or autonomy or global_foundation or github_port"`: 1592 passed, 5152 deselected.
 - `ruff check .` clean; `ruff format --check` on the six changed Python files clean;
   `mypy src`: no issues in 415 source files.
 - Scratch mutants (two layout-dependent adapter tests deselected in the scratch copy): of
@@ -16549,8 +16555,10 @@ Commands and results (`PYTHONPATH=<worktree>/src`, `--no-cov -o addopts=""`):
   last handover base winning, `isinstance` instead of an exact `int` for a record's
   sequence number, entries not sorted by the planner. Each of these, and three new ones
   (a non-mapping accepted as evidence, an empty evidence pair accepted, the coordinator not
-  checking its observer), now fails one test or more. Not pinned: evidence keys not sorted
-  inside an entry; `str()` around a record's digest.
+  checking its observer), now fails one test or more. Two listed survivors are equivalent
+  (evidence keys unsorted inside an entry: events are serialised with sorted keys; `str()`
+  around a record's digest after the string check). Not pinned: acceptance at exactly 8
+  pairs / 256 characters / 64 entries (only the refusal side is tested).
 - `tests/unit/test_orchestration_dev_package_repair.py` is unchanged.
 - The full test suite was not run locally.
 

@@ -395,7 +395,8 @@ def test_garbage_and_non_object_events_are_refused(tmp_path):
 
 
 def _forge(path, seq, prev, **body):
-    ev = {"v": 1, "seq": seq, "prev": prev, "planner": "forger", **body}
+    version = body.pop("v", 2 if "handover" in body else 1)
+    ev = {"v": version, "seq": seq, "prev": prev, "planner": "forger", **body}
     raw = json.dumps(ev, sort_keys=True).encode()
     (path / f"{seq:012d}.json").write_bytes(raw)
     return hashlib.sha256(raw).hexdigest()
@@ -1832,7 +1833,9 @@ def test_a_scope_is_handed_over_only_when_the_result_is_observed_in_the_new_base
     assert a.handover == BASE2 and a.handed_over_to == ["B"]
     assert a.history[-1] == f"SCOPE_HANDED_OVER:B:{BASE2}" and a.last_seq == p.state.seq
     ev = json.loads((tmp_path / "j" / f"{p.state.seq:012d}.json").read_text())
-    assert ev["event"] == "DISPATCH" and ev["handover"] == [_entry()]
+    assert ev["event"] == "DISPATCH" and ev["handover"] == [_entry()] and ev["v"] == 2
+    first = json.loads((tmp_path / "j" / "000000000001.json").read_text())
+    assert first["v"] == 1  # an event without a handover is written as before
     # durable and derived from the journal alone: a planner without an observer replays it
     q = planner(InMemoryTransport(), DirJournal(tmp_path / "j"))
     assert q.lineages["A"].handover == BASE2 and q.in_flight() == {"B"}
@@ -1873,6 +1876,7 @@ def test_one_dispatch_asks_the_observer_once_per_result_and_base(tmp_path):
         Observer(),
         Observer(fail=PlannerError("compare unavailable or truncated")),
         Observer(fail=OSError("network")),
+        Observer(fail=TypeError("not a mapping")),
         Observer(answer={}),
         Observer(answer={"merge_base": 1}),
         Observer(answer="yes"),
@@ -1919,8 +1923,10 @@ def test_an_observer_needs_an_identity(tmp_path):
         def result_in_base(self, **kw):
             return {"merge_base": "x"}
 
-    with pytest.raises(PlannerError, match="observer needs a non-empty identity"):
-        observing(InMemoryTransport(), DirJournal(tmp_path / "j"), Nameless())
+    for bad in ("", " ", " x", "x" * 201, "a\nb", None, 5):
+        Nameless.identity = bad
+        with pytest.raises(PlannerError, match="observer needs a non-empty identity"):
+            observing(InMemoryTransport(), DirJournal(tmp_path / "j"), Nameless())
 
 
 def test_only_a_verified_result_can_be_handed_over_never_a_phase_or_a_report(tmp_path):
@@ -2008,6 +2014,13 @@ def test_a_journalled_handover_is_checked_on_replay(tmp_path):
         (d(w(BASE2, "src/x"), "A"), "wrong fields"),
         (d(w(BASE2, "src/x")) | {"handover": {"root": "A"}}, "bounded list"),
         (d(w(BASE2, "src/x")) | {"handover": [_entry()] * 65}, "bounded list"),
+        (d(w(BASE2, "src/x"), _entry(observer=" x")), "malformed or repeated"),
+        (d(w(BASE2, "src/x"), _entry(observer="x" * 201)), "malformed or repeated"),
+        # the version says whether a handover is inside: code from before the rule, which
+        # would ignore the entry, refuses version 2 instead of replaying the journal
+        (d(w(BASE2, "src/x"), _entry()) | {"v": 1}, "unsupported journal version 1"),
+        (d(w(BASE2, "src/q")) | {"v": 2}, "unsupported journal version 2"),
+        (dict(event="RELEASE", root="A", evidence=MERGED, handover=[]), "only a DISPATCH"),
     ]
     for body, why in cases:
         _forge(j, n + 1, head, **body)
@@ -2079,8 +2092,8 @@ def test_limit_a_second_loss_of_the_same_acknowledgement_leaves_no_second_record
     assert [r["seq"] for r in DirJournal(tmp_path / "j").repairs()] == [2]
 
 
-def test_an_adopted_head_that_is_lost_again_is_a_definite_loss(tmp_path):
-    """After adopting, the planner HAS seen the head acknowledged: a later loss is RESTORED."""
+def test_after_adopting_a_planner_counts_the_head_as_seen_acknowledged(tmp_path):
+    """After adopting, the planner counts the head as seen acknowledged."""
     t = SpoolTransport(tmp_path / "spool")
     planner(t, DirJournal(tmp_path / "j"), "plan-1").dispatch(qi("A"), **FIELDS)
     anchor = tmp_path / "j.ack"

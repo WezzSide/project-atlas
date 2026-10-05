@@ -1876,6 +1876,8 @@ def test_result_in_base_observer_reports_only_an_observed_ancestor():
         ask | {"result_revision": "main"},
         ask | {"base_revision": R2[:39]},
         ask | {"base_revision": R2.upper()},
+        ask | {"base_revision": R2 + "\n"},
+        ask | {"result_revision": R1 + "\n"},
     ):
         assert obs.result_in_base(**bad) is None
     assert len(gh.compared) == n  # refused without asking the port
