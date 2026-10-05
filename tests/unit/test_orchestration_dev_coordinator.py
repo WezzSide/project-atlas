@@ -1978,3 +1978,27 @@ def test_a_record_repointed_during_a_tick_is_not_given_this_stores_floor(tmp_pat
         a.tick([cand("A", "src/a")])
     assert json.loads(record.read_text()) == moved  # still seq 0: nothing of this store in it
     assert _status(tmp_path)["state"] == "HALTED"
+
+
+def test_a_symlink_loop_halts_an_activation_on_every_supported_python(tmp_path, monkeypatch):
+    """Before Python 3.13 ``Path.resolve`` raises ``RuntimeError`` on a symlink loop."""
+    j, record = _declared(tmp_path)
+    a = _open(tmp_path, record)
+    assert a.tick([])["state"] == "OK"
+    shutil.rmtree(j.anchor_home)
+    os.symlink(j.anchor_home, j.anchor_home)
+    real = Path.resolve
+
+    def resolve_312(self, strict=False):
+        if str(self).startswith(str(j.anchor_home)):
+            raise RuntimeError(f"Symlink loop from {self}")
+        return real(self, strict=strict)
+
+    monkeypatch.setattr(Path, "resolve", resolve_312)
+    with pytest.raises(JournalCorrupt):
+        a.tick([])
+    assert _status(tmp_path)["state"] == "HALTED"
+    (tmp_path / "status" / "status.json").write_text(json.dumps({"state": "OK"}))
+    with pytest.raises((JournalCorrupt, OSError)):
+        _open(tmp_path, record, identity="coord-2")
+    assert _status(tmp_path)["state"] == "HALTED"

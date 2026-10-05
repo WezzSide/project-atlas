@@ -219,7 +219,7 @@ against one failure mode, not proof of independent storage.
 Declared activation (ATLAS-DEVQ-0014): ``Activation`` is how a coordinator is meant to be
 started outside tests. An operator declares, once, which existing store and spool are
 activated; every start reads that record, attaches to exactly what it names and creates
-nothing. The record also keeps the highest event a tick has seen, outside journal and anchor,
+no store and no spool. The record also keeps the highest event a tick has seen, outside journal and anchor,
 so a store taken back as a whole below that event is refused. See the class for its limits.
 """
 
@@ -2500,8 +2500,8 @@ class Activation:
     overwritten by ``declare``). It creates no store and no spool.
 
     ``open`` (every start): reads the record, attaches to exactly the store and spool it
-    names, and builds a ``Coordinator`` on them. Nothing is created, there is no default
-    location, no in-memory journal and no unbound transport. It refuses, with nothing
+    names, and builds a ``Coordinator`` on them. No store and no spool is created, there is
+    no default location, no in-memory journal and no unbound transport. It refuses, with nothing
     written into the store or the spool:
       * no record, an unreadable one, or one of another version (``ACTIVATION_RECORD``, a
         ``PlannerError``: a configuration refusal, no status is written);
@@ -2580,10 +2580,20 @@ class Activation:
         return dict(raw)
 
     @staticmethod
-    def _outside(path: Path, raw: Mapping[str, Any], code: str = "ACTIVATION_RECORD") -> None:
-        where = Path(path).resolve()
+    def _real(path: Path | str) -> Path:
+        """``resolve``, except that a symlink loop (a ``RuntimeError`` before Python 3.13)
+        gives the absolute unresolved path, as 3.13 does; using the path then fails with an
+        ``OSError`` where it is used."""
+        try:
+            return Path(path).resolve()
+        except RuntimeError:
+            return Path(os.path.abspath(path))
+
+    @classmethod
+    def _outside(cls, path: Path, raw: Mapping[str, Any], code: str = "ACTIVATION_RECORD") -> None:
+        where = cls._real(path)
         for key in ("journal", "anchor", "spool"):
-            if where.is_relative_to(Path(raw[key]).resolve()):
+            if where.is_relative_to(cls._real(raw[key])):
                 raise PlannerError(
                     f"{code}:{path} is inside the {key} directory; neither the activation "
                     "record nor the status file may live in what the record names"
@@ -2620,9 +2630,9 @@ class Activation:
         raw: dict[str, Any] = {
             "v": ACTIVATION_VERSION,
             "store": store_id,
-            "journal": str(Path(journal).resolve()),
-            "anchor": str(Path(anchor).resolve()),
-            "spool": str(Path(spool).resolve()),
+            "journal": str(cls._real(journal)),
+            "anchor": str(cls._real(anchor)),
+            "spool": str(cls._real(spool)),
             "accept_same_filesystem": accept_same_filesystem,
             "seq": 0,
             "head": "",
@@ -2647,7 +2657,7 @@ class Activation:
                 fh.flush()
                 os.fsync(fh.fileno())
             try:
-                os.link(tmp, record)  # exclusive: a declared activation is never overwritten
+                os.link(tmp, record)  # exclusive: declare never overwrites a record
             except FileExistsError:
                 raise PlannerError(
                     f"ACTIVATION_RECORD:{record} exists; an activation is declared once"
@@ -2683,17 +2693,21 @@ class Activation:
         executors: Sequence[str] = (),
         executor_limit: int = 1,
     ) -> Activation:
-        """Attach to the declared store and spool and build the coordinator. Creates nothing."""
+        """Attach to the declared store and spool and build the coordinator.
+
+        Creates no store and no spool; on a refusal it writes the HALTED status file.
+        """
         raw = cls._load(record)
         cls._outside(record, raw)
         try:
             status_path = Path(status_path)
-            same = status_path.resolve() == Path(record).resolve()
+            status_path.resolve()  # a symlink loop is a RuntimeError before Python 3.13
+            same = cls._real(status_path) == cls._real(record)
             # before anything can be written: a HALTED status must not land in the store
             cls._outside(status_path, raw, "STATUS_PATH")
         except PlannerError:
             raise
-        except (TypeError, ValueError) as exc:  # not a usable path (e.g. a NUL byte)
+        except (TypeError, ValueError, RuntimeError) as exc:  # e.g. a NUL byte
             raise PlannerError(f"STATUS_PATH:not a usable path: {type(exc).__name__}") from exc
         if same:
             raise PlannerError("STATUS_PATH:the status file and the activation record differ")
@@ -2769,9 +2783,9 @@ class Activation:
         c = self.coordinator
         if self._names(raw) != (
             c.journal.store_id,
-            str(c.journal.home.resolve()),
-            str(c.journal.anchor_home.resolve()),
-            str(Path(getattr(c.planner.transport, "home", "")).resolve()),
+            str(self._real(c.journal.home)),
+            str(self._real(c.journal.anchor_home)),
+            str(self._real(getattr(c.planner.transport, "home", ""))),
         ):
             raise JournalCorrupt(
                 "ACTIVATION_CHANGED:the activation record no longer names the store and "

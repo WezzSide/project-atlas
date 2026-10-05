@@ -17070,12 +17070,17 @@ A first head of this branch (`38fa1abb`) was superseded after independent verifi
 points, so a status path inside the journal, anchor or spool was written there, over an
 event or a marker if so named; an unreadable floor event escaped `tick` as `OSError` with
 the old status left in place; a pathological store marker escaped `open` as
-`RecursionError`; a record path with a NUL byte escaped as `ValueError`; a record re-pointed
+`RecursionError`; a journal, anchor or spool path in the record containing a NUL byte
+escaped `open` as `ValueError`; a record re-pointed
 during a tick was given this store's floor. A second head (`765db7d1`) was superseded too:
 a pathologically nested store marker still escaped a RUNNING `Activation.tick` (and a plain
 `Coordinator.tick`) as `RecursionError` with the old status left in place, because
-`StoreJournal._marker` did not treat that as an unusable marker. This entry describes the
-branch after the third commit and replaces the entries those heads carried.
+`StoreJournal._marker` did not treat that as an unusable marker. A third head (`2f628488`)
+was superseded as well (semantics FAIL, on Python 3.12 only): there `Path.resolve` raises
+`RuntimeError` on a symlink loop, and with the journal, anchor or spool directory turned
+into one, `Activation.open` and `Activation.tick` let that `RuntimeError` out with the old
+status left in place. This entry describes the branch after the fourth commit and replaces
+the entries those heads carried.
 
 Behaviour (`dev_planner.py`): the new class `Activation`, and one change to existing code:
 `StoreJournal._marker` reports a marker that makes the JSON parser raise `RecursionError` as
@@ -17096,33 +17101,44 @@ write HALTED and raise it; a plain `Coordinator` on such a marker was not tested
   (`ACTIVATION_RECORD`, no status written), and so is a status path inside one of the three
   (`STATUS_PATH`), which is checked before anything can be written. A missing or foreign
   journal, anchor or spool is reported in a HALTED status and raised; so is a store marker
-  or floor event that cannot be read. A status path that is not a usable path is a
-  configuration refusal.
+  or floor event that cannot be read. A status path that is not a usable path (a NUL byte,
+  or a symlink loop where `resolve` raises) is a configuration refusal. `open` creates no
+  store and no spool; on such a refusal it writes the HALTED status file, with missing
+  parent directories.
+- A journal, anchor or spool directory that is a symlink loop is handled the same on Python
+  3.12 and 3.13: `Activation` no longer lets the `RuntimeError` of `resolve` out; the attach
+  or the tick then fails on the directory and HALTED is written.
 - The record keeps a floor: the highest event (sequence number and sha256) a completed tick
   of the activation has seen. `open`, and `Activation.tick` before every tick, refuse a
   store that does not hold that event (`ACTIVATION_ROLLED_BACK`, HALTED). A record that was
   removed, damaged or re-pointed under a running activation halts it too, and a record
   re-pointed during a tick is not given this store's floor.
 
-Tests (`tests/unit/test_orchestration_dev_coordinator.py`): 55 -> 64 test functions (65
-collected), no existing test changed. New: nine tests (`test_an_activation_...`,
+Tests (`tests/unit/test_orchestration_dev_coordinator.py`): 55 -> 65 test functions (66
+collected), no existing test changed. New: ten tests (`test_an_activation_...`,
 `test_nothing_is_activated_...`, `test_declare_needs_...`, `test_a_store_taken_back_...`,
 `test_an_activation_halts_...`, `test_a_running_activation_...`,
 `test_a_halted_activation_never_writes_...`, `test_an_unreadable_floor_event_or_marker_...`,
-`test_a_record_repointed_during_a_tick_...`) and three helpers.
+`test_a_record_repointed_during_a_tick_...`, `test_a_symlink_loop_halts_...`, which makes
+`Path.resolve` raise as 3.12 does) and three helpers.
 The rollback test restores journal, anchor and spool from one snapshot: a plain `Coordinator`
 on the restored store ticks OK; the activation refuses it at `open` and in a running tick.
 
-Measured locally at this change: coordinator file 65 passed; 20 consecutive runs 65 passed
-each; all `tests/unit/test_orchestration_dev_*.py` 1091 passed; `ruff check src tests`
-clean; `mypy src` clean (415 files). Nineteen mutants; eighteen each fail at least one test: no
+Measured locally at this change: coordinator file 66 passed; 20 consecutive runs 66 passed
+each; all `tests/unit/test_orchestration_dev_*.py` 1092 passed on Python 3.13.16 and 1092
+on Python 3.12.3; `ruff check src tests` clean; `mypy src` clean (415 files). On 3.12.3,
+with the journal, anchor or spool directory made a symlink loop, `open`, a tick without and
+a tick with a candidate each raised `JournalCorrupt` or `TransportUnavailable` and left
+HALTED (9 of 9; the verifier of `2f628488` reported `RuntimeError` with the old status for all 9). Twenty
+mutants; nineteen each fail at least one test: no
 floor check; the floor never written; `declare` overwriting; a record inside the store
 accepted; any record shape accepted; `declare` without the spool; no store id comparison; a
 re-pointed record not noticed; no HALTED status from `open`; no boundary acceptance in
 `declare`; no floor check in `tick`; no HALTED status from `tick`; no status path check in
 `open`; `tick` not catching `OSError` from the floor check; the floor written into a
-re-pointed record; a NUL byte in a record path accepted; `_marker` not catching
-`RecursionError`; an unusable status path not refused. One fails no test: `open` not
+re-pointed record; a NUL byte in a path named by the record accepted; `_marker` not catching
+`RecursionError`; an unusable status path not refused; a symlink loop not tolerated. One
+fails no test: `open` not
 catching `RecursionError` (it failed a test at `765db7d1`; since `_marker` reports that
 marker itself, no test makes `open` or `tick` see a `RecursionError`, and the two `except`
 entries are untested code).
@@ -17140,8 +17156,14 @@ nothing calls `Activation` outside tests (no script, no CLI command, no service)
 declaring or opening one grants no authority and dispatches no executor (a tick given
 candidates admits them and publishes their work records into the spool, as a `Coordinator`
 tick does); a configuration refusal leaves an earlier status in place; a change of
-`accept_same_filesystem` in the record is not noticed by a running activation; executors and adapters
-still have to be given the store id and spool directory by other means; everything listed
+`accept_same_filesystem` in the record is not noticed by a running activation; the status
+path is checked at `open` only, so a status directory replaced afterwards by a link into
+the journal directory receives later statuses there; `declare`, and `open` given something
+that is not a path, raise a bare `TypeError` or `ValueError` for an unusable path argument
+(nothing is written); a broken marker under a running activation whose floor is above zero
+is reported under the `ACTIVATION_ROLLED_BACK` label with the marker error inside it; the
+`Coordinator` constructor resolves the status path itself, unchanged here; executors and
+adapters still have to be given the store id and spool directory by other means; everything listed
 as open under ATLAS-DEVQ-0013; nothing here was run by several processes or hosts.
 
 Governance record (owner steering, 2026-10-05): authority-timing anomaly on the merge of
