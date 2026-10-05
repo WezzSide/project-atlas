@@ -186,8 +186,9 @@ class SpoolTransport:
         """Create the directories of ``store_id`` in ``home``; of several callers one wins.
 
         The store's directory is made with one exclusive ``mkdir``; whoever does not make it
-        gets ``SPOOL_EXISTS``. A spool whose creation was interrupted after that step can be
-        neither attached nor created again; an operator has to remove it. Nothing remembers
+        gets ``SPOOL_EXISTS``. A spool whose creation was interrupted after that step and
+        before its last directory was made can be neither attached nor created again; an
+        operator has to remove it. Nothing remembers
         that a spool existed: after its directory was removed, ``create`` makes a new, empty
         one for the same id.
         """

@@ -16943,8 +16943,11 @@ constructor re-created a bound spool; a plain `DirJournal` could replay the data
 directories; three sentences were false. A second head (`e9b12cb3`, the behaviour described
 here) was superseded for two sentences that said more than holds (what happens to a write
 when an outer directory was exchanged; when a HALTED status reports the transport's
-binding) and for a test name that promised "never reported as ok". This entry describes the
-branch after the third commit and replaces the entries those heads carried.
+binding) and for a test name that promised "never reported as ok". A third head (`8f84d1f1`,
+same behaviour) was superseded for sentences that were still too wide (a write into the
+unexchanged outer directory "is not affected"; a tick over a vanished spool "still writes
+OK"; a count of status paths; "not changed in text"; a test comment). This entry describes
+the branch after the fourth commit and replaces the entries those heads carried.
 
 Behaviour (`dev_planner.py`):
 - `StoreJournal` layout, marker version 2: each of the two outer directories (`home`,
@@ -16960,8 +16963,8 @@ Behaviour (`dev_planner.py`):
   stays in this store's own data directory; if the outer directory a write goes into was
   exchanged for another store's, the write does not happen (the call fails, or the append is
   refused), so nothing of this store is written into the other store's files, while a write
-  into the other, unexchanged outer directory is not affected; either way the next check
-  refuses the store. The check before each write is still a separate step.
+  that goes into the other, unexchanged outer directory can still happen; either way the
+  next check refuses the store. The check before each write is still a separate step.
 - `Planner.pump` raises `TransportUnavailable` from the transport's `claim` instead of
   quarantining it.
 - `Coordinator` refuses a transport whose `store_id` is another store's (always) or missing
@@ -17009,12 +17012,12 @@ and, beyond those:
   data directory holds its marker and no acknowledgement (it was empty);
 - `test_published_work_the_journal_does_not_know_stops_every_coordinator`: the HALTED status
   has the key `transport_store`.
-Not changed in text but different in what they address, because `root` and `anchor` are now
-the data directories: `test_an_anchor_directory_removed_under_a_running_coordinator_leaves_a_halted_status`
+Not changed in code (the second has one reworded comment) but different in what they
+address, because `root` and `anchor` are now the data directories: `test_an_anchor_directory_removed_under_a_running_coordinator_leaves_a_halted_status`
 and `test_a_coordinator_checks_its_observer_before_anything_else` remove the anchor's data
 directory, not the outer directory with its marker (the first still gets `STORE_IDENTITY`,
 the second its observer refusal); the plain `DirJournal` in
-`test_attach_creates_nothing_and_refuses_a_missing_or_foreign_part` and two of the status
+`test_attach_creates_nothing_and_refuses_a_missing_or_foreign_part` and three of the status
 paths in `test_the_status_file_may_not_live_inside_the_store_or_the_transport` point at data
 directories. The fabric adapter is unchanged; its comment "poisoned request: parked once"
 does not describe a missing bound spool, for which nothing is parked.
@@ -17040,8 +17043,8 @@ changed is that such a tombstone now stays.
 Still open after this: the identity check and the write are two steps, for the store and for
 the spool (after a removal between a bound spool's check and the operation, a call may read
 as empty, fail, or act on what is left; nothing re-creates the directories), and a
-coordinator tick whose last transport call falls into that window, or whose spool goes
-missing after that call, still writes OK, the next tick HALTED; whoever can write an
+coordinator tick can still write OK when its spool goes missing inside its last transport
+call or after it (the next tick is HALTED); whoever can write an
 exchanged directory or the spool can put a directory or a symbolic link named after the
 store's id there, and a write inside the window then lands in it; ids, markers and directory
 names are unkeyed, and a copy of a whole store directory is that store as far as the code

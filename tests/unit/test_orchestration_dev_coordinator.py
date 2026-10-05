@@ -1562,7 +1562,7 @@ def test_two_stores_given_one_spool_directory_never_touch_each_others_records(tm
     sa, sb = ca.tick([]), cb.tick([])
     assert (sa["state"], sb["state"]) == ("OK", "OK")
     assert sa["transport_store"] == a.store_id and sb["transport_store"] == b.store_id
-    # contrast: the same two stores on one UNBOUND spool stop each other
+    # contrast: two stores on one UNBOUND spool; the second coordinator stops on the first's work
     plain = SpoolTransport(tmp_path / "plain")
     kw = common | {"accept_unbound_transport": True}
     a2, b2 = (

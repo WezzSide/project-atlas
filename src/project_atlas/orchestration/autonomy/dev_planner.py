@@ -710,8 +710,8 @@ class StoreJournal(DirJournal):
     outer directory a write goes into was exchanged for another store's, there is no
     directory of this id in it and the write does not happen (the call fails, or the
     append is refused), so nothing of this store is written into the other store's files;
-    a write into the other, unexchanged outer directory is not affected. Either way the
-    next check refuses the store. It does not help against whoever puts something named
+    a write that goes into the other, unexchanged outer directory can still happen. Either
+    way the next check refuses the store. It does not help against whoever puts something named
     after this store's id into the exchanged directory (an empty directory, a symbolic
     link): a write inside the window then lands there, and only the next check sees it.
     Nothing here creates a directory or a marker implicitly, so a journal or anchor that
@@ -2167,9 +2167,9 @@ class Coordinator:
         just journalled, stays journalled. A ``TransportError`` from ``claim`` does not stop
         the tick: ``pump`` reports it as a quarantined record, unless it is
         ``TransportUnavailable``, which stops the tick with ``HALTED`` like the others. A
-        bound spool is looked at when each transport call starts: directories that go
-        missing inside the tick's last transport call, or after it, are not seen by that
-        tick, which can still write ``OK``; the next tick halts.
+        bound spool is looked at when each transport call starts: a tick can still write
+        ``OK`` when the directories go missing inside its last transport call or after
+        it; the next tick halts.
     """
 
     def __init__(
