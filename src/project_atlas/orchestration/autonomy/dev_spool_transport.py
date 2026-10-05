@@ -9,9 +9,10 @@ synchronisation medium and role identities (``FLEET_TRANSPORT_INTEGRATION_READY`
 
 Layout::
 
-    <root>/<CHANNEL>/<seal>.json                 published, unclaimed
+    <root>/<CHANNEL>/<seal>.json                 published, unclaimed (or a leftover name of a
+                                                 withdrawn record, never handed out)
     <root>/<CHANNEL>/<seal>.to                    addressee of the record, if it has one
-    <root>/<CHANNEL>/withdrawn/<seal>.json        tombstone written by ``withdraw``
+    <root>/<CHANNEL>/withdrawn/<seal>.json        tombstone written by ``withdraw``, kept for good
     <root>/<CHANNEL>/rejected/<name>              a file ``claim`` could not hand out, parked
     <root>/<CHANNEL>/claimed/<seal>.json          consumed (content kept as durable evidence)
     <root>/<CHANNEL>/claimed/<seal>.claim.json    who claimed it
@@ -19,7 +20,9 @@ Layout::
 Guarantees: atomic publish (temp + ``os.link``: never overwrites, never half-written);
 consume-once across concurrent claimers: the ownership transition is the EXCLUSIVE CREATION of
 the ``claimed/<seal>.json`` name with ``os.link`` (it fails with ``FileExistsError`` for every
-claimer but one, on POSIX and on Windows). ``os.rename`` is deliberately NOT the ownership
+claimer but one, on POSIX and on Windows; the one claimer removes that name again, and
+returns nothing, only when the record was withdrawn meanwhile, see ``withdraw``).
+``os.rename`` is deliberately NOT the ownership
 primitive: on Windows it opens the source by name and renames by handle, so several claimers that
 opened the same file before the first rename completed can each report success. Removing the
 pending name afterwards is mere cleanup of the winner's own record and never decides ownership.
@@ -97,14 +100,16 @@ def _claim_link(src: Path, dest: Path) -> None:
 
 
 def _release_pending(path: Path) -> None:
-    """Best-effort removal of the winner's own pending name (never decides ownership).
+    """Best-effort removal of a pending name by its claimer or publisher.
+
+    It never decides ownership.
 
     A concurrent claimer may still hold the pending file open for reading; on Windows that makes
     the delete fail transiently, so retry boundedly. After a claim, a name that still cannot
     be removed is inert: the record is in ``claimed/`` (ownership is already decided) and
     every later claimer loses the exclusive create. ``withdraw`` and ``publish`` call this
-    too, for a record nobody claimed; there a leftover name stays in the spool and it is the
-    tombstone that keeps ``claim`` from handing it out.
+    too, for the name of a withdrawn record; there a leftover name stays in the spool and it
+    is the tombstone that keeps ``claim`` from handing it out.
     """
     with contextlib.suppress(OSError):
         _retry_transient(path.unlink, still_valid=path.exists)
@@ -171,7 +176,8 @@ class SpoolTransport:
         publish of the same seal can win the record name first (the planner never publishes
         one seal both ways). ``claim`` and ``claimed_records`` honour the address.
         A seal that was withdrawn (``withdraw``) is not published again: this returns False
-        for it, before and after creating the record's name.
+        for it, before and after creating the record's name (a name it created and cannot
+        remove again stays, and is not handed out).
         """
         channel = CHANNEL_FOR_KIND[record.KIND]
         wire = encode(record)  # verifies the seal
@@ -275,6 +281,13 @@ class SpoolTransport:
                 if self._park(d, path):
                     raise TransportError("record could not be claimed and was parked") from None
                 continue
+            if (d / _WITHDRAWN / path.name).exists():
+                # withdrawn between the check above and the link: give the claim back. Either
+                # this sees the tombstone or ``withdraw`` sees the claim (each writes its own
+                # mark first and then looks for the other's), so a record is never both.
+                with contextlib.suppress(OSError):
+                    dest.unlink()
+                continue
             _release_pending(path)  # cleanup only; ownership was decided by the link above
             meta = d / _CLAIMED / f"{rec.seal}.claim.json"
             tmp = meta.with_suffix(".tmp")
@@ -300,38 +313,36 @@ class SpoolTransport:
         return True
 
     def withdraw(self, record: Record) -> bool:
-        """Take a record back for good unless somebody claimed it.
-
-        True when this call wrote the tombstone and saw no claim; False when the record is
-        claimed, when the seal already had a tombstone, or when the spool cannot be written.
+        """Take a record back for good; True when this call did and nobody had claimed it.
 
         A tombstone ``withdrawn/<seal>.json`` is created first (exclusively; it holds the
-        record as evidence), then the pending name, if there is one, is removed. The
-        tombstone is written also when the record is not in the spool at all, so that a
-        ``publish`` of that seal which is still on its way is refused: ``publish`` looks for
-        the tombstone before it starts and again after it created the record's name, and
-        removes its own name when it finds one. A record that a claimer already has stays
-        the claimer's: this returns False and removes the tombstone again. Returns False as
-        well when the seal was withdrawn before. Best effort: it does not raise for a spool
-        it cannot write, and a pending name it cannot remove stays in the spool next to its
-        tombstone; ``claim`` skips a pending record whose seal has a tombstone, and
-        ``published`` does not list it. Two windows remain, both between two steps of
-        different calls: a claimer that linked the record between ``publish`` creating the
-        name and ``publish`` seeing the tombstone keeps it, and so does a claimer that looked
-        for the tombstone before this call wrote it and links a name this call could not
-        remove after this call looked for a claim; in the second case this call has returned
-        True. Neither makes the claimed execution's result acceptable: that is decided by the
-        journal, not here.
+        record as evidence) and is never removed again; then the pending name, if there is
+        one, is removed (best effort) and the claim is looked for. The tombstone is written
+        also when the record is not in the spool at all, so a ``publish`` of that seal that
+        is still on its way is refused. From the tombstone on, ``publish`` refuses the seal,
+        ``claim`` does not hand the record out (it looks for the tombstone before and again
+        after its link, and gives the claim back when it finds one) and ``claimed_records``
+        does not return it.
+
+        True: this call wrote the tombstone and found no claim after it; no ``claim`` or
+        ``claimed_records`` call returns the record afterwards. ``withdraw`` and ``claim``
+        each write their own mark and then look for the other's, so never both succeed.
+        False: the record was claimed before this call, or a claim was found after the
+        tombstone was written (that claimer keeps the record if it looked for the tombstone
+        before it existed, else it gives the claim back; either way the record is no longer
+        re-adopted through ``claimed_records``), or the seal already had a tombstone, or the
+        tombstone could not be written. False therefore does not mean "still deliverable".
+        Best effort: it does not raise for a spool it cannot write. Whoever can write the
+        spool directory can create or remove a tombstone, as with an address; anything at
+        the tombstone's path counts as one.
         """
         channel = CHANNEL_FOR_KIND[record.KIND]
         wire = encode(record)
         d = self._dir(channel)
         name = f"{record.seal}.json"
         tomb = d / _WITHDRAWN / name
-        if (d / _CLAIMED / name).exists():
-            with contextlib.suppress(OSError):
-                tomb.unlink()  # a tombstone next to a claimed record says nothing
-            return False
+        if (d / _CLAIMED / name).exists() and not tomb.exists():
+            return False  # claimed before anybody took it back: the claimer's, no tombstone
         fresh = False
         try:
             tomb.parent.mkdir(exist_ok=True)
@@ -346,23 +357,21 @@ class SpoolTransport:
                         os.link(tmp, tomb)
                         fresh = True
                 finally:
-                    os.unlink(tmp)
+                    with contextlib.suppress(OSError):
+                        os.unlink(tmp)
         except OSError:
             return False
         _release_pending(d / name)
-        if (d / _CLAIMED / name).exists():  # a claimer linked it meanwhile: it is the claimer's
-            with contextlib.suppress(OSError):
-                tomb.unlink()
-            return False
-        return fresh
+        return fresh and not (d / _CLAIMED / name).exists()
 
     def published(self, channel: Channel) -> list[Record]:
         """Every decodable record this spool holds on ``channel``, pending or claimed.
 
         Read-only: what the spool directory holds now. Records are kept after a claim, so
-        absent loss this is what was published and neither rejected nor withdrawn (a pending
-        record whose seal has a tombstone is not listed; a claimed one is, tombstone or not,
-        which matters only inside the windows ``withdraw`` documents); a file that cannot be
+        absent loss this is what was published and neither rejected nor withdrawn, with two
+        exceptions: a pending record whose seal has a tombstone is held but not listed, and
+        a claimed record is listed, tombstone or not (see ``withdraw`` for when a claimed
+        record has one); a file that cannot be
         decoded, or whose name or channel does not match its record, is skipped (it would be
         parked on a claim, never handed out).
         """
@@ -383,7 +392,10 @@ class SpoolTransport:
         return [out[k] for k in sorted(out)]
 
     def claimed_records(self, channel: Channel, *, identity: str) -> list[Record]:
-        """Records this identity claimed earlier (crash recovery: claim-before-persist window)."""
+        """Records this identity claimed earlier (crash recovery: claim-before-persist window).
+
+        A record whose seal has a tombstone is not returned (see ``withdraw``).
+        """
         d = self._dir(channel) / _CLAIMED
         out: list[Record] = []
         for rec_path in sorted(p for p in d.glob("*.json") if not p.name.endswith(".claim.json")):
@@ -401,6 +413,8 @@ class SpoolTransport:
                 addressee = self._addressee(channel, seal)
                 if addressee is not None and not same_identity(identity, addressee):
                     continue  # addressed to another identity: never re-adopted by this one
+                if (self._dir(channel) / _WITHDRAWN / rec_path.name).exists():
+                    continue  # taken back by its publisher: not re-adopted by anybody
                 out.append(rec)
             except (OSError, ValueError, ContractError, RecursionError):
                 continue  # unreadable claim evidence is ignored, never trusted
