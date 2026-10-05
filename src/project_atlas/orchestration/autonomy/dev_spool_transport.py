@@ -154,8 +154,9 @@ class SpoolTransport:
     every call of a bound transport first checks that the store's directories are there
     and are real directories, not symbolic links (``SPOOL_BINDING``, raised as
     ``TransportUnavailable``): a spool that is missing when a call starts is an error,
-    not "no records". Limits: the check and the operation are two steps (directories
-    removed in between read as empty, or fail with ``OSError``; nothing re-creates them);
+    not "no records". Limits: the check and the operation are two steps (after a removal
+    in between, a call may read as empty, fail, or act on what is left; nothing re-creates
+    the directories);
     nothing remembers that a spool existed, so ``create`` after a removal makes a new,
     empty one under the same id; the store id is not secret and not authenticated, and
     whoever can write the spool directory can write into it or plant a link in it.

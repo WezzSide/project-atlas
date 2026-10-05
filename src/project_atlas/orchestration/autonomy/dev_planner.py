@@ -706,13 +706,14 @@ class StoreJournal(DirJournal):
     writes. So the store id is part of the path of every event, acknowledgement and repair
     record this object writes (ATLAS-DEVQ-0013), and only ``create`` ever makes a data
     directory. What that gives in the window between ``check_store`` and a write: if only
-    a marker was rewritten, the write stays in this store's own data directory; if an
-    outer directory was exchanged for another store's, there is no directory of this id
-    in it and nothing is written (an acknowledgement, a repair record or a first event
-    raise ``OSError``; a later event is a refused append); either way the next check
-    refuses the store. It does not help against whoever puts something named after this
-    store's id into the exchanged directory (an empty directory, a symbolic link): a write
-    inside the window then lands there, and only the next check sees it.
+    a marker was rewritten, the write stays in this store's own data directory; if the
+    outer directory a write goes into was exchanged for another store's, there is no
+    directory of this id in it and the write does not happen (the call fails, or the
+    append is refused), so nothing of this store is written into the other store's files;
+    a write into the other, unexchanged outer directory is not affected. Either way the
+    next check refuses the store. It does not help against whoever puts something named
+    after this store's id into the exchanged directory (an empty directory, a symbolic
+    link): a write inside the window then lands there, and only the next check sees it.
     Nothing here creates a directory or a marker implicitly, so a journal or anchor that
     went missing is never mistaken for, or re-created as, a fresh start:
       * a missing or foreign anchor fails at attach and at every later read, append,
@@ -2165,7 +2166,10 @@ class Coordinator:
         read), stops the tick with a ``HALTED`` status; the event of that record, if it was
         just journalled, stays journalled. A ``TransportError`` from ``claim`` does not stop
         the tick: ``pump`` reports it as a quarantined record, unless it is
-        ``TransportUnavailable``, which stops the tick with ``HALTED`` like the others.
+        ``TransportUnavailable``, which stops the tick with ``HALTED`` like the others. A
+        bound spool is looked at when each transport call starts: directories that go
+        missing inside the tick's last transport call, or after it, are not seen by that
+        tick, which can still write ``OK``; the next tick halts.
     """
 
     def __init__(
@@ -2434,8 +2438,8 @@ class Coordinator:
             "v": STATUS_VERSION,
             "state": state,
             "store": self.journal.store_id,
-            # what the transport says it is bound to, or UNBOUND. In a HALTED status written
-            # by the constructor this is reported before the binding was accepted or refused
+            # what the transport says it is bound to, or UNBOUND. A HALTED status written by
+            # the constructor can carry this for a transport that was not (yet) accepted
             "transport_store": self.transport_store,
             "continuity_boundary": self.boundary,
             # one st_dev comparison is not an established boundary; nothing here claims one

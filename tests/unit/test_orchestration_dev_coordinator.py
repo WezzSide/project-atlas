@@ -1194,7 +1194,7 @@ def test_a_coordinator_checks_its_observer_before_anything_else(tmp_path):
         coordinator(tmp_path, identity="coord-2", observer=Nameless())
     status = json.loads((tmp_path / "status" / "status.json").read_text())
     assert status["state"] == "OK"  # a configuration refusal writes no status
-    # also when the store is unreadable: the refusal, not an error from writing a status
+    # also when the store is unusable: the refusal, not an error from writing a status
     attached = store(tmp_path, create=False)
     for f in attached.anchor.iterdir():
         f.unlink()
@@ -1607,8 +1607,11 @@ def test_a_coordinator_publishes_only_into_a_transport_bound_to_its_store(tmp_pa
     assert sorted(f.name for f in a.root.iterdir()) == ["000000000001.json", STORE_MARKER]
 
 
-def test_a_spool_that_disappears_during_a_tick_is_never_reported_as_ok(tmp_path):
-    """The transport being gone is not a bad record: pump raises, the status is HALTED."""
+def test_a_spool_missing_when_pump_claims_halts_the_tick_and_is_not_quarantined(tmp_path):
+    """The transport being gone is not a bad record: pump raises, the status is HALTED.
+
+    (Directories that go missing inside the tick's last transport call are a known limit.)
+    """
     a, _b = _two_stores(tmp_path)
     home = tmp_path / "spool"
 
