@@ -1098,3 +1098,158 @@ def test_scope_admission_cannot_be_switched_off():
         p.dispatch(qi("A"), **FIELDS)  # repeated dispatch keeps its existing refusal
     with pytest.raises(TypeError):
         Planner(t, identity="vps3-plan", verifier_identities=(VER,), scope_admission=False)  # type: ignore[call-arg]
+
+
+# ---- ATLAS-DEVQ-0010: repository identity ---------------------------------------------------
+
+_SPELLINGS = (
+    "WezzSide/project-atlas",
+    "wezzside/PROJECT-ATLAS",
+    "WezzSide/project-atlas/",
+    "WezzSide/project-atlas.git",
+    "WezzSide/project-atlas.git/",
+    "github.com/WezzSide/project-atlas",
+    "GitHub.com/WezzSide/project-atlas.git",
+    "https://github.com/WezzSide/project-atlas",
+    "https://github.com/WezzSide/project-atlas/",
+    "https://github.com/WezzSide/project-atlas.git",
+    "HTTPS://GITHUB.COM/WezzSide/project-atlas.git/",
+    "http://github.com/WezzSide/project-atlas",
+    "ssh://git@github.com/WezzSide/project-atlas.git",
+    "git@github.com:WezzSide/project-atlas.git",
+    "git@github.com:WezzSide/project-atlas",
+)
+
+_UNSUPPORTED = (
+    "",
+    " WezzSide/project-atlas",
+    "WezzSide/project-atlas ",
+    "WezzSide/project-atlas\n",
+    "WezzSide/project-atlas//",
+    "WezzSide//project-atlas",
+    "/WezzSide/project-atlas",
+    "WezzSide",
+    "WezzSide/",
+    "WezzSide/project-atlas/tree/main",
+    "WezzSide/project-atlas.git.git",
+    "WezzSide/project-atlas.GIT",
+    "WezzSide/.git",
+    "WezzSide/.",
+    "WezzSide/..",
+    "WezzSide/project atlas",
+    "WezzSide/project-atlas?x=1",
+    "WezzSide/project-atlas#readme",
+    "Wezz.Side/project-atlas",
+    "-WezzSide/project-atlas",
+    "WezzSidé/project-atlas",
+    "https://gitlab.com/WezzSide/project-atlas",
+    "https://github.com.evil.example/WezzSide/project-atlas",
+    "https://evil.example/github.com/WezzSide/project-atlas",
+    "https://github.com:443/WezzSide/project-atlas",
+    "https://user@github.com/WezzSide/project-atlas",
+    "https://user:pw@github.com/WezzSide/project-atlas",
+    "https://www.github.com/WezzSide/project-atlas",
+    "https://githubxcom/WezzSide/project-atlas",
+    "git@github-com:WezzSide/project-atlas",
+    "https://api.github.com/repos/WezzSide/project-atlas",
+    "https://github.com/WezzSide/project-atlas/pull/1",
+    "https://github.com/WezzSide",
+    "https:/github.com/WezzSide/project-atlas",
+    "ftp://github.com/WezzSide/project-atlas",
+    "git://github.com/WezzSide/project-atlas",
+    "ssh://github.com/WezzSide/project-atlas",
+    "ssh://git@github.com:22/WezzSide/project-atlas",
+    "ssh://root@github.com/WezzSide/project-atlas",
+    "git@github.com/WezzSide/project-atlas",
+    "git@gitlab.com:WezzSide/project-atlas",
+    "root@github.com:WezzSide/project-atlas",
+    "github.com:WezzSide/project-atlas",
+    "a" * 40 + "/project-atlas",
+    "WezzSide/" + "a" * 101,
+)
+
+
+def test_every_supported_spelling_of_a_repository_has_one_key():
+    from project_atlas.orchestration.autonomy.dev_contracts import repository_key
+
+    assert {repository_key(s) for s in _SPELLINGS} == {"wezzside/project-atlas"}
+    assert repository_key("a/b") == "a/b" and repository_key("A/b.c_d-e") == "a/b.c_d-e"
+    assert repository_key("WezzSide/other") != repository_key("WezzSide/project-atlas")
+    assert repository_key("o/git") == "o/git" and repository_key("o/x.github") == "o/x.github"
+    assert repository_key("a" * 39 + "/" + "b" * 100) == "a" * 39 + "/" + "b" * 100
+
+
+@pytest.mark.parametrize("spelling", [*_UNSUPPORTED, None, 5, b"WezzSide/project-atlas"])
+def test_an_unsupported_repository_identity_fails_closed(spelling):
+    from project_atlas.orchestration.autonomy.dev_contracts import repository_key
+
+    with pytest.raises(ContractError, match="unsupported repository identity"):
+        repository_key(spelling)
+
+
+def test_a_repository_spelling_is_not_an_independent_collision_domain():
+    from project_atlas.orchestration.autonomy.dev_contracts import works_collide
+
+    def w(task, repository):
+        return make_work(
+            task_id=task,
+            execution_id=f"{task}-E1",
+            lineage_root=task,
+            **_fields("src/x", repository=repository),
+        )
+
+    a = w("A", _SPELLINGS[0])
+    for i, spelling in enumerate(_SPELLINGS):
+        b = w(f"B{i}", spelling)
+        assert works_collide(a, b) == (("src/x", "src/x"),) == works_collide(b, a)
+        assert b.repository == spelling  # the sealed field keeps what was written
+    assert works_collide(a, w("C", "WezzSide/other")) == ()
+    # an identity that cannot be keyed is an error, never "another repository"
+    odd = w("D", "https://gitlab.com/WezzSide/project-atlas")
+    for pair in ((a, odd), (odd, a)):
+        with pytest.raises(ContractError, match="unsupported repository identity"):
+            works_collide(*pair)
+
+
+def test_the_repository_key_does_not_change_a_sealed_work_item():
+    """The sealed field and the seal are what they were: the key is derived, never stored."""
+    from project_atlas.orchestration.autonomy.dev_contracts import WorkItem
+
+    assert "repository_key" not in WorkItem.model_fields
+    a = make_work(task_id="A", execution_id="A-E1", lineage_root="A", **FIELDS)
+    b = make_work(
+        task_id="A",
+        execution_id="A-E1",
+        lineage_root="A",
+        **{**FIELDS, "repository": FIELDS["repository"] + ".git"},
+    )
+    assert a.seal != b.seal and b.repository.endswith(".git")  # two records, one repository
+
+
+def test_the_planner_treats_every_spelling_as_the_same_repository():
+    t = InMemoryTransport()
+    p = scoped(t)
+    p.dispatch(qi("A"), **FIELDS)
+    for i, spelling in enumerate(_SPELLINGS):
+        with pytest.raises(PlannerError, match=r"^SCOPE_COLLISION:A:src/x\|src/x$"):
+            p.dispatch(qi(f"B{i}"), **_fields("src/x", repository=spelling))
+    p.fail_execution("A", "runner lost")
+    for i, spelling in enumerate(_SPELLINGS):
+        with pytest.raises(PlannerError, match=r"^SCOPE_RETAINED:A:src/x\|src/x$"):
+            p.dispatch(qi(f"B{i}"), **_fields("src/x", repository=spelling))
+    assert _work_records(t) == 1 and set(p.lineages) == {"A"}
+    # a disjoint scope in another spelling is still admitted, and keeps its own spelling
+    w = p.dispatch(qi("C"), **_fields("src/y", repository=_SPELLINGS[9]))
+    assert w.repository == _SPELLINGS[9]
+
+
+def test_the_planner_refuses_a_repository_identity_it_cannot_key():
+    t = InMemoryTransport()
+    p = scoped(t)
+    for bad in ("https://gitlab.com/WezzSide/project-atlas", "WezzSide/project-atlas.git.git"):
+        with pytest.raises(PlannerError, match=r"^REPOSITORY_UNSUPPORTED:"):
+            p.dispatch(qi("A"), **_fields("src/x", repository=bad))  # no earlier lineage
+    p.dispatch(qi("A"), **FIELDS)
+    with pytest.raises(PlannerError, match=r"^REPOSITORY_UNSUPPORTED:"):
+        p.dispatch(qi("B"), **_fields("src/q", repository=" WezzSide/project-atlas"))
+    assert _work_records(t) == 1 and p.state.seq == 1 and set(p.lineages) == {"A"}
