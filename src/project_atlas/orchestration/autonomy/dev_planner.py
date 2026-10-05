@@ -215,6 +215,12 @@ the verified handover above. See both
 classes for what they do not establish: in particular, no continuity boundary adequate for
 live conflicting work is established here; a different filesystem for the anchor is evidence
 against one failure mode, not proof of independent storage.
+
+Declared activation (ATLAS-DEVQ-0014): ``Activation`` is how a coordinator is meant to be
+started outside tests. An operator declares, once, which existing store and spool are
+activated; every start reads that record, attaches to exactly what it names and creates
+nothing. The record also keeps the highest event a tick has seen, outside journal and anchor,
+so a store taken back as a whole below that event is refused. See the class for its limits.
 """
 
 from __future__ import annotations
@@ -2133,7 +2139,8 @@ class Coordinator:
         event, including journal and anchor rolled back together). It does not detect a lost
         later event of a lineage (the lineage then replays to an earlier, still scope-holding
         phase), a lineage that was journalled but never published, or a rollback that took
-        the transport back as well. A bare ``Planner`` has no witness;
+        the transport back as well (an ``Activation`` refuses that one when the store no
+        longer holds the event its record has seen). A bare ``Planner`` has no witness;
       * the witness trusts the transport directory as much as the journal: anyone who can
         write a WORK record there can stop every coordinator;
       * one tick is not atomic. A crash between its steps is finished by the next tick;
@@ -2459,3 +2466,279 @@ class Coordinator:
             os.replace(tmp, self.status_path)  # atomic: a reader never sees a torn status
         finally:
             _drop_tmp(tmp)
+
+
+ACTIVATION_VERSION = 1
+_ACTIVATION_KEYS = frozenset(
+    {"v", "store", "journal", "anchor", "spool", "accept_same_filesystem", "seq", "head"}
+)
+
+
+def _write_json(path: Path, body: dict[str, Any]) -> None:
+    """Atomic replace of a small JSON file (temp file in the same directory, fsync, rename)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".tmp-")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(body, sort_keys=True, indent=2) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    finally:
+        _drop_tmp(tmp)
+
+
+class Activation:
+    """Operator-declared activation of ONE existing store (ATLAS-DEVQ-0014).
+
+    The way a coordinator is meant to be started outside tests. Two steps:
+
+    ``declare`` (an operator act, once per store): names the store id, the journal and anchor
+    directories and the spool directory, attaches to all three to check that they exist and
+    belong to that store, and writes the activation record (exclusively: a record is never
+    overwritten by ``declare``). It creates no store and no spool.
+
+    ``open`` (every start): reads the record, attaches to exactly the store and spool it
+    names, and builds a ``Coordinator`` on them. Nothing is created, there is no default
+    location, no in-memory journal and no unbound transport. It refuses, with nothing
+    written into the store or the spool:
+      * no record, an unreadable one, or one of another version (``ACTIVATION_RECORD``, a
+        ``PlannerError``: a configuration refusal, no status is written);
+      * a record inside the journal, anchor or spool directory (``ACTIVATION_RECORD``);
+      * a journal, anchor or spool that is missing or belongs to another store than the
+        record names: a ``JournalCorrupt`` / ``TransportError`` / ``OSError`` from the
+        attach, reported in a ``HALTED`` status;
+      * a store that no longer holds the record's floor (``ACTIVATION_ROLLED_BACK``, a
+        ``JournalCorrupt``, reported in a ``HALTED`` status).
+
+    The floor is the highest event (sequence number and sha256) a tick of this activation
+    has seen: after every tick that completed, the record is rewritten if the journal's head
+    is higher. The record lives outside journal and anchor, so a journal and anchor that were
+    taken back TOGETHER (one snapshot of a common parent, which the anchor cannot show) no
+    longer hold the floor event and are refused, at ``open`` and before every later tick.
+    Limits: the floor is only as new as the last completed tick that could write it, so a
+    rollback to a point at or after the floor is not seen; several coordinators on one
+    record each read, compare and replace it, so one of them can put back a lower floor that
+    another just raised (never one that did not exist); the record is an unkeyed file, and
+    whoever can write it can lower the floor or point it at another store; it is not taken
+    back or forward with the store, which is its purpose, so restoring a store from a backup
+    older than the floor needs the operator to remove the record and declare again.
+
+    Nothing here dispatches an executor, and declaring or opening an activation is not a
+    grant of any authority: see ``Coordinator`` for what a tick does and does not do.
+    """
+
+    def __init__(self, record: Path, coordinator: Coordinator, floor: tuple[int, str]) -> None:
+        self.record = Path(record)
+        self.coordinator = coordinator
+        self.floor = floor
+
+    @staticmethod
+    def _load(record: Path) -> dict[str, Any]:
+        try:
+            raw = json.loads(Path(record).read_text(encoding="utf-8"))
+            ok = (
+                isinstance(raw, dict)
+                and set(raw) == _ACTIVATION_KEYS
+                and type(raw["v"]) is int
+                and raw["v"] == ACTIVATION_VERSION
+                and isinstance(raw["store"], str)
+                and _STORE_ID.fullmatch(raw["store"]) is not None
+                and all(isinstance(raw[k], str) and raw[k] for k in ("journal", "anchor", "spool"))
+                and all(Path(raw[k]).is_absolute() for k in ("journal", "anchor", "spool"))
+                and type(raw["accept_same_filesystem"]) is bool
+                and type(raw["seq"]) is int
+                and raw["seq"] >= 0
+                and isinstance(raw["head"], str)
+                and (
+                    (raw["seq"] == 0 and raw["head"] == "")
+                    or (raw["seq"] > 0 and _DIGEST.fullmatch(raw["head"]) is not None)
+                )
+            )
+        except FileNotFoundError:
+            raise PlannerError(
+                f"ACTIVATION_RECORD:{record} does not exist; nothing is activated until an "
+                "operator declares it"
+            ) from None
+        except (OSError, ValueError, RecursionError) as exc:
+            raise PlannerError(f"ACTIVATION_RECORD:{record} is unreadable: {exc}") from exc
+        if not ok:
+            raise PlannerError(
+                f"ACTIVATION_RECORD:{record} is not a version {ACTIVATION_VERSION} "
+                "activation record"
+            )
+        return dict(raw)
+
+    @staticmethod
+    def _outside(record: Path, raw: Mapping[str, Any]) -> None:
+        where = Path(record).resolve()
+        for key in ("journal", "anchor", "spool"):
+            if where.is_relative_to(Path(raw[key]).resolve()):
+                raise PlannerError(
+                    f"ACTIVATION_RECORD:{record} is inside the {key} directory; the record "
+                    "must not be taken back together with what it witnesses"
+                )
+
+    @staticmethod
+    def _attach(raw: Mapping[str, Any]) -> tuple[StoreJournal, Any]:
+        from project_atlas.orchestration.autonomy.dev_spool_transport import SpoolTransport
+
+        journal = StoreJournal.attach(Path(raw["journal"]), Path(raw["anchor"]))
+        if journal.store_id != raw["store"]:
+            raise JournalCorrupt(
+                f"STORE_IDENTITY:the activation names store {raw['store']}, the journal "
+                f"directory belongs to store {journal.store_id}"
+            )
+        return journal, SpoolTransport.attach(Path(raw["spool"]), raw["store"])
+
+    @classmethod
+    def declare(
+        cls,
+        record: Path,
+        *,
+        store_id: str,
+        journal: Path,
+        anchor: Path,
+        spool: Path,
+        accept_same_filesystem: bool = False,
+    ) -> dict[str, Any]:
+        """Write the activation record of an existing store. Returns what was written."""
+        raw: dict[str, Any] = {
+            "v": ACTIVATION_VERSION,
+            "store": store_id,
+            "journal": str(Path(journal).resolve()),
+            "anchor": str(Path(anchor).resolve()),
+            "spool": str(Path(spool).resolve()),
+            "accept_same_filesystem": accept_same_filesystem,
+            "seq": 0,
+            "head": "",
+        }
+        if not isinstance(store_id, str) or not _STORE_ID.fullmatch(store_id):
+            raise PlannerError("ACTIVATION_RECORD:a store id is 32 lowercase hex digits")
+        if type(accept_same_filesystem) is not bool:
+            raise PlannerError("ACTIVATION_RECORD:accept_same_filesystem must be a bool")
+        cls._outside(record, raw)
+        attached, _ = cls._attach(raw)  # all three exist and are this store's, or it raises
+        if attached.boundary != SEPARATE_FILESYSTEM and not accept_same_filesystem:
+            raise PlannerError(
+                "STORE_BOUNDARY:journal and anchor are on the same filesystem; declare that "
+                "explicitly (accept_same_filesystem=True) or put the anchor elsewhere"
+            )
+        record = Path(record)
+        record.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=record.parent, prefix=".tmp-")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(json.dumps(raw, sort_keys=True, indent=2) + "\n")
+                fh.flush()
+                os.fsync(fh.fileno())
+            try:
+                os.link(tmp, record)  # exclusive: a declared activation is never overwritten
+            except FileExistsError:
+                raise PlannerError(
+                    f"ACTIVATION_RECORD:{record} exists; an activation is declared once"
+                ) from None
+        finally:
+            _drop_tmp(tmp)
+        _sync_dir(record.parent)
+        return raw
+
+    @staticmethod
+    def _check_floor(journal: StoreJournal, raw: Mapping[str, Any]) -> None:
+        if raw["seq"] == 0:
+            return
+        try:
+            journal.check_store()
+            journal.check_head(raw["seq"], raw["head"])
+        except JournalCorrupt as exc:
+            raise JournalCorrupt(
+                f"ACTIVATION_ROLLED_BACK:the store does not hold event {raw['seq']} that this "
+                f"activation has seen ({exc})"
+            ) from exc
+
+    @classmethod
+    def open(
+        cls,
+        record: Path,
+        *,
+        identity: str,
+        verifier_identities: tuple[str, ...],
+        status_path: Path,
+        max_live: int = MAX_LIVE_DEFAULT,
+        observer: HandoverObserver | None = None,
+        executors: Sequence[str] = (),
+        executor_limit: int = 1,
+    ) -> Activation:
+        """Attach to the declared store and spool and build the coordinator. Creates nothing."""
+        raw = cls._load(record)
+        cls._outside(record, raw)
+        status_path = Path(status_path)
+        if status_path.resolve() == Path(record).resolve():
+            raise PlannerError("STATUS_PATH:the status file and the activation record differ")
+        try:
+            journal, transport = cls._attach(raw)
+            cls._check_floor(journal, raw)
+        except (JournalCorrupt, TransportError, OSError) as exc:
+            reason = str(exc) if isinstance(exc, JournalCorrupt) else None
+            if reason is None:
+                kind = "TRANSPORT_ERROR" if isinstance(exc, TransportError) else "IO_ERROR"
+                reason = f"{kind}:{exc}"
+            status = {
+                "v": STATUS_VERSION,
+                "state": "HALTED",
+                "reason": reason,
+                "store": raw["store"],
+                "activation": str(Path(record)),
+            }
+            with contextlib.suppress(OSError):  # the refusal is what must surface
+                _write_json(status_path, status)
+            raise
+        coordinator = Coordinator(
+            journal,
+            transport,
+            identity=identity,
+            verifier_identities=verifier_identities,
+            status_path=status_path,
+            max_live=max_live,
+            accept_same_filesystem=raw["accept_same_filesystem"],
+            observer=observer,
+            executors=executors,
+            executor_limit=executor_limit,
+        )
+        return cls(record, coordinator, (raw["seq"], raw["head"]))
+
+    def tick(
+        self, candidates: Sequence[tuple[QueueItem, Mapping[str, Any]]] = ()
+    ) -> dict[str, Any]:
+        """One coordinator tick under the activation: floor check, tick, floor update."""
+        c = self.coordinator
+        try:
+            raw = self._load(self.record)  # another coordinator may have raised the floor
+            if (raw["store"], raw["journal"], raw["anchor"], raw["spool"]) != (
+                c.journal.store_id,
+                str(c.journal.home.resolve()),
+                str(c.journal.anchor_home.resolve()),
+                str(Path(getattr(c.planner.transport, "home", "")).resolve()),
+            ):
+                raise JournalCorrupt(
+                    "ACTIVATION_CHANGED:the activation record no longer names the store and "
+                    "spool this coordinator was opened on"
+                )
+            self._check_floor(c.journal, raw)
+        except PlannerError as exc:
+            lost = exc if isinstance(exc, JournalCorrupt) else JournalCorrupt(str(exc))
+            c._halted(lost)
+            raise lost from exc
+        status = c.tick(candidates)
+        state = c.planner.state
+        if state.seq > raw["seq"]:
+            try:
+                now = self._load(self.record)
+                if state.seq > now["seq"]:
+                    _write_json(self.record, now | {"seq": state.seq, "head": state.head})
+                    self.floor = (state.seq, state.head)
+            except (PlannerError, OSError) as exc:  # the floor could not be kept: not OK
+                lost = JournalCorrupt(f"ACTIVATION_RECORD:the floor could not be written: {exc}")
+                c._halted(lost)
+                raise lost from exc
+        return status

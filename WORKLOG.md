@@ -17057,3 +17057,68 @@ adapters must be given the store id to attach the spool, and nothing here distri
 journal and anchor rolled back together are not detected; no entrypoint; nothing here was
 run by several processes or hosts; BLOCKED / OWNER_REQUIRED scopes cannot be handed over;
 recovery / duplicate semantics as listed in the backlog.
+
+
+## 2026-10-05 — ATLAS-DEVQ-0014: operator-declared activation
+
+Stacked on ATLAS-DEVQ-0013 (#1074, head `afdb847f`), which was not merged when this was
+written. Addresses the activation blocker "durable activation". Local only: no entrypoint
+script or CLI command, no dispatch, no live run, nothing run in more than one process.
+
+Behaviour (`dev_planner.py`, class `Activation`; nothing else changes behaviour):
+- `Activation.declare(record, store_id=, journal=, anchor=, spool=,
+  accept_same_filesystem=)` attaches to the named store and its bound spool (so all three
+  must exist and belong to that store id), requires the same-filesystem boundary to be
+  accepted explicitly, and writes the activation record with an exclusive link. It creates no
+  store and no spool, and never overwrites a record.
+- `Activation.open(record, identity=, verifier_identities=, status_path=, ...)` reads the
+  record, attaches to exactly the store and spool it names and builds a `Coordinator` on
+  them with the bound transport. There is no default location, no in-memory journal and no
+  unbound transport on this path. A missing, unreadable or other-version record, or a record
+  inside the journal, anchor or spool directory, is a configuration refusal
+  (`ACTIVATION_RECORD`, no status written). A missing or foreign journal, anchor or spool is
+  reported in a HALTED status and raised.
+- The record keeps a floor: the highest event (sequence number and sha256) a completed tick
+  of the activation has seen. `open`, and `Activation.tick` before every tick, refuse a
+  store that does not hold that event (`ACTIVATION_ROLLED_BACK`, HALTED). A record that was
+  removed, damaged or re-pointed under a running activation halts it too.
+
+Tests (`tests/unit/test_orchestration_dev_coordinator.py`): 55 -> 61 test functions (62
+collected), no existing test changed. New: six tests named `test_an_activation_...`,
+`test_nothing_is_activated_...`, `test_declare_needs_...`, `test_a_store_taken_back_...`,
+`test_an_activation_halts_...`, `test_a_running_activation_...`, and three helpers.
+The rollback test restores journal, anchor and spool from one snapshot: a plain `Coordinator`
+on the restored store ticks OK; the activation refuses it at `open` and in a running tick.
+
+Measured locally at this change: coordinator file 62 passed; 20 consecutive runs 62 passed
+each; all `tests/unit/test_orchestration_dev_*.py` 1088 passed; `ruff check src tests`
+clean; `mypy src` clean (415 files). Twelve mutants, each failing at least one test: no floor
+check; the floor never written; `declare` overwriting; a record inside the store accepted;
+any record shape accepted; `declare` without the spool; no store id comparison; a re-pointed
+record not noticed; no HALTED status from `open`; no boundary acceptance in `declare`; no
+floor check in `tick`; no HALTED status from `tick`.
+
+Still open after this: the floor is only as new as the last completed tick that could write
+it, so a rollback to a point at or after the floor is not seen; several coordinators on one
+record read, compare and replace it, so a lower floor that existed can be put back; the
+record is an unkeyed file that whoever can write it can lower or re-point, and restoring a
+store from a backup older than the floor needs an operator to remove the record and declare
+again; nothing calls `Activation` outside tests (no script, no CLI command, no service), and
+declaring or opening one grants no authority and dispatches nothing; executors and adapters
+still have to be given the store id and spool directory by other means; everything listed
+as open under ATLAS-DEVQ-0013; nothing here was run by several processes or hosts.
+
+Governance record (owner steering, 2026-10-05): authority-timing anomaly on the merge of
+#1073. The owner made merge authority for #1073 at HEAD `cf327bed` / TREE `654dba75`
+conditional on a fresh independent evidence verification returning PASS or
+PASS_WITH_NONBLOCKING_FINDINGS with no P0 or P1 finding. The PR was merged at
+2026-10-05T17:07:39Z (merge `46934155`, tree identical to the reviewed tree) while that
+verification was still running; its verdict, PASS_WITH_NONBLOCKING_FINDINGS with P0 = 0 and
+P1 = 0 for the same HEAD and TREE, arrived afterwards. The integrated bytes are therefore
+validated, but the merge did not comply with the conditional gate at the time it was
+executed: a governance sequencing incident, not a code-integrity failure. #1073 is accepted
+as integrated and is not reverted for this reason; the earlier evidence FAIL and the timing
+stand as recorded on the PR. GitHub attributes the merge to the account `WezzSide`, which is
+shared: that is not evidence of which human or agent initiated it, and nothing in this
+repository establishes who did. Proven scope of #1073: single-process, threaded
+spool-fencing semantics.
