@@ -109,8 +109,9 @@ def _release_pending(path: Path) -> None:
     the delete fail transiently, so retry boundedly. After a claim, a name that still cannot
     be removed is inert: the record is in ``claimed/`` (ownership is already decided) and
     every later claimer loses the exclusive create. ``withdraw`` and ``publish`` call this
-    too, for the name of a withdrawn record; there a leftover name stays in the spool and it
-    is the tombstone that keeps ``claim`` from handing it out.
+    too, for the name of a record they take back; there a leftover name stays in the spool
+    and it is the tombstone, where one was written, that keeps ``claim`` from handing it
+    out.
     """
     with contextlib.suppress(OSError):
         _retry_transient(path.unlink, still_valid=path.exists)
@@ -272,7 +273,7 @@ class SpoolTransport:
                 if not isinstance(exc, FileExistsError) and not dest.exists():
                     continue  # persistent contention: the record stays pending, nothing rejected
                 if _lost_race(path, dest):
-                    continue  # another claimer owns it; a lost race never becomes a second claim
+                    continue  # another claimer linked it; a lost race never becomes a second claim
                 # the claimed/ slot holds something that is not this record's claim: blocked slot
                 if self._park(d, path):
                     raise TransportError("record could not be claimed and was parked") from None
@@ -316,8 +317,9 @@ class SpoolTransport:
     def withdraw(self, record: Record) -> bool:
         """Take a record back for good; True when this call did and nobody had linked it.
 
-        A tombstone ``withdrawn/<seal>.json`` is created first (exclusively; it holds the
-        record as evidence) and is never removed again; then the pending name, if there is
+        Unless a ``claimed/`` name is there already, a tombstone ``withdrawn/<seal>.json``
+        is created first (exclusively; it holds the record as evidence) and is never
+        removed again; then the pending name, if there is
         one, is removed (best effort) and the ``claimed/`` name is looked for. The tombstone
         is written also when the record is not in the spool at all, so a ``publish`` of that
         seal that is still on its way is refused. Once the tombstone exists, ``publish``
@@ -348,7 +350,7 @@ class SpoolTransport:
         name = f"{record.seal}.json"
         tomb = d / _WITHDRAWN / name
         if (d / _CLAIMED / name).exists() and not tomb.exists():
-            return False  # claimed before anybody took it back: the claimer's, no tombstone
+            return False  # a claimed/ name was there first: no tombstone, nothing taken back
         fresh = False
         try:
             tomb.parent.mkdir(exist_ok=True)

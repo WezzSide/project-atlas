@@ -16859,7 +16859,9 @@ found false or stale: the `published` docstring left out the ordinary withdrawal
 comment in `claimed_records` said a `claimed/` name without a meta means a crash) and
 `a09df306` (same behaviour; three more sentences found false: who has the record when
 `withdraw` returns False after its tombstone, what a failing look does, and the causes of
-a missing claim meta). This entry describes the branch after the fifth commit and replaces the entries those heads
+a missing claim meta) and `2929ff3e` (same behaviour; three comments found false or stale:
+one in `withdraw` naming "the claimer" as owner, two in the fabric adapter saying a claimed
+record is always re-adopted). This entry describes the branch after the sixth commit and replaces the entries those heads
 carried.
 
 Behaviour (`dev_spool_transport.py`):
