@@ -16732,16 +16732,16 @@ observer constructor's exception.
 Existing tests changed (vs main `fdbb42c7`, by test name and body): one changed in place,
 `test_fleet_status_is_derived_from_the_journal_alone` (two new row keys); the journal test
 helper `_forge` now writes version 3 for an event that names an executor. Test functions:
-journal file 76 -> 92, coordinator file 42 -> 49, spool file 11 -> 23, loop-contracts file
+journal file 76 -> 92, coordinator file 42 -> 49, spool file 11 -> 26, loop-contracts file
 72 -> 73.
 
 Commands and results (`PYTHONPATH=<worktree>/src`, `--no-cov -o addopts=""`):
 - `test_orchestration_dev_planner_journal.py` 115 passed, `_dev_coordinator.py` 49,
-  `_dev_spool_transport.py` 23 (these three together 30 consecutive runs, no failure),
+  `_dev_spool_transport.py` 26 (these three together 30 consecutive runs, no failure),
   `_dev_loop_contracts.py` 150, `_dev_fabric_adapter.py` 141.
-- The nine DEVQ files: 992 passed. Broad selection (`-k "orchestration_dev or dev_package or
+- The nine DEVQ files: 995 passed. Broad selection (`-k "orchestration_dev or dev_package or
   executor or agent_execute or workflow or autonomy or global_foundation or github_port"`):
-  1690 passed, 5152 deselected.
+  1693 passed, 5152 deselected.
 - `ruff check .` clean; `ruff format --check` on the nine changed Python files clean;
   `mypy src`: no issues in 415 source files.
 - 38 scratch mutants of the model and of addressed delivery against five DEVQ test files
@@ -16770,11 +16770,13 @@ PASS_WITH_NONBLOCKING_FINDINGS):
 - A fenced, unclaimed work record stayed deliverable, so the replaced executor could still
   START it: `withdraw` (above).
 - An address that cannot be read made every tick raise `TransportError` while the status
-  file stayed `OK`: a `TransportError` in the constructor or a tick now writes `HALTED`
-  (`TRANSPORT_ERROR`), also when it comes from publishing a record whose event was just
-  journalled (that lineage is then DISPATCHED and undelivered until the address is repaired;
-  the next healthy tick re-publishes it). An address must be a regular file of at most 256
-  bytes holding exactly an identity.
+  file stayed `OK`: a `TransportError` from the transport listing, from recovery or from
+  publishing in the constructor or a tick now writes `HALTED` (`TRANSPORT_ERROR`), also when
+  it comes from publishing a record whose event was just journalled (that lineage is then
+  DISPATCHED and undelivered until the address is repaired; the next healthy tick
+  re-publishes it); one raised by `claim` for a file it cannot hand out is still quarantined
+  by `pump`. An address must be a regular file (not a link, directory or FIFO) of at most
+  256 bytes holding exactly an identity of at most 200 characters.
 - A bare `Planner` given a pool on a transport without addressing journalled an assignment
   it could not deliver: `dispatch` and `reassign` now refuse that before the commit
   (`EXECUTORS_NEED_ADDRESSED_TRANSPORT`).
@@ -16815,3 +16817,29 @@ record keeps the planner from claiming it, silently (the spool directory is trus
 `recover` on a planner whose transport is not `addressed` is not guarded (only `dispatch`
 and `reassign` are); `_addressee` checks for a symbolic link and then opens the path, which
 is not atomic.
+
+Found by independent verification of the third pushed head `7e543be1` and fixed in this
+entry's code (verdicts there: semantics FAIL on the first item, evidence FAIL on the second):
+- A fenced record could still become claimable after `reassign` returned, in three
+  interleavings: the record had not reached the transport when it was withdrawn (its
+  DISPATCH was journalled, its publish still pending in another planner); a publish that had
+  already passed its existence check; a planner's own dispatch between its commit and its
+  publish. The earlier executor's adapter then dispatched the fenced execution (3 of 394
+  four-thread trials without injection); the result was refused in every case. `withdraw`
+  now writes a tombstone for the seal also when nothing is pending, and `publish` looks for
+  it before it starts and again after it created the record's name, removing its own name
+  when it finds one; the in-memory transport does the same.
+- Docstring sentences made false or incomplete by this PR although its diff had not touched
+  them: `SpoolTransport.published` (a withdrawn record is not listed), the spool module's
+  "tamper" guarantee (it was already wrong on main: the file is parked in `rejected/`),
+  `Planner.pump` / `_guarded` (a `TransportError` is re-raised), the transport module's
+  re-publish sentence, `Coordinator.tick` (`EXECUTOR_BUSY` under `deferred`), and three
+  sentences about what withdrawal achieves.
+- An address that is a FIFO blocked the reader; an address must now be a regular file.
+- Tests for: re-publishing with a case variant of the address, the coordinator's exact
+  `addressed is True` check, the in-memory transport not withdrawing a claimed record.
+Still open after this: a claimer that links a record in the instant between `publish`
+creating its name and `publish` seeing the tombstone keeps it (then the earlier executor
+runs the fenced execution; its result is refused); the `publish` existence check and its
+link are two steps, as on main, so a racing duplicate publish of a CLAIMED record can leave
+a second pending copy that the next claimer parks in `rejected/` (never delivered twice).

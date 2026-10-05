@@ -1261,7 +1261,7 @@ def test_a_reassigned_execution_is_recovered_and_tracked_without_a_second_valid_
 
 def test_executors_need_a_transport_that_delivers_to_the_addressee(tmp_path):
     class Unaddressed(SpoolTransport):
-        addressed = False
+        addressed = 1  # truthy is not enough: the attribute must be exactly True
 
     store(tmp_path)
     attached = store(tmp_path, create=False)

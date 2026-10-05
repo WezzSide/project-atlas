@@ -9,7 +9,8 @@ Semantics every backend must provide:
   * records travel as plain JSON and are re-validated (seal included) on claim: tamper => error;
   * a record type is only published to / claimable from its own channel (RESULT != VERDICT);
   * consume-once: a claimed record is never handed out again; re-publishing an identical sealed
-    record is an idempotent no-op;
+    record is an idempotent no-op when its address, if it has one, is the same (another
+    address, or none after one, is refused), and a withdrawn record is not published again;
   * a role may claim only from the channels its role owns; the VERIFICATION channel additionally
     refuses the executor's own identity (IMPLEMENTER != VERIFIER).
 
@@ -142,6 +143,7 @@ class InMemoryTransport:
     addressed = True
 
     def __init__(self) -> None:
+        self._withdrawn: set[tuple[Channel, str]] = set()
         self._to: dict[tuple[Channel, str], str] = {}  # (channel, seal) -> addressee
         self._queues: dict[Channel, deque[str]] = defaultdict(deque)
         self._seen: set[tuple[Channel, str]] = set()
@@ -153,6 +155,8 @@ class InMemoryTransport:
         channel = CHANNEL_FOR_KIND[record.KIND]
         wire = encode(record)  # verifies the seal
         key = (channel, record.seal)
+        if key in self._withdrawn:
+            return False  # taken back by its publisher: it stays back
         check_address(to, self._to.get(key) if key in self._seen else to)
         if key in self._seen:
             return False
@@ -190,14 +194,21 @@ class InMemoryTransport:
         return None
 
     def withdraw(self, record: Record) -> bool:
-        """Remove a published, unclaimed record; False when it is not pending."""
+        """Take a record back for good unless it was claimed; True when this call did.
+
+        Also for a record that was never published: a later ``publish`` of it is refused.
+        """
         channel = CHANNEL_FOR_KIND[record.KIND]
         wire = encode(record)
-        q = self._queues[channel]
-        if wire not in q:
+        key = (channel, record.seal)
+        if any(c == channel and s == record.seal for c, s, _ in self.claims):
             return False
-        q.remove(wire)
-        return True
+        q = self._queues[channel]
+        if wire in q:
+            q.remove(wire)
+        fresh = key not in self._withdrawn
+        self._withdrawn.add(key)
+        return fresh
 
     # test hook: simulate wire tampering of the next queued record
     def _tamper_next(self, channel: Channel, replace: tuple[str, str]) -> None:

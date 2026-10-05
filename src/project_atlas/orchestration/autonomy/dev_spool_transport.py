@@ -11,7 +11,8 @@ Layout::
 
     <root>/<CHANNEL>/<seal>.json                 published, unclaimed
     <root>/<CHANNEL>/<seal>.to                    addressee of the record, if it has one
-    <root>/<CHANNEL>/withdrawn/<seal>.json        moved here by ``withdraw`` (never claimed)
+    <root>/<CHANNEL>/withdrawn/<seal>.json        tombstone written by ``withdraw``
+    <root>/<CHANNEL>/rejected/<name>              a file ``claim`` could not hand out, parked
     <root>/<CHANNEL>/claimed/<seal>.json          consumed (content kept as durable evidence)
     <root>/<CHANNEL>/claimed/<seal>.claim.json    who claimed it
 
@@ -22,7 +23,8 @@ claimer but one, on POSIX and on Windows). ``os.rename`` is deliberately NOT the
 primitive: on Windows it opens the source by name and renames by handle, so several claimers that
 opened the same file before the first rename completed can each report success. Removing the
 pending name afterwards is mere cleanup of the winner's own record and never decides ownership.
-Seal re-check on every claim (tamper => ``ContractError``, record left in place, never consumed);
+Seal re-check on every claim (tamper => ``TransportError``, a ``ContractError``; the file is
+moved to ``rejected/`` once and never handed out);
 same role/channel and executor-vs-verifier rules as the reference backend.
 """
 
@@ -31,6 +33,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import stat
 import tempfile
 import time
 from collections.abc import Callable
@@ -54,6 +57,7 @@ from project_atlas.orchestration.autonomy.dev_transport import (
 )
 
 _CLAIMED = "claimed"
+_WITHDRAWN = "withdrawn"
 MAX_ADDRESS_BYTES = 256
 
 # A concurrent claimer's open/rename can make a read or rename fail TRANSIENTLY with
@@ -130,15 +134,17 @@ class SpoolTransport:
     def _addressee(self, channel: Channel, seal: str) -> str | None:
         """Who a record is addressed to; ``None`` when it has no address file.
 
-        An address that is a symbolic link, is longer than ``MAX_ADDRESS_BYTES``, cannot be
-        read or does not hold exactly an identity raises ``TransportError``: an unreadable
-        address is never "addressed to nobody in particular". A MISSING address file does
-        mean "not addressed"; the spool directory is trusted for that.
+        An address that is not a regular file (a symbolic link, a directory, a FIFO), is
+        longer than ``MAX_ADDRESS_BYTES``, cannot be read or does not hold exactly an
+        identity of at most ``MAX_IDENTITY`` characters raises ``TransportError``: an
+        unreadable address is never "addressed to nobody in particular". A MISSING address
+        file does mean "not addressed"; the spool directory is trusted for that. The check
+        for a regular file and the read are two steps, not one.
         """
         path = self._dir(channel) / f"{seal}.to"
         try:
-            if path.is_symlink():
-                raise ValueError("a symbolic link")
+            if not stat.S_ISREG(os.lstat(path).st_mode):
+                raise ValueError("not a regular file")
             with open(path, "rb") as fh:
                 raw = fh.read(MAX_ADDRESS_BYTES + 1)
             if len(raw) > MAX_ADDRESS_BYTES:
@@ -162,16 +168,17 @@ class SpoolTransport:
         had one, is refused when the publishes are sequential; a concurrent UNADDRESSED
         publish of the same seal can win the record name first (the planner never publishes
         one seal both ways). ``claim`` and ``claimed_records`` honour the address.
+        A seal that was withdrawn (``withdraw``) is not published again: this returns False
+        for it, before and after creating the record's name.
         """
         channel = CHANNEL_FOR_KIND[record.KIND]
         wire = encode(record)  # verifies the seal
         d = self._dir(channel)
         final = d / f"{record.seal}.json"
-        exists = (
-            final.exists()
-            or (d / _CLAIMED / f"{record.seal}.json").exists()
-            or (d / "withdrawn" / f"{record.seal}.json").exists()  # taken back: stays back
-        )
+        tomb = d / _WITHDRAWN / f"{record.seal}.json"
+        if tomb.exists():
+            return False  # taken back by its publisher: it stays back, whatever the address
+        exists = final.exists() or (d / _CLAIMED / f"{record.seal}.json").exists()
         standing = self._addressee(channel, record.seal)
         check_address(to, standing if exists or standing is not None else to)
         if exists:
@@ -200,6 +207,9 @@ class SpoolTransport:
                 return False
         finally:
             os.unlink(tmp)
+        if tomb.exists():  # withdrawn while this publish was on its way: take the name back
+            _release_pending(final)
+            return False
         return True
 
     def claim(self, channel: Channel, *, role: Role, identity: str) -> Record | None:
@@ -286,35 +296,58 @@ class SpoolTransport:
         return True
 
     def withdraw(self, record: Record) -> bool:
-        """Take a published record back if nobody claimed it yet; False otherwise.
+        """Take a record back for good unless somebody claimed it; True when this call did.
 
-        The pending name is moved to ``withdrawn/`` (kept as evidence), and ``publish``
-        refuses that seal from then on. A claimer that already linked the record keeps it:
-        the move then finds nothing, or removes only the pending name the claimer was about
-        to clean up, and the copy in ``withdrawn/`` is removed again. Best effort; never
-        raises for a record that is not pending.
+        A tombstone ``withdrawn/<seal>.json`` is created first (exclusively; it holds the
+        record as evidence), then the pending name, if there is one, is removed. The
+        tombstone is written also when the record is not in the spool at all, so that a
+        ``publish`` of that seal which is still on its way is refused: ``publish`` looks for
+        the tombstone before it starts and again after it created the record's name, and
+        removes its own name when it finds one. A record that a claimer already has stays
+        the claimer's: this returns False and removes the tombstone again. Returns False as
+        well when the seal was withdrawn before. Best effort: it does not raise for a spool
+        it cannot write. What it cannot do is take a record back from a claimer that linked
+        it between ``publish`` creating the name and ``publish`` seeing the tombstone.
         """
         channel = CHANNEL_FOR_KIND[record.KIND]
+        wire = encode(record)
         d = self._dir(channel)
         name = f"{record.seal}.json"
+        tomb = d / _WITHDRAWN / name
         if (d / _CLAIMED / name).exists():
+            with contextlib.suppress(OSError):
+                tomb.unlink()  # a tombstone next to a claimed record says nothing
             return False
+        fresh = False
         try:
-            (d / "withdrawn").mkdir(exist_ok=True)
-            os.replace(d / name, d / "withdrawn" / name)
+            tomb.parent.mkdir(exist_ok=True)
+            if not tomb.exists():
+                fd, tmp = tempfile.mkstemp(dir=tomb.parent, prefix=".tmp-")
+                try:
+                    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                        fh.write(wire)
+                        fh.flush()
+                        os.fsync(fh.fileno())
+                    with contextlib.suppress(FileExistsError):
+                        os.link(tmp, tomb)
+                        fresh = True
+                finally:
+                    os.unlink(tmp)
         except OSError:
             return False
+        _release_pending(d / name)
         if (d / _CLAIMED / name).exists():  # a claimer linked it meanwhile: it is the claimer's
             with contextlib.suppress(OSError):
-                os.unlink(d / "withdrawn" / name)
+                tomb.unlink()
             return False
-        return True
+        return fresh
 
     def published(self, channel: Channel) -> list[Record]:
         """Every decodable record this spool holds on ``channel``, pending or claimed.
 
         Read-only: what the spool directory holds now. Records are kept after a claim, so
-        absent loss this is what was published and not rejected; a file that cannot be
+        absent loss this is what was published and neither rejected nor withdrawn (a
+        withdrawn record is not listed); a file that cannot be
         decoded, or whose name or channel does not match its record, is skipped (it would be
         parked on a claim, never handed out).
         """

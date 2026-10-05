@@ -189,13 +189,15 @@ What this does NOT establish: it does not stop, signal or observe the earlier ex
 may keep running and pushing to its own result branch (nothing here integrates a branch; only
 a verified result of the current execution can become INTEGRATION_READY). A fenced work
 record that nobody claimed yet is withdrawn from a transport that supports it (best effort,
-repeated on recovery; the spool then refuses to publish that seal again). The earlier
-executor can still have claimed it first, and then runs on; identities are
+repeated on recovery): the transport keeps a tombstone for that seal, also when the record
+had not reached it yet, and refuses to publish it afterwards. The earlier executor can
+still have claimed the record first, and then runs on; identities are
 unauthenticated strings and the address of a work record is metadata in the transport, so
 this fences stale or slow executors, not one that forges another's identity; a reassignment
 IS a new execution that the new owner's adapter dispatches (it is bounded per work item, so
-per lineage by that bound times its attempts, and it is not recovery, which only re-publishes
-the same record); an executor is "busy" while it owns a
+per lineage by that bound times its attempts, and it is not recovery, which creates no
+execution: recovery re-publishes the same record, withdraws fenced ones and journals results
+and verdicts already claimed); an executor is "busy" while it owns a
 lineage that is executing or being verified, a count over the journal, not a measurement;
 and a lineage dispatched without a pool is not assigned and accepts any implementer's
 result, as before.
@@ -1696,7 +1698,9 @@ class Planner:
         earlier execution, whenever it arrives and whoever sends it, is refused: it answers a
         work seal that is no longer the lineage's current work (the journal refuses a
         REASSIGN that would keep the seal). The fenced record is withdrawn if nobody claimed
-        it yet and the transport has ``withdraw``. With the fabric adapter, naming the SAME
+        it yet and the transport has ``withdraw`` (a tombstone for its seal, so that a
+        planner that replayed before this event cannot publish it afterwards). With the fabric
+        adapter, naming the SAME
         executor again is not supported end to end: an adapter that still holds the fenced
         work pairs the verification request with it and fails closed.
 
@@ -1788,8 +1792,11 @@ class Planner:
         Starts with a journal replay. Raises ``JournalCorrupt`` when the journal does not replay
         or continuity cannot be established, there or later in the pass, and re-raises an
         ``OSError`` from the journal or from publishing; a record claimed by then and not yet
-        journalled is kept in ``deferred``. An error from the transport's ``claim`` is
-        quarantined instead, at most ``MAX_RAISES_PER_PASS`` times per channel and pass.
+        journalled is kept in ``deferred``. A ``TransportError`` from publishing the record of
+        an event this pass has just journalled is re-raised too (the consumed record is
+        neither quarantined nor deferred; ``recover`` publishes the record). An error from
+        the transport's ``claim`` is quarantined instead, at most ``MAX_RAISES_PER_PASS``
+        times per channel and pass.
         """
         self.sync()
         n = 0
@@ -1828,8 +1835,9 @@ class Planner:
         A record that could not be decided (the commit lost the append race too often, an
         ``OSError`` was raised before its event was journalled, or the journal no longer
         replays) is kept in ``deferred`` for a later pump instead of being quarantined. An
-        ``OSError`` or ``JournalCorrupt`` is re-raised after that and ends the pass.
-        ``deferred`` is in memory only.
+        ``OSError`` or ``JournalCorrupt`` is re-raised after that and ends the pass, and so is
+        a ``TransportError``, which here comes from publishing for an event that is already
+        journalled. ``deferred`` is in memory only.
         """
         try:
             fn(rec)
@@ -2205,8 +2213,9 @@ class Coordinator:
 
         ``candidates`` are (queue item, sealed work fields) pairs the caller proposes. They are
         validated first; a malformed list raises before anything is read or written. A
-        candidate refused for a scope collision, a retained terminal scope, contention or its
-        own invalidity is reported under ``deferred`` and may be proposed again.
+        candidate refused for a scope collision, a retained terminal scope, contention, a
+        busy executor pool (``EXECUTOR_BUSY``) or its own invalidity is reported under
+        ``deferred`` and may be proposed again.
 
         Raises ``JournalCorrupt`` when continuity cannot be established or is lost during the
         tick; a ``HALTED`` status naming the reason is written first if the status file can be

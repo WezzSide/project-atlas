@@ -334,6 +334,11 @@ def test_the_in_memory_backend_addresses_the_same_way():
     assert t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity="other") is None
     assert t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity="vps1-impl").seal == a.seal
     assert InMemoryTransport.addressed is True and SpoolTransport.addressed is True
+    # a claimed record is the claimer's: it is not withdrawn, and a pending one is
+    assert t.withdraw(a) is False and t.withdraw(a) is False
+    d = work("D2")
+    assert t.publish(d) and t.withdraw(d) is True and t.withdraw(d) is False
+    assert t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity="other") is None
 
 
 def test_a_claimed_record_is_readopted_only_by_its_addressee(tmp_path, monkeypatch):
@@ -370,11 +375,81 @@ def test_withdraw_takes_back_only_what_nobody_claimed(tmp_path):
     assert t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity="vps1-impl").seal == a.seal
     assert t.withdraw(a) is False  # claimed: it stays with its claimer
     assert (tmp_path / "WORK" / "claimed" / f"{a.seal}.json").exists()
+    assert not (tmp_path / "WORK" / "withdrawn" / f"{a.seal}.json").exists()
     assert t.withdraw(b) is True and t.withdraw(b) is False
     assert (tmp_path / "WORK" / "withdrawn" / f"{b.seal}.json").exists()
+    assert not (tmp_path / "WORK" / f"{b.seal}.json").exists()
     assert t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity="vps1-impl") is None
-    assert t.withdraw(work("NEVER")) is False
-    assert {r.seal for r in t.published(Channel.WORK)} == {a.seal}
+    assert {r.seal for r in t.published(Channel.WORK)} == {a.seal}  # withdrawn: not listed
+
+
+def test_a_record_withdrawn_before_it_arrived_is_never_published(tmp_path):
+    """The planner that fenced it wins also against a publish that is still on its way."""
+    from project_atlas.orchestration.autonomy.dev_transport import InMemoryTransport
+
+    for t in (SpoolTransport(tmp_path), InMemoryTransport()):
+        late = work("LATE")
+        assert t.withdraw(late) is True and t.withdraw(late) is False  # not in the transport yet
+        # the stale publisher arrives: refused quietly, whatever address it brings
+        assert t.publish(late, to="vps1-impl") is False
+        assert t.publish(late) is False
+        assert t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity="vps1-impl") is None
+    assert not (tmp_path / "WORK" / f"{work('LATE').seal}.json").exists()
+    assert not list((tmp_path / "WORK").glob("*.to"))
+
+
+def test_a_publish_that_was_on_its_way_takes_its_own_name_back(tmp_path, monkeypatch):
+    import os as _os
+
+    t = SpoolTransport(tmp_path)
+    a = work("A")
+    real = _os.link
+
+    def withdrawn_meanwhile(src, dst, *args, **kw):
+        if str(dst).endswith(f"{a.seal}.json") and "withdrawn" not in str(dst):
+            monkeypatch.setattr("os.link", real)
+            assert SpoolTransport(tmp_path).withdraw(a) is True  # after publish looked
+        return real(src, dst, *args, **kw)
+
+    monkeypatch.setattr("os.link", withdrawn_meanwhile)
+    assert t.publish(a, to="vps1-impl") is False
+    assert not (tmp_path / "WORK" / f"{a.seal}.json").exists()
+    assert t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity="vps1-impl") is None
+
+
+def test_withdraw_never_keeps_a_tombstone_for_a_record_a_claimer_took(tmp_path, monkeypatch):
+    from project_atlas.orchestration.autonomy import dev_spool_transport as mod
+
+    t = SpoolTransport(tmp_path)
+    a = work("A")
+    t.publish(a)
+    real = mod._release_pending
+
+    claimed = []
+
+    def claimer_first(path):
+        # a claimer links the record after the tombstone was written, before the name is removed
+        if not claimed:
+            claimed.append(True)  # (the claim releases its own pending name through here too)
+            got = SpoolTransport(tmp_path).claim(Channel.WORK, role=Role.IMPLEMENTER, identity="x")
+            assert got is not None and got.seal == a.seal
+        real(path)
+
+    monkeypatch.setattr(mod, "_release_pending", claimer_first)
+    assert t.withdraw(a) is False  # the claimer has it: not withdrawn
+    monkeypatch.setattr(mod, "_release_pending", real)
+    assert not (tmp_path / "WORK" / "withdrawn" / f"{a.seal}.json").exists()
+    assert (tmp_path / "WORK" / "claimed" / f"{a.seal}.json").exists()
+    assert t.withdraw(a) is False and t.publish(a) is False
+
+
+def test_republishing_with_a_case_variant_of_the_address_is_the_same_address(tmp_path):
+    from project_atlas.orchestration.autonomy.dev_transport import InMemoryTransport
+
+    for t in (SpoolTransport(tmp_path), InMemoryTransport()):
+        a = work("A")
+        assert t.publish(a, to="vps1-impl") is True
+        assert t.publish(a, to="VPS1-IMPL") is False  # identities compare as same_identity
 
 
 def test_an_address_file_must_hold_exactly_an_identity(tmp_path):
@@ -388,6 +463,9 @@ def test_an_address_file_must_hold_exactly_an_identity(tmp_path):
     assert (tmp_path / "WORK" / f"{a.seal}.json").exists()
     (tmp_path / "elsewhere").write_text("vps4-impl")
     (tmp_path / "WORK" / f"{a.seal}.to").unlink()
+    (tmp_path / "WORK" / f"{a.seal}.to").mkdir()  # not a regular file
+    assert t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity="vps1-impl") is None
+    (tmp_path / "WORK" / f"{a.seal}.to").rmdir()
     try:
         (tmp_path / "WORK" / f"{a.seal}.to").symlink_to(tmp_path / "elsewhere")
     except OSError:  # no symlinks here (Windows without the privilege): nothing to check
@@ -400,32 +478,10 @@ def test_a_withdrawn_record_stays_withdrawn(tmp_path):
     t = SpoolTransport(tmp_path)
     a = work("A")
     assert t.publish(a, to="vps1-impl") and t.withdraw(a)
-    assert t.publish(a, to="vps1-impl") is False  # refused quietly, like a known record
+    for to in ("vps1-impl", "vps4-impl", None):
+        assert t.publish(a, to=to) is False  # refused quietly, like a known record
     assert not (tmp_path / "WORK" / f"{a.seal}.json").exists()
     assert t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity="vps1-impl") is None
-    with pytest.raises(TransportError, match="different address"):
-        t.publish(a, to="vps4-impl")
-
-
-def test_withdraw_never_keeps_a_copy_of_a_record_a_claimer_took(tmp_path, monkeypatch):
-    import os as _os
-
-    t = SpoolTransport(tmp_path)
-    a = work("A")
-    t.publish(a)
-    real = _os.replace
-
-    def claim_wins(src, dst, *args, **kw):
-        out = real(src, dst, *args, **kw)
-        if "withdrawn" in str(dst):  # the claimer linked the record just before the move
-            claimed = tmp_path / "WORK" / "claimed" / f"{a.seal}.json"
-            claimed.write_bytes((tmp_path / "WORK" / "withdrawn" / f"{a.seal}.json").read_bytes())
-        return out
-
-    monkeypatch.setattr("os.replace", claim_wins)
-    assert t.withdraw(a) is False  # the claimer has it: not withdrawn
-    assert not (tmp_path / "WORK" / "withdrawn" / f"{a.seal}.json").exists()
-    assert (tmp_path / "WORK" / "claimed" / f"{a.seal}.json").exists()
 
 
 def test_a_claimed_record_with_an_unreadable_address_is_readopted_by_nobody(tmp_path):
