@@ -322,16 +322,18 @@ class SpoolTransport:
         is written also when the record is not in the spool at all, so a ``publish`` of that
         seal that is still on its way is refused. Once the tombstone exists, ``publish``
         refuses the seal, ``claim`` does not hand the record out (it looks for the tombstone
-        before its link and again after it) and ``claimed_records`` does not return it.
+        before its link, once the pending file decoded as this record, and again after it)
+        and ``claimed_records`` does not return it.
 
         True: this call wrote the tombstone and found no ``claimed/`` name after it. Then no
         ``claim`` and no ``claimed_records`` call returns the record, before or after:
         ``claim`` links the ``claimed/`` name and then looks for the tombstone, this call
         writes the tombstone and then looks for the ``claimed/`` name, and neither mark is
         ever removed, so at least one of the two sees the other's.
-        False: a ``claimed/`` name existed before this call (no tombstone is written then),
-        or one was found after the tombstone was written, or the seal already had a
-        tombstone, or the tombstone could not be written. In the second case the claimer
+        False: a ``claimed/`` name existed before this call (no tombstone is written then,
+        unless the seal has one already), or one was found after the tombstone was written,
+        or the seal already had a tombstone, or the tombstone could not be written. In the
+        second case the claimer
         has the record only if its look after the link came before the tombstone; otherwise
         nobody has it, and either way it is not re-adopted through ``claimed_records``. So
         False does not mean "still deliverable", and it does not mean "somebody runs it".
@@ -372,9 +374,11 @@ class SpoolTransport:
         """Every decodable record this spool holds on ``channel``, pending or claimed.
 
         Read-only: what the spool directory holds now. Records are kept after a claim, so
-        absent loss this is what was published and not rejected, except that a pending name
-        whose seal has a tombstone is not listed. A name in ``claimed/`` is listed, tombstone
-        or not (see ``withdraw`` for when it has one); a file that cannot be
+        absent loss this is what was published and neither rejected nor withdrawn before
+        anybody linked it: a withdrawn record whose pending name was removed is gone, one
+        whose pending name is still there (it has a tombstone) is not listed, and a name in
+        ``claimed/`` is listed, tombstone or not (see ``withdraw`` for when it has one). A
+        file that cannot be
         decoded, or whose name or channel does not match its record, is skipped (it would be
         parked on a claim, never handed out).
         """
@@ -409,8 +413,9 @@ class SpoolTransport:
                 who = _claimer(meta)
                 if who is not None and not same_identity(who, identity):
                     continue  # owned by another identity: only its claimer may re-adopt it
-                # no meta => crash between rename and meta write: the caller must check that the
-                # record is addressed to it (the adapter does, for VERIFICATION)
+                # no meta => a crash between the claim's link and its meta write, or a claim
+                # that found the record withdrawn (skipped below). The caller must check that
+                # the record is addressed to it (the adapter does, for VERIFICATION)
                 rec = decode(rec_path.read_text(encoding="utf-8"))
                 if rec.seal != seal:
                     continue

@@ -16854,15 +16854,19 @@ Earlier heads of this branch, each superseded, with what independent verificatio
 `e4465fae` (`claim` removed its own `claimed/` name when it found the record withdrawn;
 because that name could disappear, `withdraw` could return True for a record a
 `claimed_records` reader had already been given, and a second claimer could park the record
-in `rejected/`). This entry describes the branch after the third commit and replaces the
-entries those heads carried.
+in `rejected/`) and `d9b76bb6` (behaviour as described here; two sentences in the code were
+found false or stale: the `published` docstring left out the ordinary withdrawal, and a
+comment in `claimed_records` said a `claimed/` name without a meta means a crash). This
+entry describes the branch after the fourth commit and replaces the entries those heads
+carried.
 
 Behaviour (`dev_spool_transport.py`):
 - `withdraw` never removes a tombstone (`withdrawn/<seal>.json`) once it is written. It
   returns True only when it wrote the tombstone and found no `claimed/` name after it. It no
   longer returns False because the temporary file of the tombstone could not be removed.
-- `claim` looks for the tombstone before its link (a tombstoned pending name is skipped: not
-  linked, not parked) and again after its link; when it finds one after the link it does not
+- `claim` looks for the tombstone before its link (a pending file that decodes as its record
+  and has a tombstone is skipped: not linked, not parked; a file that does not decode is
+  parked as before) and again after its link; when it finds one after the link it does not
   hand the record out and goes on to the next record. The `claimed/` name it linked stays,
   without a claim meta.
 - A `claimed/` name and a tombstone are both never removed, `claim` links before it looks
@@ -16886,16 +16890,17 @@ Correction to the ATLAS-DEVQ-0011 entry above, which is left as written: the in-
 transport looks for the withdrawal mark once in `publish`, not twice as the spool transport
 does.
 
-Tests (`tests/unit/test_orchestration_dev_spool_transport.py`): 26 -> 29 test functions.
+Tests (`tests/unit/test_orchestration_dev_spool_transport.py`): 26 -> 30 test functions.
 Removed: `test_withdraw_never_keeps_a_tombstone_for_a_record_a_claimer_took` (it asserted
 that the tombstone is removed when a claimer took the record; the tombstone now stays). New:
 `test_a_claim_made_while_the_tombstone_was_being_written_is_reported_by_withdraw`,
 `test_a_claim_does_not_hand_out_a_record_withdrawn_before_its_link`,
-`test_withdraw_is_not_true_for_a_record_a_recovery_already_saw`,
+`test_a_claim_that_linked_before_the_tombstone_and_looked_after_it_hands_nothing_out`
+(two threads), `test_withdraw_is_not_true_for_a_record_a_recovery_already_saw`,
 `test_a_withdrawn_record_whose_name_cannot_be_removed_is_never_claimed`.
 
-Measured locally at this change: spool file 29 passed; 30 consecutive runs of the spool file
-29 passed each; all `tests/unit/test_orchestration_dev_*.py` 1074 passed; `ruff check src
+Measured locally at this change: spool file 30 passed; 30 consecutive runs of the spool file
+30 passed each; all `tests/unit/test_orchestration_dev_*.py` 1075 passed; `ruff check src
 tests` clean; `mypy src` clean (415 files). Eight mutants, each failing at least one test:
 `claim` without the look before the link; `claim` without the look after the link;
 `claimed_records` without the check; `withdraw` returning True without looking for a
@@ -16904,7 +16909,9 @@ names too; `withdraw` writing a tombstone for a record that was linked before; `
 removing its `claimed/` name when it finds the record withdrawn.
 
 Still open after this: a record can end up with nobody (tombstone and `claimed/` name, see
-above; it is fenced work, and `published` still lists it); the looks are `Path.exists`, so a
+above; it is fenced work, and `published` still lists it); a claimer that was handed a
+record just before its tombstone was written does not get it back from `claimed_records`
+after a crash; the looks are `Path.exists`, so a
 look that fails reads as "absent"; whoever can write the spool directory can create or
 remove tombstones and addresses; a claimer running code from before this change honours no
 tombstone, and one from before ATLAS-DEVQ-0011 no address either; two stores sharing one

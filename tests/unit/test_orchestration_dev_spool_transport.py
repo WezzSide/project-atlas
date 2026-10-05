@@ -481,6 +481,53 @@ def test_a_claim_does_not_hand_out_a_record_withdrawn_before_its_link(tmp_path, 
     assert t.withdraw(a) is False and t.publish(a, to="vps1-impl") is False
 
 
+def test_a_claim_that_linked_before_the_tombstone_and_looked_after_it_hands_nothing_out(
+    tmp_path, monkeypatch
+):
+    """Withdraw passed its first look, the claim links, the tombstone is written, the claim
+    looks again: neither has the record (withdraw False, claim nothing), never both."""
+    import tempfile
+
+    from project_atlas.orchestration.autonomy import dev_spool_transport as mod
+
+    t = SpoolTransport(tmp_path)
+    a = work("A")
+    t.publish(a, to="vps1-impl")
+    linked, tombstoned = threading.Event(), threading.Event()
+    real_link, real_mkstemp = mod._claim_link, tempfile.mkstemp
+    got: list[object] = []
+
+    def link_then_wait(src, dest):
+        real_link(src, dest)
+        linked.set()
+        assert tombstoned.wait(30)
+
+    def claimer():
+        other = SpoolTransport(tmp_path)
+        got.append(other.claim(Channel.WORK, role=Role.IMPLEMENTER, identity="vps1-impl"))
+
+    thread = threading.Thread(target=claimer)
+
+    def claim_links_now(*args, **kw):
+        if "withdrawn" in str(kw.get("dir")) and not thread.is_alive() and not got:
+            thread.start()  # withdraw has looked for a claim and found none
+            assert linked.wait(30)
+        return real_mkstemp(*args, **kw)
+
+    monkeypatch.setattr(mod, "_claim_link", link_then_wait)
+    monkeypatch.setattr(tempfile, "mkstemp", claim_links_now)
+    assert t.withdraw(a) is False
+    tombstoned.set()
+    thread.join(30)
+    monkeypatch.undo()
+    assert got == [None]
+    assert (tmp_path / "WORK" / "claimed" / f"{a.seal}.json").exists()
+    assert not (tmp_path / "WORK" / "claimed" / f"{a.seal}.claim.json").exists()
+    assert (tmp_path / "WORK" / "withdrawn" / f"{a.seal}.json").exists()
+    assert t.claimed_records(Channel.WORK, identity="vps1-impl") == []
+    assert not (tmp_path / "WORK" / "rejected").exists()
+
+
 def test_withdraw_is_not_true_for_a_record_a_recovery_already_saw(tmp_path, monkeypatch):
     """A name linked into claimed/ is never removed, so withdraw cannot miss it.
 

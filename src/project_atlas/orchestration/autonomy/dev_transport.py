@@ -88,7 +88,9 @@ class DevTransport(Protocol):
         record, not part of its seal. A backend that implements it says so with the class
         attribute ``addressed = True`` (callers read it with ``getattr``). Such a backend may also
         offer
-        ``withdraw(record) -> bool``: take a published record back if nobody claimed it.
+        ``withdraw(record) -> bool``: take a record back if nobody claimed it (also one that
+        was not published yet: it is then not published afterwards); see the backend for
+        what its result says.
         """
 
     def claim(self, channel: Channel, *, role: Role, identity: str) -> Record | None:
