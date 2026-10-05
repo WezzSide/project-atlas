@@ -395,7 +395,8 @@ def test_garbage_and_non_object_events_are_refused(tmp_path):
 
 
 def _forge(path, seq, prev, **body):
-    version = body.pop("v", 2 if "handover" in body else 1)
+    owned = "executor" in body or body.get("event") == "REASSIGN"
+    version = body.pop("v", 3 if owned else 2 if "handover" in body else 1)
     ev = {"v": version, "seq": seq, "prev": prev, "planner": "forger", **body}
     raw = json.dumps(ev, sort_keys=True).encode()
     (path / f"{seq:012d}.json").write_bytes(raw)
@@ -603,6 +604,8 @@ def test_fleet_status_is_derived_from_the_journal_alone(tmp_path):
             "scope_released": "",
             "handover": "",
             "handed_over_to": (),
+            "executor": "",
+            "epoch": 0,
             "dispatched_by": "vps3-plan",
             "last_seq": 1,
         },
@@ -621,6 +624,8 @@ def test_fleet_status_is_derived_from_the_journal_alone(tmp_path):
             "scope_released": "",
             "handover": "",
             "handed_over_to": (),
+            "executor": "",
+            "epoch": 0,
             "dispatched_by": "vps3-plan",
             "last_seq": 3,
         },
@@ -2204,3 +2209,347 @@ def test_replay_applies_repository_identity_like_a_live_dispatch(tmp_path):
     rows = {r["lineage_root"]: r for r in fleet_status(DirJournal(j))}
     assert rows["B"]["repository"] == repo + ".git"
     assert rows["B"]["repository_key"] == rows["A"]["repository_key"] == repo.lower()
+
+
+# ---- executor ownership (ATLAS-DEVQ-0011) ---------------------------------------------------
+
+E1, E2 = "vps1-impl", "vps4-impl"
+POOL = (E1, E2)
+
+
+def _claim_work(t, who):
+    return t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity=who)
+
+
+def _result(work, who, rev=REV1):
+    return make_result(work, executor_identity=who, result_revision=rev, result_tree=TREE1)
+
+
+def _event(tmp_path, seq):
+    return json.loads((tmp_path / "j" / f"{seq:012d}.json").read_text())
+
+
+def test_a_dispatch_assigns_the_execution_to_one_executor_of_the_pool(tmp_path):
+    t = InMemoryTransport()
+    p = planner(t, DirJournal(tmp_path / "j"))
+    wa = p.dispatch(qi("A"), executor_pool=POOL, **FIELDS)
+    wb = p.dispatch(qi("B"), executor_pool=POOL, **fields("src/y"))
+    a, b = p.lineages["A"], p.lineages["B"]
+    assert (a.executor, b.executor) == (E1, E2)  # least loaded, then by name
+    assert a.history == ["DISPATCHED:A", f"ASSIGNED:A-E1:{E1}"] and a.epoch == 0
+    ev = _event(tmp_path, 1)
+    assert ev["v"] == 3 and ev["executor"] == E1 and "handover" not in ev
+    assert p.executor_load() == {E1: 1, E2: 1}
+    # every executor owns its limit: nothing is assigned, nothing is appended or published
+    with pytest.raises(PlannerError, match=r"^EXECUTOR_BUSY:"):
+        p.dispatch(qi("C"), executor_pool=POOL, **fields("src/z"))
+    assert p.state.seq == 2 and "C" not in p.lineages
+    assert p.dispatch(qi("C"), executor_pool=POOL, executor_limit=2, **fields("src/z"))
+    assert p.lineages["C"].executor == E1
+    rows = {r["lineage_root"]: r for r in fleet_status(DirJournal(tmp_path / "j"))}
+    assert (rows["A"]["executor"], rows["B"]["executor"], rows["A"]["epoch"]) == (E1, E2, 0)
+    # delivery: a work record goes only to the executor it is addressed to
+    got = [_claim_work(t, E2), _claim_work(t, E2)]
+    assert got[0].seal == wb.seal and got[1] is None
+    mine = {_claim_work(t, E1).seal, _claim_work(t, E1).seal}
+    assert mine == {wa.seal, p.lineages["C"].work.seal} and _claim_work(t, E1) is None
+
+
+def test_only_the_owning_executor_s_result_is_accepted(tmp_path):
+    t = InMemoryTransport()
+    p = planner(t, DirJournal(tmp_path / "j"))
+    wa = p.dispatch(qi("A"), executor_pool=POOL, **FIELDS)
+    t.publish(_result(wa, E2))  # a well-formed result for the right work, from another executor
+    p.pump()
+    assert p.lineages["A"].phase is Phase.DISPATCHED and p.state.seq == 1
+    assert "not from vps1-impl, the executor that owns this execution" in p.quarantined[-1][2]
+    t.publish(_result(wa, E1))
+    p.pump()
+    assert p.lineages["A"].phase is Phase.VERIFYING
+    # the owner keeps the lineage while it is being verified: it is not free for other work
+    with pytest.raises(PlannerError, match=r"^EXECUTOR_BUSY:"):
+        p.dispatch(qi("B"), executor_pool=(E1,), **fields("src/y"))
+    verify(t)
+    p.pump()
+    assert p.lineages["A"].phase is Phase.INTEGRATION_READY and p.executor_load() == {}
+    assert p.dispatch(qi("B"), executor_pool=(E1,), **fields("src/y"))
+
+
+def test_a_lineage_without_an_assignment_behaves_as_before(tmp_path):
+    t = InMemoryTransport()
+    p = planner(t, DirJournal(tmp_path / "j"))
+    wa = p.dispatch(qi("A"), **FIELDS)
+    assert _event(tmp_path, 1)["v"] == 1 and "executor" not in _event(tmp_path, 1)
+    assert p.lineages["A"].executor == "" and p.executor_load() == {}
+    assert _claim_work(t, "anyone").seal == wa.seal
+    t.publish(_result(wa, "anyone"))
+    p.pump()
+    assert p.lineages["A"].phase is Phase.VERIFYING
+
+
+def test_a_repair_stays_with_the_lineages_executor(tmp_path):
+    t = InMemoryTransport()
+    p = planner(t, DirJournal(tmp_path / "j"))
+    wa = p.dispatch(qi("A"), executor_pool=POOL, **FIELDS)
+    p.reassign("A", executor_pool=(E2,), reason="runner replaced")
+    w2 = _claim_work(t, E2)
+    t.publish(_result(w2, E2))
+    p.pump()
+    verify(t, Verdict.FAIL, DEFECT)
+    p.pump()
+    st = p.lineages["A"]
+    assert st.phase is Phase.REPAIR_DISPATCHED and st.work.task_id == "A-R1"
+    assert st.executor == E2 and st.epoch == 0  # a new work item starts at epoch 0
+    ev = _event(tmp_path, p.state.seq)
+    assert ev["event"] == "REPAIR" and ev["executor"] == E2 and ev["v"] == 3
+    assert _claim_work(t, E1).seal == wa.seal  # only the fenced first execution is left for E1
+    assert _claim_work(t, E1) is None and _claim_work(t, E2).seal == st.work.seal
+
+
+def test_reassignment_fences_the_earlier_execution(tmp_path):
+    t = InMemoryTransport()
+    p = planner(t, DirJournal(tmp_path / "j"))
+    old = p.dispatch(qi("A"), executor_pool=POOL, **FIELDS)
+    assert _claim_work(t, E1).seal == old.seal  # E1 is running the first execution
+    new = p.reassign("A", executor_pool=(E2,), reason="lease expired; runner unreachable")
+    st = p.lineages["A"]
+    # the same work under the next execution id: nothing else differs
+    assert new.execution_id == "A-E1-X1" and new.seal != old.seal
+    assert new.model_dump(exclude={"seal", "execution_id"}) == old.model_dump(
+        exclude={"seal", "execution_id"}
+    )
+    assert (st.executor, st.epoch, st.work.seal, st.phase) == (E2, 1, new.seal, Phase.DISPATCHED)
+    assert st.history[-1] == f"REASSIGNED:A-E1-X1:{E2}:lease expired; runner unreachable"
+    ev = _event(tmp_path, 2)
+    assert (ev["event"], ev["v"], ev["executor"]) == ("REASSIGN", 3, E2)
+    assert p.state.superseded == {old.seal: "A"} and p.in_flight() == {"A"}
+    # E1 never stopped. Its result arrives late: it answers a work that is no longer current
+    t.publish(_result(old, E1))
+    p.pump()
+    assert st.phase is Phase.DISPATCHED and p.state.seq == 2
+    assert "does not answer the dispatched work" in p.quarantined[-1][2]
+    # nor can E1 answer the new work: it is not the owner (and the record is not delivered to it)
+    assert _claim_work(t, E1) is None
+    t.publish(_result(new, E1, rev="d" * 40))
+    p.pump()
+    assert st.phase is Phase.DISPATCHED and "not from vps1-impl" not in p.quarantined[-1][2]
+    assert f"not from {E2}" in p.quarantined[-1][2]
+    # exactly one valid writer: the new owner under the new execution id
+    assert _claim_work(t, E2).seal == new.seal
+    t.publish(_result(new, E2))
+    p.pump()
+    assert st.phase is Phase.VERIFYING and st.result.execution_id == "A-E1-X1"
+    # durable: a new planner replays to the same owner, epoch and fenced seal
+    q = planner(InMemoryTransport(), DirJournal(tmp_path / "j"))
+    assert (q.lineages["A"].executor, q.lineages["A"].epoch) == (E2, 1)
+    assert q.state.superseded == {old.seal: "A"}
+    row = fleet_status(DirJournal(tmp_path / "j"))[0]
+    assert (row["executor"], row["epoch"], row["execution_id"]) == (E2, 1, "A-E1-X1")
+
+
+def test_reassignment_is_bounded_and_only_for_an_executing_lineage(tmp_path):
+    t = InMemoryTransport()
+    p = planner(t, DirJournal(tmp_path / "j"))
+    p.dispatch(qi("A"), executor_pool=(E1,), **FIELDS)
+    # the same executor may take its own lineage again under a new epoch (a restart)
+    assert p.reassign("A", executor_pool=(E1,), reason="restart").execution_id == "A-E1-X1"
+    assert p.reassign("A", executor_pool=(E1,), reason="restart").execution_id == "A-E1-X2"
+    assert p.reassign("A", executor_pool=(E2,), reason="move").execution_id == "A-E1-X3"
+    assert p.lineages["A"].executor == E2 and p.lineages["A"].epoch == 3
+    seq = p.state.seq
+    with pytest.raises(PlannerError, match=r"^REASSIGN_LIMIT:A was reassigned 3 times"):
+        p.reassign("A", executor_pool=POOL, reason="again")
+    # the bound is the journal's own rule: a fourth REASSIGN does not replay either
+    from project_atlas.orchestration.autonomy.dev_planner import next_epoch_work
+
+    n, head = _head(tmp_path)
+    fourth = next_epoch_work(p.lineages["A"].work, 4)
+    _forge(
+        tmp_path / "j",
+        n + 1,
+        head,
+        event="REASSIGN",
+        root="A",
+        work=encode(fourth),
+        executor=E1,
+        reason="again",
+    )
+    with pytest.raises(JournalCorrupt, match="REASSIGN_LIMIT:A was reassigned 3 times"):
+        planner(InMemoryTransport(), DirJournal(tmp_path / "j"))
+    (tmp_path / "j" / f"{n + 1:012d}.json").unlink()
+    for bad in ("", "x" * 201, "two\nlines"):
+        with pytest.raises(PlannerError, match="REASSIGN"):
+            p.reassign("A", executor_pool=POOL, reason=bad)
+    with pytest.raises(PlannerError, match="unknown task"):
+        p.reassign("NOPE", executor_pool=POOL, reason="x")
+    with pytest.raises(PlannerError, match="non-empty executor pool"):
+        p.reassign("A", executor_pool=(), reason="x")
+    p.dispatch(qi("B"), executor_pool=(E1,), **fields("src/y"))
+    with pytest.raises(PlannerError, match=r"^EXECUTOR_BUSY:"):
+        p.reassign("B", executor_pool=(E2,), reason="x")  # E2 owns A
+    assert p.state.seq == seq + 1
+    w = _claim_work(t, E1)
+    while w.task_id != "B":
+        w = _claim_work(t, E1)
+    t.publish(_result(w, E1))
+    p.pump()
+    with pytest.raises(PlannerError, match="reassign refused: B is not the executing work"):
+        p.reassign("B", executor_pool=POOL, reason="x")  # it has a result: VERIFYING
+    verify(t)
+    p.pump()
+    with pytest.raises(PlannerError, match="reassign refused"):
+        p.reassign("B", executor_pool=POOL, reason="x")  # INTEGRATION_READY
+    p.fail_execution("A", "gave up")
+    with pytest.raises(PlannerError, match="reassign refused"):
+        p.reassign("A", executor_pool=POOL, reason="x")  # BLOCKED
+
+
+@pytest.mark.parametrize(
+    "pool, limit, why",
+    [
+        ((E1, E1), 1, "duplicate"),
+        ((E1, E1.upper()), 1, "duplicate"),
+        (("",), 1, "invalid executor identity"),
+        ((5,), 1, "invalid executor identity"),
+        ((" spaced ",), 1, "invalid executor identity"),
+        (E1, 1, "sequence of identities"),
+        ((E1,), 0, "executor_limit must be"),
+        ((E1,), True, "executor_limit must be"),
+        ((E1,), "1", "the limit an integer"),
+    ],
+)
+def test_an_executor_pool_is_validated_before_anything_is_decided(tmp_path, pool, limit, why):
+    p = planner(InMemoryTransport(), DirJournal(tmp_path / "j"))
+    with pytest.raises(PlannerError, match=why):
+        p.dispatch(qi("A"), executor_pool=pool, executor_limit=limit, **FIELDS)
+    assert p.state.seq == 0
+
+
+def test_journalled_ownership_is_checked_on_replay(tmp_path):
+    from project_atlas.orchestration.autonomy.dev_planner import next_epoch_work
+
+    t = InMemoryTransport()
+    p = planner(t, DirJournal(tmp_path / "j"))
+    wa = p.dispatch(qi("A"), executor_pool=(E1,), **FIELDS)  # A: executing, owned by E1
+    wv = p.dispatch(qi("V"), executor_pool=(E2,), **fields("src/v"))
+    t.publish(_result(wv, E2))
+    p.pump()  # V: VERIFYING
+    wu = p.dispatch(qi("U"), **fields("src/u"))  # U: executing, not assigned
+    n, head = _head(tmp_path)
+    j = tmp_path / "j"
+    req = encode(p.issued["V"])
+    x1 = next_epoch_work(wa, 1)
+
+    def result(work, who):
+        from project_atlas.orchestration.autonomy.dev_contracts import make_verification_request
+
+        res = _result(work, who)
+        request = make_verification_request(work, res, verifier_identity=VER)
+        return dict(
+            event="RESULT", root=work.lineage_root, result=encode(res), request=encode(request)
+        )
+
+    def reassign(work, executor=E2, reason="r", root="A", **kw):
+        return (
+            dict(event="REASSIGN", root=root, work=encode(work), executor=executor, reason=reason)
+            | kw
+        )
+
+    cases = [
+        # a result for an owned execution from anyone but its owner
+        (result(wa, E2), "RESULT is not from the executor that owns this execution"),
+        (result(wa, "someone-else"), "RESULT is not from the executor that owns"),
+        # the version says whether an executor is named
+        (reassign(x1) | {"v": 1}, "unsupported journal version 1"),
+        (reassign(x1) | {"v": 2}, "unsupported journal version 2"),
+        (reassign(x1) | {"v": 3.0}, "unsupported journal version 3.0"),
+        (
+            dict(event="DISPATCH", root="B", work=encode(_work("B", "src/q")), v=3),
+            "unsupported journal version 3",
+        ),
+        (
+            dict(event="DISPATCH", root="B", work=encode(_work("B", "src/q")), executor=E1, v=1),
+            "unsupported journal version 1",
+        ),
+        # who may be named, and where
+        (
+            dict(event="DISPATCH", root="B", work=encode(_work("B", "src/q")), executor=""),
+            "invalid executor identity",
+        ),
+        (
+            dict(event="DISPATCH", root="B", work=encode(_work("B", "src/q")), executor=5),
+            "invalid executor identity",
+        ),
+        (
+            dict(event="RELEASE", root="A", evidence=MERGED, executor=E1),
+            "only a DISPATCH, REPAIR or REASSIGN",
+        ),
+        (
+            dict(event="TERMINAL", root="A", phase="BLOCKED", reason="x", executor=E1),
+            "only a DISPATCH, REPAIR or REASSIGN",
+        ),
+        (result(wu, E1) | {"executor": E1}, "only a DISPATCH, REPAIR or REASSIGN"),
+        # a reassignment is the CURRENT work under its NEXT epoch, for an executing lineage
+        (reassign(next_epoch_work(wa, 2)), "not the current work under its next epoch"),
+        (reassign(wa), "not the current work under its next epoch"),
+        (reassign(_work("A", "src/other")), "not the current work under its next epoch"),
+        (reassign(next_epoch_work(wu, 1)), "not the current work under its next epoch"),
+        (reassign(next_epoch_work(wv, 1), root="V"), "only an executing lineage can be reassigned"),
+        (reassign(x1, root="NOPE"), "REASSIGN for an unknown lineage"),
+        (reassign(x1, reason=""), "short printable reason"),
+        (reassign(x1, reason="x" * 201), "short printable reason"),
+        (reassign(x1, reason=5), "short printable reason"),
+        ({k: v for k, v in reassign(x1).items() if k != "executor"}, "REASSIGN needs the executor"),
+    ]
+    for body, why in cases:
+        _forge(j, n + 1, head, **body)
+        with pytest.raises(JournalCorrupt, match=why):
+            planner(InMemoryTransport(), DirJournal(j))
+        (j / f"{n + 1:012d}.json").unlink()
+    # control: the correct REASSIGN, and an unassigned lineage being assigned by one
+    _forge(j, n + 1, head, **reassign(x1))
+    q = planner(InMemoryTransport(), DirJournal(j))
+    assert (q.lineages["A"].executor, q.lineages["A"].epoch) == (E2, 1)
+    _forge(j, n + 1, head, **reassign(next_epoch_work(wu, 1), executor=E1, root="U"))
+    q = planner(InMemoryTransport(), DirJournal(j))
+    assert (q.lineages["U"].executor, q.lineages["U"].epoch) == (E1, 1)
+    assert req  # V's request is untouched by any of this
+
+
+def _work(task, *paths):
+    from project_atlas.orchestration.autonomy.dev_contracts import make_work
+
+    return make_work(
+        task_id=task,
+        execution_id=f"{task}-E1",
+        lineage_root=task,
+        acceptance_contract=("ok",),
+        **fields(*paths),
+    )
+
+
+def test_a_journalled_repair_must_keep_the_executor(tmp_path):
+    t = InMemoryTransport()
+    p = planner(t, DirJournal(tmp_path / "j"))
+    wa = p.dispatch(qi("A"), executor_pool=(E1,), **FIELDS)
+    t.publish(_result(wa, E1))
+    p.pump()
+    verify(t, Verdict.FAIL, DEFECT)
+    p.pump()
+    n, _ = _head(tmp_path)
+    j = tmp_path / "j"
+    good = json.loads((j / f"{n:012d}.json").read_text())
+    assert good["event"] == "REPAIR" and good["executor"] == E1
+    prev = good["prev"]
+    for change, why in (
+        ({"executor": E2}, "REPAIR must keep the lineage's executor assignment"),
+        ({"executor": None}, "invalid executor identity"),
+    ):
+        body = {k: v for k, v in good.items() if k not in ("v", "seq", "prev", "planner")}
+        _forge(j, n, prev, **(body | change))
+        with pytest.raises(JournalCorrupt, match=why):
+            planner(InMemoryTransport(), DirJournal(j))
+    body = {k: v for k, v in good.items() if k not in ("v", "seq", "prev", "planner", "executor")}
+    _forge(j, n, prev, **body)  # the assignment silently dropped (and so version 1)
+    with pytest.raises(JournalCorrupt, match="REPAIR must keep the lineage's executor"):
+        planner(InMemoryTransport(), DirJournal(j))

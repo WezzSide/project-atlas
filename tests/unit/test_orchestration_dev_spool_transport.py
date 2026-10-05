@@ -246,3 +246,91 @@ def test_blocked_claimed_slot_is_parked_once_and_not_retried(tmp_path, monkeypat
     assert calls["n"] == 1 and naps == [], "a blocked destination is never retried"
     assert (tmp_path / "WORK" / "rejected" / f"{w.seal}.json").exists()
     assert t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity=IMPL) is None  # parked once
+
+
+# ---- ATLAS-DEVQ-0011: addressed delivery ----------------------------------------------------
+
+
+def test_an_addressed_record_is_delivered_only_to_its_addressee(tmp_path):
+    t = SpoolTransport(tmp_path)
+    a, b, c = work("A"), work("B"), work("C")
+    assert t.publish(a, to="vps1-impl") and t.publish(b, to="vps4-impl") and t.publish(c)
+    assert (tmp_path / "WORK" / f"{a.seal}.to").read_text() == "vps1-impl"
+    assert not (tmp_path / "WORK" / f"{c.seal}.to").exists()
+
+    def claim(who):
+        return SpoolTransport(tmp_path).claim(Channel.WORK, role=Role.IMPLEMENTER, identity=who)
+
+    # another identity gets only what is addressed to nobody in particular
+    assert claim("someone").seal == c.seal and claim("someone") is None
+    assert claim("VPS4-IMPL").seal == b.seal and claim("vps4-impl") is None  # identity rules
+    assert claim("vps1-impl").seal == a.seal and claim("vps1-impl") is None
+    # the address is not a record: it is never listed, claimed or parked
+    assert {r.seal for r in t.published(Channel.WORK)} == {a.seal, b.seal, c.seal}
+    assert not (tmp_path / "WORK" / "rejected").exists()
+
+
+def test_a_record_is_addressed_once(tmp_path):
+    t = SpoolTransport(tmp_path)
+    a, c = work("A"), work("C")
+    assert t.publish(a, to="vps1-impl") is True
+    assert t.publish(a, to="vps1-impl") is False  # idempotent with the same address
+    for other in ("vps4-impl", None):
+        with pytest.raises(TransportError, match="already published with a different address"):
+            t.publish(a, to=other)
+    assert t.publish(c) is True
+    with pytest.raises(TransportError, match="already published with a different address"):
+        t.publish(c, to="vps1-impl")  # an open record cannot be narrowed afterwards
+    for bad in ("", " x ", 5):
+        with pytest.raises(TransportError, match="invalid addressee"):
+            t.publish(work("D"), to=bad)
+    assert not (tmp_path / "WORK" / f"{work('D').seal}.json").exists()
+    # still so after the record was claimed
+    assert t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity="vps1-impl").seal == a.seal
+    assert t.publish(a, to="vps1-impl") is False
+    with pytest.raises(TransportError, match="already published with a different address"):
+        t.publish(a, to="vps4-impl")
+
+
+def test_an_unreadable_address_delivers_to_nobody_and_does_not_wedge_the_channel(tmp_path):
+    t = SpoolTransport(tmp_path)
+    a, c = work("A"), work("C")
+    t.publish(a, to="vps1-impl")
+    t.publish(c)
+    (tmp_path / "WORK" / f"{a.seal}.to").write_bytes(b"\xff\xfe not an identity \n")
+    got = t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity="vps1-impl")
+    assert got.seal == c.seal  # the open record behind it is still delivered
+    assert t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity="vps1-impl") is None
+    assert (tmp_path / "WORK" / f"{a.seal}.json").exists()  # left in place, not parked
+    with pytest.raises(TransportError):
+        t.publish(a, to="vps1-impl")
+
+
+def test_an_address_written_before_a_crash_is_never_widened(tmp_path):
+    """The address is written before the record: a record never appears without it."""
+    t = SpoolTransport(tmp_path)
+    a = work("A")
+    (tmp_path / "WORK" / f"{a.seal}.to").write_text("vps1-impl")  # crash before the record
+    with pytest.raises(TransportError, match="already published with a different address"):
+        t.publish(a)
+    assert t.publish(a, to="vps1-impl") is True
+    assert t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity="other") is None
+
+
+def test_the_in_memory_backend_addresses_the_same_way():
+    from project_atlas.orchestration.autonomy.dev_transport import InMemoryTransport
+
+    t = InMemoryTransport()
+    a, c = work("A"), work("C")
+    assert t.publish(a, to="vps1-impl") and t.publish(c)
+    assert t.publish(a, to="vps1-impl") is False
+    with pytest.raises(TransportError, match="different address"):
+        t.publish(a)
+    with pytest.raises(TransportError, match="different address"):
+        t.publish(c, to="vps1-impl")
+    with pytest.raises(TransportError, match="invalid addressee"):
+        t.publish(work("D"), to="")
+    assert t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity="other").seal == c.seal
+    assert t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity="other") is None
+    assert t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity="vps1-impl").seal == a.seal
+    assert InMemoryTransport.addressed is True and SpoolTransport.addressed is True

@@ -16644,3 +16644,103 @@ Commands and results (`PYTHONPATH=<worktree>/src`, `--no-cov -o addopts=""`):
 - The full test suite was not run locally.
 
 Independent verification and exact-head CI are recorded on the PR, not here.
+
+## 2026-10-05 — ATLAS-DEVQ-0011: executor ownership (assignment, fencing token, reassignment)
+
+What / why: owner direction after PR #1071 (merged as main `fdbb42c7`): "Atlas should be able
+to determine which executor currently owns a lineage and ensure that replacement/reassignment
+cannot create two simultaneously valid writers. A lease expiry, timeout or planner phase
+alone must not become permission for conflicting execution. Design leases, executor
+assignment and fencing as one coherent ownership model". Before this, any implementer could
+claim any work record and the journal accepted a result for a lineage from any executor.
+Base: main `fdbb42c7`.
+
+The model (one, in the journal):
+- Assignment. `Planner.dispatch(executor_pool=, executor_limit=1)` names, inside the
+  dispatch decision, the pool member that owns the fewest lineages that are executing or
+  being verified (first by name among equals); if every member owns `executor_limit` the
+  dispatch is refused with `EXECUTOR_BUSY`. The DISPATCH event carries `executor`; a REPAIR
+  keeps it. The journal accepts a RESULT for an assigned lineage only from that identity.
+- Fencing token. The execution id, an existing sealed field of the work item. A result
+  carries the seal and execution id of the work it answers, and the journal accepts a result
+  only for the lineage's current work (that rule existed).
+- Reassignment. `Planner.reassign(task_id, executor_pool=, reason=)` journals a REASSIGN:
+  the current work re-materialised under its next execution id (`<id>-X<n>`,
+  `next_epoch_work`; nothing else of the work changes), the new owner, the reason. The
+  journal checks that the work is exactly that, that the lineage is executing, that an
+  executor is named, and at most `MAX_REASSIGNMENTS` (3) per work item. From that event on a
+  result of the earlier execution is refused, whoever sends it and whenever. The same
+  executor may be named again (a restart under a new epoch).
+- A lease is that ownership record. It has no clock: a timeout or a report is a reason to
+  call `reassign` and is recorded as such; the refusal of the earlier execution's result is
+  what makes the replacement safe.
+- Delivery. `DevTransport.publish(record, to=identity)` addresses a record: only that
+  identity's `claim` receives it (`InMemoryTransport`, `SpoolTransport`, attribute
+  `addressed`). The spool writes `<seal>.to` before the record, exclusively; a record is
+  addressed once (another address, or none after one, is refused); an unreadable address
+  delivers to nobody without blocking the channel. The planner publishes an assigned
+  lineage's work addressed to its executor, also on recovery.
+- Version. An event that names an executor is journal version 3 (`OWNERSHIP_VERSION`);
+  code from before this refuses it (measured with main's module: `unsupported journal
+  version 3` for an assigned and for a reassigned journal; a journal without assignments is
+  version 1 throughout and replays there). The version must now be an exact integer.
+- `Coordinator(executors=, executor_limit=)`: passes the pool to every dispatch, defers a
+  candidate with `EXECUTOR_BUSY`, reports `executors` (who owns which live lineage, from the
+  journal, including owners outside its own pool) and `executor_limit`, and refuses a pool
+  on a transport that does not address. It never calls `reassign`. The transport witness
+  counts a work fenced by a reassignment as known.
+- `fleet_status` rows gain `executor` and `epoch`.
+
+No new module, no `WorkItem` field, no new record kind, no seal change: a reassigned work is
+an ordinary sealed work item with another execution id. `dev_package.py` and the golden test
+files are untouched. No adapter, workflow or CLI change.
+
+What this does NOT establish (limits):
+- It does not stop, signal or observe the earlier executor. That executor may keep running
+  and pushing to its own result branch; nothing here integrates a branch, and only a
+  verified result of the current execution can become INTEGRATION_READY.
+- Identities are unauthenticated strings and an address is metadata in the transport
+  directory, outside the seal: this fences a stale or slow executor, not one that forges
+  another executor's identity, and whoever can write the spool can write or remove an
+  address. If an address is lost while its record stays, another implementer can claim the
+  record; its result is refused by the journal.
+- A reassignment IS a new execution: a new sealed work item that an adapter will dispatch as
+  such (the adapter's ledger is keyed by seal and execution id). It is not recovery, which
+  re-publishes the same record. It is bounded per work item; a repair starts a new count.
+- No clock, heartbeat or liveness detection; nobody is told to reassign. "Busy" is a count
+  of journalled ownership (executing or being verified), not a measurement of an executor.
+  The limit is a rule of the dispatch decision, like `live_limit`, not of replay.
+- A lineage dispatched without a pool is not assigned and behaves as before.
+- The scope of a BLOCKED or OWNER_REQUIRED lineage still cannot be handed over.
+- The fabric adapter was not changed or run: it claims with its own executor identity, so
+  it receives the records addressed to it; that pairing is not tested end to end here.
+- Local tests only. No live run, no executor dispatch.
+
+Carried from the PR #1071 verification: tests pin that `.git` is a literal suffix (`o/xagit`
+is not `o/x`), that a non-ASCII repository name is refused and that a non-string is not
+coerced; wording of the comment above `_REPO_FORMS`, of the DISPATCH rule comment and of the
+observer constructor's exception.
+
+Existing tests changed (vs main `fdbb42c7`, by test name and body): one changed in place,
+`test_fleet_status_is_derived_from_the_journal_alone` (two new row keys); the journal test
+helper `_forge` now writes version 3 for an event that names an executor. Test functions:
+journal file 76 -> 85, coordinator file 42 -> 45, spool file 11 -> 16, loop-contracts file
+72 -> 73.
+
+Commands and results (`PYTHONPATH=<worktree>/src`, `--no-cov -o addopts=""`):
+- `test_orchestration_dev_planner_journal.py` 108 passed, `_dev_coordinator.py` 45,
+  `_dev_spool_transport.py` 16 (these three together 30 consecutive runs, no failure),
+  `_dev_loop_contracts.py` 150, `_dev_fabric_adapter.py` 141.
+- The nine DEVQ files: 974 passed. Broad selection (`-k "orchestration_dev or dev_package or
+  executor or agent_execute or workflow or autonomy or global_foundation or github_port"`):
+  1672 passed, 5152 deselected.
+- `ruff check .` clean; `ruff format --check` on the nine changed Python files clean;
+  `mypy src`: no issues in 415 source files.
+- 38 scratch mutants of the model and of addressed delivery against five DEVQ test files
+  (two layout-dependent adapter tests deselected): 36 failed at least one test. Two
+  survived: the reassignment bound removed from the journal rule (a replay test was added;
+  it now fails) and the same bound removed from `Planner.reassign` only, which is equivalent
+  (the journal rule refuses the event before it is appended, with the same message).
+- The full test suite was not run locally.
+
+Independent verification and exact-head CI are recorded on the PR, not here.

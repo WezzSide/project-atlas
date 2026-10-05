@@ -215,7 +215,8 @@ class ResultInBaseObserver:
     revision itself), for the one repository this observer was constructed for (the caller
     must pass a port that is bound to that repository; that is not checked here). The
     repository is compared by ``repository_key``: any supported spelling of it matches, and
-    the constructor refuses one that cannot be keyed. Anything else is ``None``: another
+    the constructor raises ``ContractError`` (not ``AdapterError``) for one that cannot be
+    keyed. Anything else is ``None``: another
     repository or an unsupported spelling, a revision that is not 40 lowercase hex digits, a
     merge base that differs. A port error (``AdapterError``, including a truncated compare)
     is raised and the planner treats it as "not established". It calls nothing but

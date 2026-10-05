@@ -10,6 +10,7 @@ synchronisation medium and role identities (``FLEET_TRANSPORT_INTEGRATION_READY`
 Layout::
 
     <root>/<CHANNEL>/<seal>.json                 published, unclaimed
+    <root>/<CHANNEL>/<seal>.to                    addressee of the record, if it has one
     <root>/<CHANNEL>/claimed/<seal>.json          consumed (content kept as durable evidence)
     <root>/<CHANNEL>/claimed/<seal>.claim.json    who claimed it
 
@@ -46,6 +47,7 @@ from project_atlas.orchestration.autonomy.dev_transport import (
     Channel,
     Record,
     TransportError,
+    check_address,
     decode,
     encode,
 )
@@ -113,6 +115,8 @@ def _lost_race(path: Path, dest: Path) -> bool:
 
 
 class SpoolTransport:
+    addressed = True  # ``publish(record, to=identity)`` delivers only to that identity
+
     def __init__(self, root: Path) -> None:
         self.root = Path(root)
         for ch in Channel:
@@ -121,13 +125,52 @@ class SpoolTransport:
     def _dir(self, channel: Channel) -> Path:
         return self.root / channel.value
 
-    def publish(self, record: Record) -> bool:
+    def _addressee(self, channel: Channel, seal: str) -> str | None:
+        """Who a record is addressed to; ``None`` when it has no address file.
+
+        An address file that cannot be read or does not hold an identity raises
+        ``TransportError``: an unreadable address is never "addressed to nobody in
+        particular".
+        """
+        try:
+            who = (self._dir(channel) / f"{seal}.to").read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return None
+        except (OSError, ValueError) as exc:
+            raise TransportError(f"unreadable address of record {seal}") from exc
+        check_address(who, who)
+        return who
+
+    def publish(self, record: Record, *, to: str | None = None) -> bool:
+        """Publish; with ``to`` the record is delivered only to that identity's ``claim``.
+
+        The address is written BEFORE the record (exclusive creation, never overwritten), so
+        an addressed record is never claimable without its address. It is delivery metadata
+        in the spool directory, outside the record's seal: whoever can write the spool can
+        write an address. Publishing a record again with another address, or with none after
+        it had one, is refused.
+        """
         channel = CHANNEL_FOR_KIND[record.KIND]
         wire = encode(record)  # verifies the seal
         d = self._dir(channel)
         final = d / f"{record.seal}.json"
-        if final.exists() or (d / _CLAIMED / f"{record.seal}.json").exists():
+        exists = final.exists() or (d / _CLAIMED / f"{record.seal}.json").exists()
+        standing = self._addressee(channel, record.seal)
+        check_address(to, standing if exists or standing is not None else to)
+        if exists:
             return False
+        if to is not None and standing is None:
+            fd, tmp = tempfile.mkstemp(dir=d, prefix=".tmp-")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                    fh.write(to)
+                    fh.flush()
+                    os.fsync(fh.fileno())
+                with contextlib.suppress(FileExistsError):
+                    os.link(tmp, d / f"{record.seal}.to")  # exclusive: the first address stands
+            finally:
+                os.unlink(tmp)
+            check_address(to, self._addressee(channel, record.seal))  # a rival's address won?
         fd, tmp = tempfile.mkstemp(dir=d, prefix=".tmp-")
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
@@ -176,6 +219,12 @@ class SpoolTransport:
                     continue  # addressed to someone else: leave it, never wedge this claimer
                 if same_identity(identity, rec.executor_identity):
                     raise TransportError("executor identity may not claim its own verification")
+            try:
+                addressee = self._addressee(channel, rec.seal)
+            except TransportError:
+                continue  # unreadable address: nobody receives it, and the channel is not wedged
+            if addressee is not None and not same_identity(identity, addressee):
+                continue  # addressed to another identity: leave it for that one
             dest = d / _CLAIMED / path.name
             try:
                 _claim_link(path, dest)  # THE linearization point: exactly one claimer creates it

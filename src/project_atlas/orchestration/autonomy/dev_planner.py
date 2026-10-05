@@ -126,9 +126,10 @@ Limits (what this is NOT):
   * the planner cannot observe a merge. ``release_scope`` records the merge revision the
     CALLER asserts and ``fail_execution`` records a caller's failure report; since
     ATLAS-DEVQ-0009 neither opens a scope for other work (see "Verified scope handover");
-  * no leases, heartbeats or executor assignment: a holder whose executor died stays a holder,
-    and the paths of a BLOCKED or OWNER_REQUIRED lineage stay closed, because nothing here
-    has evidence about an executor;
+  * no heartbeats, lease durations or liveness detection: nothing here notices that an
+    executor died. Ownership of an execution and its safe replacement are journalled (see
+    "Executor ownership"), but WHEN to replace is the caller's decision, and the paths of a
+    BLOCKED or OWNER_REQUIRED lineage stay closed;
   * the quarantine list is evidence in memory only and is not journalled;
   * it does not lift the fabric adapter's serial-dispatch rule, and no live run has exercised
     two lineages.
@@ -163,6 +164,34 @@ written as journal version 2, which the previous code refuses, so a journal with
 does not replay there either; events without one are still version 1; and the scope of
 a BLOCKED or OWNER_REQUIRED lineage, or of an INTEGRATION_READY lineage whose result is not
 an ancestor of the base a new work is given, cannot be handed over at all yet.
+
+Executor ownership (ATLAS-DEVQ-0011): which executor owns a lineage's execution is a fact of
+the journal, and replacing it cannot create two valid writers. One model, three parts:
+  * assignment: a DISPATCH may name the executor that owns the execution (chosen from a pool
+    inside the dispatch decision); a REPAIR keeps it. The work record is published ADDRESSED
+    to that executor, and the journal accepts a RESULT for the lineage only from it;
+  * the fencing token is the execution id, which is part of the sealed work item. A result
+    carries the seal and the execution id of the work it answers, and the journal accepts a
+    result only for the lineage's CURRENT work;
+  * reassignment (``Planner.reassign``, event REASSIGN): the current work is re-materialised
+    under its next execution id and a (new or the same) executor becomes the owner. From that
+    event on the earlier execution cannot produce an accepted result, whether its executor
+    stopped, is slow, or never learns of it. So at every point of the journal exactly one
+    (execution id, executor) pair can write an accepted result for a lineage.
+A lease in this model is that ownership record: it has no clock. A timeout, a missed
+heartbeat or a report is a reason somebody may have for calling ``reassign``; it is recorded
+as the reason and is not what makes the replacement safe. Events that name an executor are
+journal version 3, which earlier code refuses.
+What this does NOT establish: it does not stop, signal or observe the earlier executor, which
+may keep running and pushing to its own result branch (nothing here integrates a branch; only
+a verified result of the current execution can become INTEGRATION_READY); identities are
+unauthenticated strings and the address of a work record is metadata in the transport, so
+this fences stale or slow executors, not one that forges another's identity; a reassignment
+IS a new execution that an adapter will dispatch (it is bounded per work item and it is not
+recovery, which only re-publishes the same record); an executor is "busy" while it owns a
+lineage that is executing or being verified, a count over the journal, not a measurement;
+and a lineage dispatched without a pool is not assigned and accepts any implementer's
+result, as before.
 
 Store identity and coordinator (ATLAS-DEVQ-0008): ``StoreJournal`` is a ``DirJournal`` whose
 journal and anchor directories are created once, carry one store id, and are afterwards only
@@ -257,6 +286,8 @@ class LineageState:
     dispatched_by: str = ""  # planner identity that journalled the DISPATCH
     last_seq: int = 0  # journal sequence number of the lineage's latest event
     handover: str = ""  # base revision of the first work admitted over this scope (journalled)
+    executor: str = ""  # identity that owns the CURRENT execution ("" = not assigned)
+    epoch: int = 0  # how often the current work was reassigned (0 = as first materialised)
     handed_over_to: list[str] = field(default_factory=list)  # lineage roots admitted over it
 
 
@@ -281,6 +312,13 @@ JOURNAL_VERSION = 1
 # An event that carries a scope handover is written as version 2, so that code from before
 # ATLAS-DEVQ-0009 (which would ignore the entry) refuses the journal instead of replaying it.
 HANDOVER_VERSION = 2
+# An event that names an executor (ATLAS-DEVQ-0011: an assignment on DISPATCH / REPAIR, or a
+# REASSIGN) is version 3, so that code from before the ownership model, which would accept a
+# result from any executor, refuses the journal instead of replaying it.
+OWNERSHIP_VERSION = 3
+MAX_REASSIGNMENTS = 3  # per work item: further replacement needs a decision about the lineage
+MAX_REASON = 200
+_EPOCH_SUFFIX = re.compile(r"-X[0-9]+$")
 MAX_OBSERVER_IDENTITY = 200
 MAX_COMMIT_RETRIES = 16  # lost exclusive-create races before a commit gives up (never spins)
 _EVENT_FILE = re.compile(r"[0-9]{12}\.json")
@@ -775,11 +813,48 @@ class FleetState:
     lineages: dict[str, LineageState] = field(default_factory=dict)
     by_task: dict[str, str] = field(default_factory=dict)  # task_id -> lineage_root
     works: dict[str, WorkItem] = field(default_factory=dict)
+    superseded: dict[str, str] = field(default_factory=dict)  # fenced work seal -> lineage root
     completed: set[str] = field(default_factory=set)
     blocked: dict[str, str] = field(default_factory=dict)
     issued: dict[str, VerificationRequest] = field(default_factory=dict)
     seals: set[str] = field(default_factory=set)  # result/verdict seals already journalled
     acked: int = 0  # highest sequence number this replica has SEEN acknowledged
+
+
+def _event_version(ev: Mapping[str, Any]) -> int:
+    if "executor" in ev or ev.get("event") == "REASSIGN":
+        return OWNERSHIP_VERSION
+    return HANDOVER_VERSION if "handover" in ev else JOURNAL_VERSION
+
+
+def _executor_of(ev: dict[str, Any]) -> str:
+    """The executor an event assigns ("" when it assigns none); validated."""
+    if "executor" not in ev:
+        return ""
+    executor = ev["executor"]
+    try:
+        if not isinstance(executor, str):
+            raise ValueError("not a string")
+        validate_identity(executor)
+    except ValueError as exc:
+        raise PlannerError(f"event names an invalid executor identity: {exc}") from exc
+    return executor
+
+
+def next_epoch_work(work: WorkItem, epoch: int) -> WorkItem:
+    """``work`` re-materialised for reassignment number ``epoch`` (>= 1): a new execution id.
+
+    Everything else is the work item's own: task, lineage, repository, base, scope, contract,
+    attempt. The execution id is the fencing token: it is part of the seal, a result has to
+    carry the seal and the execution id of the work it answers, and the journal accepts a
+    result only for the CURRENT work of a lineage. So a result produced under an earlier
+    epoch can never be accepted once this work is the current one.
+    """
+    stem = _EPOCH_SUFFIX.sub("", work.execution_id)
+    fresh: WorkItem = work.model_copy(
+        update={"execution_id": f"{stem}-X{epoch}", "seal": ""}
+    ).sealed()
+    return fresh
 
 
 def holds_scope(st: LineageState) -> bool:
@@ -864,10 +939,13 @@ def _transition(state: FleetState, ev: dict[str, Any], raw: bytes) -> Callable[[
     for replay and, before the append, for the event a live planner is about to write: an event
     that could not be replayed is never written.
     """
-    if ev.get("v") != (HANDOVER_VERSION if "handover" in ev else JOURNAL_VERSION):
+    if type(ev.get("v")) is not int or ev["v"] != _event_version(ev):
         raise PlannerError(f"unsupported journal version {ev.get('v')!r}")
     if "handover" in ev and ev.get("event") != "DISPATCH":
         raise PlannerError("only a DISPATCH carries a handover")
+    if "executor" in ev and ev.get("event") not in ("DISPATCH", "REPAIR", "REASSIGN"):
+        raise PlannerError("only a DISPATCH, REPAIR or REASSIGN names an executor")
+    assigned = _executor_of(ev)
     if type(ev.get("seq")) is not int or ev["seq"] != state.seq + 1 or ev.get("prev") != state.head:
         raise PlannerError("journal sequence or hash chain is broken")
     kind, root, planner = ev["event"], ev["root"], ev["planner"]
@@ -890,7 +968,7 @@ def _transition(state: FleetState, ev: dict[str, Any], raw: bytes) -> Callable[[
             raise PlannerError("lineage/task id already in use")
         if _REPAIR_SUFFIX.search(root):
             raise PlannerError("task id suffix -R<n> is reserved for repair tasks")
-        try:  # also with no earlier lineage: the journal never holds an identity it cannot key
+        try:  # also with no earlier lineage: a journal that replays holds no unkeyable identity
             repository_key(work.repository)
         except ContractError as exc:
             raise PlannerError(f"REPOSITORY_UNSUPPORTED:{exc}") from exc
@@ -932,7 +1010,10 @@ def _transition(state: FleetState, ev: dict[str, Any], raw: bytes) -> Callable[[
                 history=[f"DISPATCHED:{work.task_id}"],
                 dispatched_by=planner,
                 last_seq=seq,
+                executor=assigned,
             )
+            if assigned:
+                state.lineages[root].history.append(f"ASSIGNED:{work.execution_id}:{assigned}")
             state.by_task[work.task_id] = root
             state.works[work.task_id] = work
 
@@ -952,6 +1033,8 @@ def _transition(state: FleetState, ev: dict[str, Any], raw: bytes) -> Callable[[
             w.base_revision,
         ):
             raise PlannerError("RESULT identity/repository/base does not match the work")
+        if st.executor and not same_identity(res.executor_identity, st.executor):
+            raise PlannerError("RESULT is not from the executor that owns this execution")
         if req.result_seal != res.seal or req.task_id != res.task_id:
             raise PlannerError("RESULT request does not cover the journalled result")
         if same_identity(req.verifier_identity, res.executor_identity):
@@ -1006,16 +1089,48 @@ def _transition(state: FleetState, ev: dict[str, Any], raw: bytes) -> Callable[[
             expected = materialize_repair(st.work, ver, result=held).repair_work
             if expected is None or expected.seal != rw.seal:
                 raise PlannerError("REPAIR work is not the repair this verdict materialises")
+            if assigned != st.executor:
+                raise PlannerError("REPAIR must keep the lineage's executor assignment")
 
             def do_repair() -> None:
                 state.seals.add(ver.seal)
                 state.works[rw.task_id] = rw
                 state.by_task[rw.task_id] = root
                 st.work, st.result = rw, None
+                st.epoch = 0
                 st.phase = Phase.REPAIR_DISPATCHED
                 note(f"REPAIR_DISPATCHED:{rw.task_id}")
 
             steps.append(do_repair)
+    elif kind == "REASSIGN":
+        # Replacement of the executor of an EXECUTING lineage. The new work is the current
+        # work under the next execution id (the fencing token); from here on only a result
+        # that answers THIS work, from THIS executor, is accepted. Whatever caused the
+        # replacement (a timeout, a report, an operator) is recorded as its reason and is
+        # not what makes it safe: the earlier execution can no longer produce an accepted
+        # result, whether or not its executor stopped.
+        nw = _record(ev, "work", WorkItem)
+        why = ev["reason"]
+        if st.phase not in _EXECUTING:
+            raise PlannerError("only an executing lineage can be reassigned")
+        if not assigned:
+            raise PlannerError("REASSIGN needs the executor that takes the execution over")
+        if st.epoch >= MAX_REASSIGNMENTS:
+            raise PlannerError(f"REASSIGN_LIMIT:{st.work.task_id} was reassigned {st.epoch} times")
+        if nw.seal != next_epoch_work(st.work, st.epoch + 1).seal:
+            raise PlannerError("REASSIGN work is not the current work under its next epoch")
+        if not isinstance(why, str) or not 0 < len(why) <= MAX_REASON or not why.isprintable():
+            raise PlannerError("REASSIGN needs a short printable reason")
+        fenced = st.work
+
+        def do_reassign() -> None:
+            state.superseded[fenced.seal] = root
+            state.works[nw.task_id] = nw
+            st.work, st.executor = nw, assigned
+            st.epoch += 1
+            note(f"REASSIGNED:{nw.execution_id}:{assigned}:{why}")
+
+        steps.append(do_reassign)
     elif kind == "TERMINAL":
         phase, reason = Phase(ev["phase"]), ev["reason"]
         if phase not in (Phase.BLOCKED, Phase.OWNER_REQUIRED) or not isinstance(reason, str):
@@ -1140,6 +1255,8 @@ def fleet_status(journal: Journal) -> tuple[dict[str, Any], ...]:
             "scope_released": st.scope_released,
             "handover": st.handover,
             "handed_over_to": tuple(st.handed_over_to),
+            "executor": st.executor,
+            "epoch": st.epoch,
             "dispatched_by": st.dispatched_by,
             "last_seq": st.last_seq,
         }
@@ -1262,7 +1379,7 @@ class Planner:
             self._anchor_head()  # a writer acknowledges what it builds on before it appends
             decided = decide()
             ev = {
-                "v": HANDOVER_VERSION if "handover" in decided else JOURNAL_VERSION,
+                "v": _event_version(decided),
                 "seq": self.state.seq + 1,
                 "prev": self.state.head,
                 "planner": self.identity,
@@ -1319,9 +1436,20 @@ class Planner:
                 rec = st.work
             elif st.phase is Phase.VERIFYING:
                 rec = self.issued.get(st.work.task_id)
-            if rec is not None and self.transport.publish(rec):
+            if rec is None:
+                continue
+            fresh = (
+                self._publish_work(st) if st.phase in _EXECUTING else self.transport.publish(rec)
+            )
+            if fresh:
                 done.append(f"REPUBLISHED:{root}:{rec.KIND.value}")
         return done
+
+    def _publish_work(self, st: LineageState) -> bool:
+        """Publish a lineage's current work, addressed to its executor when it has one."""
+        if st.executor:
+            return self.transport.publish(st.work, to=st.executor)
+        return self.transport.publish(st.work)
 
     # -- selection / dispatch -------------------------------------------------------------
     def in_flight(self) -> frozenset[str]:
@@ -1354,6 +1482,8 @@ class Planner:
         *,
         execution_ordinal: int = 1,
         live_limit: int | None = None,
+        executor_pool: Sequence[str] = (),
+        executor_limit: int = 1,
         **work_fields: object,
     ) -> WorkItem:
         """Materialize + publish the sealed work for an admissible queue item.
@@ -1381,6 +1511,13 @@ class Planner:
         or when it reports nothing or raises ``ValueError`` (every ``ContractError``),
         ``OSError`` or ``TypeError``, the refusal stands. Any other exception from the
         observer propagates and nothing is written.
+        EXECUTOR ASSIGNMENT (ATLAS-DEVQ-0011): with a non-empty ``executor_pool`` the DISPATCH
+        names the executor that owns the execution: the pool member that owns the fewest
+        lineages that are executing or being verified, the first by name among equals. If
+        every member already owns ``executor_limit`` of them the dispatch is refused with
+        ``EXECUTOR_BUSY``. The work is published addressed to that executor, the journal
+        accepts a result for the lineage only from it, and a repair stays with it. Without a
+        pool the lineage is not assigned and any implementer's result is accepted, as before.
         The decision is taken against the journal and committed as its next event, so it also
         holds against other planners on the same journal. The DISPATCH event is written before
         the work is published; if publishing fails the lineage is DISPATCHED and ``recover``
@@ -1388,6 +1525,7 @@ class Planner:
         """
         if execution_ordinal < 1:
             raise PlannerError("execution_ordinal must be >= 1")
+        pool = self._pool(executor_pool, executor_limit)
         if _REPAIR_SUFFIX.search(item.task_id):
             raise PlannerError("task id suffix -R<n> is reserved for repair tasks")
         reserved = {
@@ -1440,6 +1578,8 @@ class Planner:
                         raise PlannerError(f"{code}:{root}:{_collisions(pairs)}")
                     handover.append(entry)
             ev: dict[str, Any] = {"event": "DISPATCH", "root": item.task_id, "work": encode(work)}
+            if pool:
+                ev["executor"] = self._free_executor(pool, executor_limit)
             if handover:
                 ev["handover"] = sorted(handover, key=lambda h: str(h["root"]))
             return ev
@@ -1447,9 +1587,108 @@ class Planner:
         observed: dict[tuple[str, str], Mapping[str, str] | None] = {}  # one look per dispatch
 
         self._commit(decide)
-        work = self.lineages[item.task_id].work
-        self.transport.publish(work)
-        return work
+        st = self.lineages[item.task_id]
+        self._publish_work(st)
+        return st.work
+
+    # -- executor ownership ---------------------------------------------------------------
+    @staticmethod
+    def _pool(executor_pool: Sequence[str], executor_limit: int) -> tuple[str, ...]:
+        if isinstance(executor_pool, str) or not isinstance(executor_limit, int):
+            raise PlannerError("executor_pool is a sequence of identities, the limit an integer")
+        if isinstance(executor_limit, bool) or executor_limit < 1:
+            raise PlannerError("executor_limit must be an integer >= 1")
+        pool = tuple(executor_pool)
+        try:
+            for e in pool:
+                if not isinstance(e, str):
+                    raise ValueError("not a string")
+                validate_identity(e)
+        except ValueError as exc:
+            raise PlannerError(f"invalid executor identity in the pool: {exc}") from exc
+        if len({e.strip().casefold() for e in pool}) != len(pool):
+            raise PlannerError("duplicate (or case-variant) executor identities in the pool")
+        return pool
+
+    def executor_load(self) -> dict[str, int]:
+        """Lineages each executor owns that are executing or being verified (the replica)."""
+        load: dict[str, int] = {}
+        for st in self.lineages.values():
+            if st.executor and st.phase in _LIVE:
+                key = st.executor.strip().casefold()
+                load[key] = load.get(key, 0) + 1
+        return load
+
+    def _free_executor(self, pool: tuple[str, ...], limit: int, *, besides: str = "") -> str:
+        """The least loaded pool member below ``limit``; ``EXECUTOR_BUSY`` when there is none.
+
+        ``besides`` is a lineage root whose own execution does not count (it is the one being
+        moved). Called inside a commit decision, so the choice is made against the journal.
+        """
+        load = self.executor_load()
+        if besides:
+            owner = self.lineages[besides].executor.strip().casefold()
+            if owner and self.lineages[besides].phase in _LIVE:
+                load[owner] -= 1
+        ranked = sorted(pool, key=lambda e: (load.get(e.strip().casefold(), 0), e))
+        if not ranked or load.get(ranked[0].strip().casefold(), 0) >= limit:
+            raise PlannerError(f"EXECUTOR_BUSY:every executor of the pool owns {limit} lineage(s)")
+        return ranked[0]
+
+    def reassign(
+        self,
+        task_id: str,
+        *,
+        executor_pool: Sequence[str],
+        reason: str,
+        executor_limit: int = 1,
+    ) -> WorkItem:
+        """Replace the executor of an executing lineage without creating a second valid writer.
+
+        Journals a REASSIGN: the lineage's current work is re-materialised under its next
+        execution id (see ``next_epoch_work``), the executor chosen from ``executor_pool``
+        (as in ``dispatch``; the lineage's own execution does not count against its present
+        owner, so a pool of that one executor restarts it under a new epoch) becomes the
+        owner, and the new work is published addressed to it. From that event on the journal
+        accepts a result only for the new work and only from the new owner. A result of the
+        earlier execution, whenever it arrives and whoever sends it, is refused: it answers a
+        work seal that is no longer the lineage's current work.
+
+        That refusal, not the caller's ``reason``, is what makes the replacement safe. A
+        timeout, an expired lease or a report that an executor died is a reason to call this;
+        none of them is evidence that the earlier executor stopped, and none is needed. What
+        this does NOT do: it does not stop the earlier executor, which may go on running and
+        pushing to its own result branch; it does not tell the earlier executor anything; and
+        it IS a new execution (a new sealed work item with a new execution id, which an
+        adapter will dispatch as such), not a recovery. It is bounded by
+        ``MAX_REASSIGNMENTS`` per work item. Only for the CURRENT work of a lineage that is
+        executing; a lineage that has a result, is INTEGRATION_READY or terminal is refused.
+        """
+        pool = self._pool(executor_pool, executor_limit)
+        if not pool:
+            raise PlannerError("reassign needs a non-empty executor pool")
+
+        def decide() -> dict[str, Any]:
+            st = self._lineage_for(task_id)
+            if st.phase not in _EXECUTING or task_id != st.work.task_id:
+                raise PlannerError(
+                    f"reassign refused: {task_id} is not the executing work of its lineage "
+                    f"(phase {st.phase.value}, current work {st.work.task_id})"
+                )
+            if st.epoch >= MAX_REASSIGNMENTS:
+                raise PlannerError(f"REASSIGN_LIMIT:{task_id} was reassigned {st.epoch} times")
+            return {
+                "event": "REASSIGN",
+                "root": st.lineage_root,
+                "work": encode(next_epoch_work(st.work, st.epoch + 1)),
+                "executor": self._free_executor(pool, executor_limit, besides=st.lineage_root),
+                "reason": reason,
+            }
+
+        ev = self._commit(decide)
+        st = self.lineages[ev["root"]]
+        self._publish_work(st)
+        return st.work
 
     def _observe_handover(
         self,
@@ -1584,6 +1823,11 @@ class Planner:
                 raise PlannerError(
                     "result identity/repository/base does not match the dispatched work"
                 )
+            if st.executor and not same_identity(res.executor_identity, st.executor):
+                raise PlannerError(
+                    f"result is from {res.executor_identity}, not from {st.executor}, the "
+                    "executor that owns this execution"
+                )
             others = [v for v in self.verifiers if not same_identity(v, res.executor_identity)]
             if not others:
                 return self._terminal(st, Phase.BLOCKED, "NO_INDEPENDENT_VERIFIER", res.seal)
@@ -1632,18 +1876,21 @@ class Planner:
                 rw = decision.repair_work
                 if rw.task_id in self._by_task:
                     return self._terminal(st, Phase.BLOCKED, "REPAIR_TASK_ID_COLLISION", ver.seal)
-                return {
+                repair: dict[str, Any] = {
                     "event": "REPAIR",
                     "root": root,
                     "verdict": encode(ver),
                     "work": encode(rw),
                 }
+                if st.executor:
+                    repair["executor"] = st.executor  # the lineage stays with its executor
+                return repair
             phase = Phase.OWNER_REQUIRED if decision.action == "OWNER_REQUIRED" else Phase.BLOCKED
             return self._terminal(st, phase, decision.reason, ver.seal)
 
         ev = self._commit(decide)
         if ev["event"] == "REPAIR":
-            self.transport.publish(self.lineages[ev["root"]].work)
+            self._publish_work(self.lineages[ev["root"]])
 
     def fail_execution(self, task_id: str, reason: str) -> None:
         """The caller reports that the remote execution failed (no result): block that lineage.
@@ -1774,7 +2021,12 @@ class Coordinator:
       * the status file is last-writer-wins and names no coordinator: one that fails to start
         for a reason local to it (a wrong transport or store) overwrites a shared status with
         ``HALTED`` until a healthy tick rewrites it;
-      * no leases and no executor assignment.
+      * executors are assigned only when the constructor is given ``executors``: each
+        candidate then goes to the pool member that owns the fewest live lineages, at most
+        ``executor_limit`` each (``EXECUTOR_BUSY`` otherwise), and the status lists who owns
+        what, from the journal. That needs a transport that delivers a record to its
+        addressee (``addressed``). The coordinator never calls ``reassign``: it detects no
+        dead executor and replaces none.
     """
 
     def __init__(
@@ -1788,10 +2040,19 @@ class Coordinator:
         max_live: int = MAX_LIVE_DEFAULT,
         accept_same_filesystem: bool = False,
         observer: HandoverObserver | None = None,
+        executors: Sequence[str] = (),
+        executor_limit: int = 1,
     ) -> None:
         if observer is not None and not _observer_identity_ok(getattr(observer, "identity", None)):
             raise PlannerError("a handover observer needs a non-empty identity")
         self.observer = observer
+        self.executors = Planner._pool(executors, executor_limit)
+        self.executor_limit = executor_limit
+        if self.executors and getattr(transport, "addressed", False) is not True:
+            raise PlannerError(
+                "COORDINATOR_NEEDS_ADDRESSED_TRANSPORT:executors are assigned only over a "
+                "transport that delivers a work record to the executor it is addressed to"
+            )
         if not isinstance(journal, StoreJournal):
             raise PlannerError(
                 "COORDINATOR_NEEDS_STORE:a coordinator runs only on an attached StoreJournal "
@@ -1859,7 +2120,8 @@ class Coordinator:
         published = self.planner.transport.published(Channel.WORK)  # type: ignore[attr-defined]
         self.journal.repairs()  # unreadable repair evidence stops the tick before it acts
         self.planner.sync()  # restores a lost head acknowledgement, with a repair record
-        known = {w.seal for w in self.planner.state.works.values()}
+        state = self.planner.state  # a work fenced by a reassignment is still a known work
+        known = {w.seal for w in state.works.values()} | set(state.superseded)
         unknown = sorted(r.seal for r in published if r.seal not in known)
         if unknown:
             raise JournalCorrupt(
@@ -1919,7 +2181,13 @@ class Coordinator:
                 item, work = fields[sel.selected.task_id]
                 tried.add(item.task_id)
                 try:
-                    p.dispatch(item, live_limit=self.max_live, **work)
+                    p.dispatch(
+                        item,
+                        live_limit=self.max_live,
+                        executor_pool=self.executors,
+                        executor_limit=self.executor_limit,
+                        **work,
+                    )
                 except JournalContended:
                     deferred.append((item.task_id, "JOURNAL_CONTENDED"))
                     break  # the journal is busy: leave the rest for the next tick
@@ -1929,6 +2197,9 @@ class Coordinator:
                     reason = str(exc)
                     if reason.startswith("LIVE_LIMIT:"):
                         break  # another coordinator filled the capacity since we looked
+                    if reason.startswith("EXECUTOR_BUSY:"):
+                        deferred.append((item.task_id, "EXECUTOR_BUSY"))
+                        break  # no executor is free: the rest waits for the next tick
                     kept = reason.startswith(("SCOPE_COLLISION:", "SCOPE_RETAINED:"))
                     deferred.append((item.task_id, reason if kept else f"REFUSED:{reason}"))
                     continue
@@ -1947,6 +2218,10 @@ class Coordinator:
             "repairs": repairs,
             "journal": {"seq": p.state.seq, "head": p.state.head},
             "max_live": self.max_live,
+            "executor_limit": self.executor_limit,
+            # who owns what, from the journal: every executor of this coordinator's pool and
+            # every executor a live lineage is assigned to, with the lineage roots it owns
+            "executors": self._ownership(),
             "live": sorted(self.live()),
             "admitted": admitted,
             "deferred": [list(d) for d in deferred],
@@ -1959,7 +2234,18 @@ class Coordinator:
         self._write_status(status)
         return status
 
-    _RESERVED_WORK_KEYS = frozenset({"self", "item", "live_limit", "execution_ordinal"})
+    _RESERVED_WORK_KEYS = frozenset(
+        {"self", "item", "live_limit", "execution_ordinal", "executor_pool", "executor_limit"}
+    )
+
+    def _ownership(self) -> dict[str, list[str]]:
+        owned: dict[str, list[str]] = {e: [] for e in self.executors}
+        by_key = {e.strip().casefold(): e for e in self.executors}
+        for root, st in sorted(self.planner.lineages.items()):
+            if st.executor and st.phase in _LIVE:
+                name = by_key.setdefault(st.executor.strip().casefold(), st.executor)
+                owned.setdefault(name, []).append(root)
+        return dict(sorted(owned.items()))
 
     def _halted(self, exc: JournalCorrupt) -> None:
         status = self._header("HALTED") | {"reason": str(exc)}
