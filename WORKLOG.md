@@ -16426,3 +16426,118 @@ behind; an adopted unacknowledged event is published by `recover` or by `pump`'s
 path; the `replay` docstring says where an unanchored journal stops.
 
 Independent verification and exact-head CI are recorded on the PR, not here.
+
+## 2026-10-05 — ATLAS-DEVQ-0009: verified scope handover
+
+What / why: owner direction after PR #1069 (merged as main `f3dcdba4`): "The next increment
+should make ownership handover trustworthy rather than merely timed", and a phase, timeout,
+expired lease, reported executor failure or caller-supplied merge revision "is not proof that
+the previous writer can no longer mutate the owned resource". Before this, a planner used
+directly admitted new work over the paths of a BLOCKED, OWNER_REQUIRED or caller-released
+lineage; only the coordinator refused it, by an option. Base: main `f3dcdba4`.
+
+Changes (`dev_planner.py`, `dev_fabric_adapter.py`; no new module, no `WorkItem` field, no
+seal change, no workflow / CLI change):
+- Journal rule in `_transition` (so: every planner, and on replay): a DISPATCH whose work
+  overlaps the last work of ANY earlier lineage in the same repository needs a `handover`
+  entry for that lineage. Without one it is refused: `SCOPE_COLLISION` when the lineage still
+  holds its scope (unchanged message), `SCOPE_RETAINED` when it does not (BLOCKED,
+  OWNER_REQUIRED, released with `release_scope`, or already handed over). Holders are
+  reported before retained lineages. `Planner.dispatch(retain_terminal_scopes=)` is removed;
+  what it switched on is now always on.
+- One basis, `RESULT_IN_BASE`: the earlier lineage is INTEGRATION_READY and its verified
+  result revision is an ancestor of the new work's `base_revision`. The entry holds root,
+  basis, result revision, base revision, observer identity and bounded `str -> str` evidence
+  (at most 8 pairs, 256 characters each). The journal checks that the entry names exactly
+  that lineage's result and exactly the new work's base, that entries are ordered, unique and
+  only for lineages the work collides with. Applying the event marks the earlier lineage
+  (`handover`, `handed_over_to`, history line `SCOPE_HANDED_OVER:<root>:<base>`); it stops
+  holding its scope and stays closed to any later work without its own entry.
+- `HandoverObserver` protocol (`identity`, `result_in_base(repository=, result_revision=,
+  base_revision=)`), given to `Planner(observer=)` / `Coordinator(observer=)` at
+  construction and called inside the dispatch decision, once per (result, base) per dispatch.
+  `dispatch` has no parameter for evidence. No observer, an observer that returns `None`,
+  raises `ValueError` (incl. `ContractError`) / `OSError` / `TypeError`, or returns something
+  that is not bounded evidence: the refusal stands. Another exception type propagates;
+  nothing was appended.
+- `dev_fabric_adapter.ResultInBaseObserver(port, repository=, identity=)`: one
+  `port.compare(base_revision, result_revision)`; evidence only when the merge base is the
+  result revision; `None` for another repository or a revision that is not 40 lowercase hex;
+  a port error (e.g. truncated compare) is raised and counts as not established. Read-only.
+- `fleet_status` rows gain `handover` and `handed_over_to`; the coordinator status gains
+  `scope_handover_observer` (the observer identity, or `NONE`).
+- `release_scope` and `fail_execution` are unchanged as events; their docstrings now say
+  that they open nothing.
+
+Carried from the PR #1069 verification (owner: "may be resolved in the next coherent
+increment"):
+- `repairs()` catches `RecursionError` (a deeply nested `.repair` file gave a tick that
+  raised without a `HALTED` status), requires `seq` to be an `int` (not `true`) and the
+  digest to be a string.
+- `record_repair` reads the record that stands back and requires it to be a well-formed
+  record of the same event before any acknowledgement follows (a pre-placed file with the
+  record's name was taken as the record).
+- An `OSError` in the `Coordinator` constructor writes `HALTED` (`IO_ERROR`), as a tick's
+  already did.
+- Wording: tick docstring (which failures replace an earlier `OK`), class docstring status
+  paragraph, the store check before a repair record ("immediately before the write, not
+  atomically with it"), the acknowledgement sentence in the module docstring.
+- Corrections to the ATLAS-DEVQ-0008 entry above (left as written): `repairs()` checked
+  that the identity is a string, not "the identity"; the sentence about 4 and 8 coordinator
+  threads and 825 events refers to head `5179279c`, not to the merged head.
+- Tests now pin: a second loss of the same acknowledgement leaves no second record;
+  a fabricated record gives `DEGRADED` and deleting it gives `OK`; after adopting, a planner
+  counts the head as seen acknowledged.
+
+What this does NOT establish (limits):
+- The observer is trusted like the journal directory: the entry is unkeyed, and whoever can
+  construct a planner can construct an observer that lies. The journal cannot check ancestry.
+- Ancestry says nothing about the default branch or about who merged. It covers the
+  VERIFIED result revision only, not commits pushed to the result branch afterwards.
+- No handover exists for a BLOCKED or OWNER_REQUIRED lineage, nor for an INTEGRATION_READY
+  lineage whose candidate is never integrated: those paths stay closed in that journal.
+  That needs evidence about the executor (leases / executor assignment, next increment).
+- A journal written before this rule that admitted work over a retained scope no longer
+  replays (`JOURNAL_CORRUPT ... SCOPE_RETAINED`). The journal version was not changed.
+- Each dispatch re-observes every INTEGRATION_READY lineage it overlaps; the observer is
+  called between the replay and the append of a commit, so a slow observer widens the window
+  in which another writer wins the sequence number (retried, then `JOURNAL_CONTENDED`).
+- `ResultInBaseObserver` was exercised with a fake port only. No live observation, no
+  entrypoint, no executor dispatch, no live run.
+- The four activation blockers the owner named on 2026-10-05 (store-identity / write
+  coherence, the remaining part of safe handover, durable activation, recovery / duplicate
+  semantics) are open and listed in `docs/backlog.md`.
+
+Existing tests changed (compared with main `f3dcdba4` by test name and body):
+- `test_orchestration_dev_planner_journal.py`: 60 -> 72 test functions (81 collected with
+  parametrised cases); two changed in place
+  (`test_release_scope_needs_integration_ready_and_a_merge_revision`: a released scope is
+  now refused; `test_fleet_status_is_derived_from_the_journal_alone`: two new row keys).
+- `test_orchestration_dev_coordinator.py`: 37 -> 41 test functions; three changed in place (status key set;
+  a reserved-key case removed with the parameter; a direct planner now refuses a terminal
+  scope too).
+- `test_orchestration_dev_loop_contracts.py`: 66 -> 66 test functions; two replaced under
+  new names
+  (`..._release_scope` -> `..._keep_their_scope_closed`, `..._once_the_holder_releases` ->
+  `..._and_a_failure_report_opens_no_scope`): both asserted the old admission.
+- `test_orchestration_dev_fabric_adapter.py`: 81 -> 83 test functions, none changed.
+
+Commands and results (`PYTHONPATH=<worktree>/src`, `--no-cov -o addopts=""`):
+- `test_orchestration_dev_planner_journal.py` 81 passed, `_dev_coordinator.py` 41 passed
+  (these two together 30 consecutive runs, no failure), `_dev_fabric_adapter.py` 141 passed,
+  `_dev_loop_contracts.py` 96 passed (the counts include parametrised cases).
+- The nine DEVQ files (`_dev_loop_contracts`, `_dev_queue`, `_dev_fabric_adapter`,
+  `_dev_package`, `_dev_package_repair`, `_dev_crosswalk`, `_dev_spool_transport`,
+  `_dev_planner_journal`, `_dev_coordinator`): 884 passed.
+- `pytest tests/unit -k "orchestration_dev or dev_package or executor or agent_execute or
+  workflow or autonomy or global_foundation or github_port"`: 1582 passed, 5152 deselected.
+- `ruff check .` clean; `ruff format --check` on the six changed Python files clean;
+  `mypy src`: no issues in 415 source files.
+- 22 scratch mutants of the new logic, each against the four changed test files (two
+  layout-dependent adapter tests deselected in the scratch copy): all fail at least one
+  test. One (the journal accepting a handover from a lineage in any phase) survived until a
+  VERIFYING lineage with a result was added to the replay test.
+- `tests/unit/test_orchestration_dev_package_repair.py` is unchanged.
+- The full test suite was not run locally.
+
+Independent verification and exact-head CI are recorded on the PR, not here.

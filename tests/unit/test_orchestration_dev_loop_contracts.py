@@ -938,7 +938,7 @@ def test_first_colliding_holder_is_reported_in_lineage_root_order():
     assert str(exc.value) == "SCOPE_COLLISION:M:src/m/a|src/m,src/m/b|src/m"
 
 
-def test_collision_refusal_leaves_the_task_id_reusable_once_the_holder_releases():
+def test_collision_refusal_leaves_the_task_id_reusable_and_a_failure_report_opens_no_scope():
     t = InMemoryTransport()
     p = scoped(t)
     p.dispatch(qi("A"), **FIELDS)
@@ -948,7 +948,10 @@ def test_collision_refusal_leaves_the_task_id_reusable_once_the_holder_releases(
     p.fail_execution("A", "runner lost")
     assert p.lineages["A"].phase is Phase.BLOCKED
     assert p.in_flight() == frozenset() and p.scope_holders() == ()
-    wb = p.dispatch(qi("B"), **FIELDS)  # same task id, same scope: now admitted
+    # a failure report ends the lineage; it is not evidence that its executor stopped writing
+    with pytest.raises(PlannerError, match=r"^SCOPE_RETAINED:A:src/x\|src/x$"):
+        p.dispatch(qi("B"), **FIELDS)
+    wb = p.dispatch(qi("B"), **_fields("src/y"))  # the task id itself stayed usable
     assert wb.task_id == "B" and p.lineages["B"].phase is Phase.DISPATCHED
     assert _work_records(t) == 2
 
@@ -990,7 +993,7 @@ def test_integration_ready_lineage_still_holds_scope():
     assert sel.selected is not None and sel.selected.task_id == "B"
 
 
-def test_blocked_and_owner_required_lineages_release_scope():
+def test_blocked_and_owner_required_lineages_keep_their_scope_closed():
     t = InMemoryTransport()
     p = scoped(t)
     p.dispatch(qi("A"), **FIELDS)
@@ -1005,10 +1008,14 @@ def test_blocked_and_owner_required_lineages_release_scope():
     p.pump()
     assert p.lineages["A"].phase is Phase.OWNER_REQUIRED
     assert p.in_flight() == frozenset() and p.scope_holders() == ()
-    p.dispatch(qi("B"), **FIELDS)
+    with pytest.raises(PlannerError, match=r"^SCOPE_RETAINED:A:src/x\|src/x$"):
+        p.dispatch(qi("B"), **FIELDS)  # a verdict ended A; nothing verified a release
+    p.dispatch(qi("B"), **_fields("src/y"))
     p.fail_execution("B", "boom")
     assert p.lineages["B"].phase is Phase.BLOCKED and p.in_flight() == frozenset()
-    p.dispatch(qi("C"), **FIELDS)
+    with pytest.raises(PlannerError, match=r"^SCOPE_RETAINED:B:src/y\|src/y$"):
+        p.dispatch(qi("C"), **_fields("src/y"))
+    p.dispatch(qi("C"), **_fields("src/z"))
     assert p.in_flight() == {"C"}
 
 

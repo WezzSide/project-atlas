@@ -206,6 +206,38 @@ class GitHubPort(Protocol):
     def ensure_draft_pr(self, head_branch: str, base: str, title: str, body: str) -> int: ...
 
 
+class ResultInBaseObserver:
+    """Read-only observation for the planner's verified scope handover (ATLAS-DEVQ-0009).
+
+    ``result_in_base`` reports evidence only when one ``compare`` of the port shows that
+    ``result_revision`` is an ancestor of ``base_revision`` (their merge base is the result
+    revision itself), for the one repository this observer was constructed for. Anything
+    else is ``None``: another repository, a revision that is not 40 lowercase hex digits, a
+    merge base that differs. A port error (``AdapterError``, including a truncated compare)
+    is raised and the planner treats it as "not established". It calls nothing but
+    ``compare``; it dispatches, merges and writes nothing. What it does NOT establish: that
+    the base is on the default branch, that the result was merged by anyone in particular, or
+    anything about an executor. Structurally a ``dev_planner.HandoverObserver``.
+    """
+
+    def __init__(self, port: GitHubPort, *, repository: str, identity: str) -> None:
+        if not repository or not identity:
+            raise AdapterError("a handover observer needs a repository and an identity")
+        self.port, self.repository, self.identity = port, repository, identity
+
+    def result_in_base(
+        self, *, repository: str, result_revision: str, base_revision: str
+    ) -> dict[str, str] | None:
+        if repository.lower() != self.repository.lower():  # as works_collide compares it
+            return None
+        if not _SHA.match(result_revision) or not _SHA.match(base_revision):
+            return None
+        merge_base = self.port.compare(base_revision, result_revision).merge_base
+        if merge_base != result_revision:
+            return None
+        return {"compare": f"{base_revision}...{result_revision}", "merge_base": merge_base}
+
+
 # -- exact dispatch payload ----------------------------------------------------------------
 
 

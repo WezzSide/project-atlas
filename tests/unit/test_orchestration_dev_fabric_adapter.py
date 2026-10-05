@@ -1845,3 +1845,80 @@ def test_unhashable_or_non_string_attempt_kind_is_a_clean_refusal(tmp_path, valu
     work, pkg, _rendered, _sha = _bound(_pkg_spec())
     forged, forged_sha = _forge(pkg, lambda p: p.update(attempt_kind=value))
     assert _binding_reason(tmp_path, work, forged, forged_sha) == "CHECKOUT_PACKAGE_INVALID"
+
+
+# ---- ATLAS-DEVQ-0009: read-only observation for a verified scope handover -------------------
+
+
+def test_result_in_base_observer_reports_only_an_observed_ancestor():
+    from project_atlas.orchestration.autonomy.dev_fabric_adapter import ResultInBaseObserver
+
+    class Port(FakeGitHub):
+        def compare(self, base, head):
+            self.compared = [*getattr(self, "compared", []), (base, head)]
+            return CompareInfo(self.merge_base, ())
+
+    repo = "WezzSide/project-atlas"
+    gh = Port(merge_base=R1)
+    obs = ResultInBaseObserver(gh, repository=repo, identity="github:compare")
+    ask = dict(repository=repo, result_revision=R1, base_revision=R2)
+    # merge base of (base, result) is the result itself: the result is an ancestor of the base
+    assert obs.result_in_base(**ask) == {"compare": f"{R2}...{R1}", "merge_base": R1}
+    assert gh.compared == [(R2, R1)]
+    assert obs.result_in_base(**ask | {"repository": repo.upper()}) is not None
+    gh.merge_base = BASE  # they only share an older commit: not contained
+    assert obs.result_in_base(**ask) is None
+    gh.merge_base = R1
+    n = len(gh.compared)
+    for bad in (
+        ask | {"repository": "WezzSide/other"},
+        ask | {"repository": repo + ".git"},
+        ask | {"result_revision": "main"},
+        ask | {"base_revision": R2[:39]},
+        ask | {"base_revision": R2.upper()},
+    ):
+        assert obs.result_in_base(**bad) is None
+    assert len(gh.compared) == n  # refused without asking the port
+    with pytest.raises(AdapterError, match="repository and an identity"):
+        ResultInBaseObserver(gh, repository=repo, identity="")
+
+
+def test_a_port_error_keeps_the_scope_closed_and_dispatches_nothing(tmp_path):
+    """Planner + observer + fake port: a truncated compare is 'not established'."""
+    from project_atlas.orchestration.autonomy.dev_contracts import make_result, make_verdict
+    from project_atlas.orchestration.autonomy.dev_fabric_adapter import ResultInBaseObserver
+    from project_atlas.orchestration.autonomy.dev_planner import PlannerError
+    from project_atlas.orchestration.autonomy.dev_transport import InMemoryTransport
+
+    class Port(FakeGitHub):
+        truncated = True
+
+        def compare(self, base, head):
+            if self.truncated:
+                raise AdapterError("compare unavailable or truncated")
+            return CompareInfo(head, ())
+
+    gh = Port()
+    t = InMemoryTransport()
+    p = Planner(
+        t,
+        identity="vps3-plan",
+        verifier_identities=("vps2-ver",),
+        observer=ResultInBaseObserver(gh, repository=FIELDS["repository"], identity="gh"),
+    )
+    item = QueueItem(task_id="A", title="A", category=Category.RELIABILITY)
+    p.dispatch(item, **FIELDS_DISJOINT)
+    w = t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity="vps1-impl")
+    t.publish(make_result(w, executor_identity="vps1-impl", result_revision=R1, result_tree=T1))
+    p.pump()
+    req = t.claim(Channel.VERIFICATION, role=Role.VERIFIER, identity="vps2-ver")
+    t.publish(make_verdict(req, verdict=Verdict.PASS))
+    p.pump()
+    assert p.lineages["A"].phase is Phase.INTEGRATION_READY
+    nxt = QueueItem(task_id="B", title="B", category=Category.RELIABILITY)
+    over = {**FIELDS_DISJOINT, "base_revision": R2}
+    with pytest.raises(PlannerError, match=r"^SCOPE_COLLISION:A:"):
+        p.dispatch(nxt, **over)
+    gh.truncated = False
+    assert p.dispatch(nxt, **over).base_revision == R2
+    assert p.lineages["A"].handed_over_to == ["B"] and gh.dispatches == []
