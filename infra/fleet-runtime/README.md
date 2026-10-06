@@ -17,18 +17,64 @@ This directory is source only. It deploys nothing, and adding it changes no runn
 
 ## Node contracts
 
-The contract documents each node is given are in [`contracts/`](./contracts/), imported
-unchanged and pinned by digest. Their classification and provenance are in
-[`contracts/PROVENANCE.md`](./contracts/PROVENANCE.md). The supervisor reads them from a
-`contracts` directory under `ATLAS_AUTONOMY_ETC`; placing them there is a deployment step
-and is not done by this repository.
+The contract documents from the operator's fleet bundle are in [`contracts/`](./contracts/),
+imported unchanged. Their classification and provenance are in
+[`contracts/PROVENANCE.md`](./contracts/PROVENANCE.md). Placing them on a node, under
+`$ATLAS_AUTONOMY_ETC/contracts/`, is a deployment step and is not done by this repository.
+
+The files in `contracts/` are not all used the same way. This document keeps four terms apart:
+
+- **Repository presence**: the file is in Git. That says nothing about runtime use.
+- **Runtime read**: the source code opens and parses the file. This does not by itself
+  mean that anything is enforced.
+- **Prompt context**: the content is placed in the prompt given to the executor. It is an
+  instruction to the executor, not a machine-enforced authorization.
+- **Enforcement**: code checks a rule and accepts or refuses an action because of it. This
+  document uses the word only where the code does that.
+
+What the supervisor (`node/atlas_mission_supervisor.py`) does with each file at this
+revision:
+
+| File under `$ATLAS_AUTONOMY_ETC/contracts/` | Runtime read | Prompt context | Enforcement |
+|---|---|---|---|
+| `GLOBAL-AUTONOMOUS-OPERATING-CONTRACT.md` | Yes, on every loop pass; required (`main`) | Yes, as `<global_contract>` (`prompt_text`) | None. If the read fails, no executor cycle runs on that pass: the supervisor sets its status to `EXECUTOR_FAILURE_BACKOFF` (frontier `SUPERVISOR_ERROR:<type>`) and retries after the tick |
+| `GLOBAL-GOALS.json` | Yes, on every loop pass; required (`main`) | Yes, as `<global_goals>` (`prompt_text`) | None. Same failure behaviour as above |
+| `GLOBAL-CONTINUOUS-GOALS.json` | Only when present (`continuous_goals`) | Yes, as `<global_continuous_goals>` | None. A missing or unparseable file is silently left out of the prompt |
+| `AUTONOMY-POLICY.json` | No | No | None |
+
+`AUTONOMY-POLICY.json` is versioned here as contract and vocabulary documentation. No reader
+for it was found in the imported fleet runtime source (`node/`, `control/`) at this revision.
+Its presence in the repository does not by itself establish that it is used or enforced.
+
+Each cycle receipt records the sha256 of the contract and goals files as read (the
+`contract_sha256` and `goals_sha256` fields). The supervisor does not compare those
+digests with any expected value before use. The digests pinned in
+`tests/unit/test_fleet_runtime_contracts.py` prove only that the repository files still
+match the recorded bytes. They are not a runtime integrity check.
+
+### Task-authoring policy is a separate mechanism
+
+The task-authoring policy is a different document from `contracts/AUTONOMY-POLICY.json`. It
+is operator configuration, was not imported, and is reached by three separate paths:
+
+- **Queue service**: reads `ATLAS_QUEUE_POLICY_FILE`. It evaluates every autonomous
+  submission with `atlas_task_policy.evaluate` and refuses a `DENY` (HTTP 422). Without the
+  file it refuses all autonomous submissions (HTTP 503). This is the enforcement point.
+- **Queue client (`author`)**: reads `ATLAS_TASK_POLICY_FILE`. It evaluates the task locally
+  before submitting and records the decision. The server evaluates it again.
+- **Supervisor**: reads `$ATLAS_AUTONOMY_ETC/task-authoring-policy.json` when present and
+  its `author_role` is this node's role. It then adds an authoring section to the prompt
+  (`authoring_section`) and uses the file's digest to detect policy changes
+  (`policy_state`). It does not evaluate tasks against the policy.
+
+None of these paths reads `AUTONOMY-POLICY.json`.
 
 ## Provenance
 
 | Claim | Status |
 |---|---|
 | Where this source came from | The operator's local fleet bundle, baseline `AUTONOMY-STARTER-r3` |
-| Is it byte-identical to what currently runs on the fleet? | **No.** The bundle files were; these files were changed before publication (next section) |
+| Is it byte-identical to what currently runs on the fleet? | **No, by construction.** These files were changed before publication (next section). What currently runs on the fleet is not established by this repository |
 | Source identity from now on | This repository at an exact Git revision |
 | Deployment identity | Unchanged by this import. A component is tied to a revision of this repository only after a separately authorized deployment that records it |
 
@@ -58,7 +104,7 @@ Required means the process exits at start without it.
 
 | Variable | Used by | Required | Meaning |
 |---|---|---|---|
-| `ATLAS_AUTONOMY_ETC` | supervisor | yes | Directory holding the node's role, mission, authority and contract files |
+| `ATLAS_AUTONOMY_ETC` | supervisor | yes | Directory holding the node's role, mission, authority and contract files, and the task-authoring policy when present |
 | `ATLAS_AUTONOMY_VAR` | supervisor | yes | Directory for supervisor state, prompts, results, receipts and logs |
 | `ATLAS_EXECUTOR` | supervisor | yes | Executor program run once per cycle |
 | `ATLAS_WORKSPACE` | supervisor | no | Executor working directory; defaults to `work` under the state directory |
@@ -95,5 +141,7 @@ commit on `main`, so a deployment done this way becomes provable without further
   repository's lint and type-check scope, like other `infra/` components.
 - The supervisor needs a POSIX host (`fcntl`).
 - The task-policy engine is tested against a synthetic policy only
-  (`tests/unit/test_fleet_runtime_policy_synthetic.py`); the operator policy document was
-  not imported, so those tests say nothing about it.
+  (`tests/unit/test_fleet_runtime_policy_synthetic.py`). The operator policy document was
+  not imported. Those tests therefore do not certify the operator policy, and they do not
+  establish the live fleet's effective policy configuration. An `ALLOW` in those tests is a
+  test result, not an execution grant.
