@@ -1,0 +1,60 @@
+{
+  "E09": {
+    "after": {
+      "ci_run_id": "34448415572",
+      "ci_status_at_freeze": "partial_ubuntu_green_windows_pending_on_prior_head",
+      "review_candidate_head": "38cec36dffd03d6cf0dc48180f9e0ffd5ba5dbbe",
+      "review_candidate_tree": "b1c79af00967b296407bb5d0c31a0f7c3ad42bb9"
+    },
+    "after_commit": "d4e084c769bfbddd4b6a390e133bcd39011d2b3b",
+    "after_commit_ts": "2026-09-10T09:27:08+02:00",
+    "before": {
+      "ci_run_id": "34448415572",
+      "ci_status_at_freeze": "in_progress",
+      "review_candidate_head": "ee901aaa864230af615562dbde6566f764e9998b",
+      "review_candidate_tree": "9ea1fdeb13237a322030fe0e213ead31cf4c2011"
+    },
+    "before_commit": "e57c0cfb06dd711f623acfb89a84261605744d76",
+    "before_commit_ts": "2026-09-10T09:26:29+02:00",
+    "source_file": "docs/evidence/AS-IMPR-PLANE-001-REVIEW-CANDIDATE-PIN.json"
+  },
+  "E10": {
+    "after": {
+      "finding_id": "AT-013",
+      "independent_verification": {
+        "additional_adversarial_inputs": [
+          "bare ..",
+          "safe/../../../outside",
+          "//server/share/outside",
+          "safe\\u0000../../outside"
+        ],
+        "checklist_items": 10,
+        "full_suite": "65 passed",
+        "isolated_worktree_commit": "d523220",
+        "merge_recommendation": "recommended",
+        "status": "passed",
+        "verifier": "Agent Two"
+      },
+      "remediation": {
+        "destination_confinement": "resolved candidate must be relative to resolved Vault root",
+        "manifest_validation": "SourceRecord model plus bounded top-level manifest contract",
+        "transaction_policy": "preflight all records before any destination write"
+      },
+      "status": "remediated-and-independently-verified"
+    },
+    "after_commit": "b25cdb12aeaaaf3819378f30e1c6e1db349c0817",
+    "after_commit_ts": "2026-08-01T21:44:09+02:00",
+    "before": {
+      "finding_id": "AT-013",
+      "remediation": {
+        "destination_confinement": "resolved candidate must be relative to resolved Vault root",
+        "manifest_validation": "SourceRecord model plus bounded top-level manifest contract",
+        "transaction_policy": "preflight all records before any destination write"
+      },
+      "status": "remediated-pending-independent-replay"
+    },
+    "before_commit": "d5232206ae919d03524169683eee028c7d097787",
+    "before_commit_ts": "2026-08-01T21:35:27+02:00",
+    "source_file": "docs/evidence/atlas-core-ingestion-traversal.json"
+  }
+}

@@ -1,0 +1,129 @@
+{
+  "comparison_sets": {
+    "additional": {
+      "baseline_counts": {
+        "compare_not_ok": 0,
+        "episodes_flagged_uncertain": 6,
+        "episodes_with_duplicate_recommendations": 0,
+        "false_resolution": 0,
+        "missed_progress_or_insensitive": 2,
+        "total_mismatches": 2,
+        "unexpected_or_false_signal": 0
+      },
+      "baseline_summary": {
+        "development_total": 4,
+        "episodes_total": 6,
+        "held_out_matches": 2,
+        "held_out_total": 2,
+        "matches": 4,
+        "mismatches": 2
+      },
+      "candidate_counts": {
+        "compare_not_ok": 0,
+        "episodes_flagged_uncertain": 6,
+        "episodes_with_duplicate_recommendations": 0,
+        "false_resolution": 0,
+        "missed_progress_or_insensitive": 0,
+        "total_mismatches": 0,
+        "unexpected_or_false_signal": 0
+      },
+      "candidate_summary": {
+        "development_total": 4,
+        "episodes_total": 6,
+        "held_out_matches": 2,
+        "held_out_total": 2,
+        "matches": 6,
+        "mismatches": 0
+      },
+      "changed_classifications": [
+        {
+          "baseline_discrepancy": "missed_progress_or_insensitive",
+          "baseline_signal": "no_material_delta",
+          "baseline_verdict": "mismatch",
+          "candidate_discrepancy": null,
+          "candidate_signal": "delta_present",
+          "candidate_verdict": "match",
+          "category": "candidate_identity_supersession_progress",
+          "episode_id": "P01",
+          "expected_signal": "delta_present"
+        },
+        {
+          "baseline_discrepancy": "missed_progress_or_insensitive",
+          "baseline_signal": "no_material_delta",
+          "baseline_verdict": "mismatch",
+          "candidate_discrepancy": null,
+          "candidate_signal": "delta_present",
+          "candidate_verdict": "match",
+          "category": "status_progression_without_resolution_claim",
+          "episode_id": "P02",
+          "expected_signal": "delta_present"
+        }
+      ],
+      "episodes_with_false_resolution_baseline": 0,
+      "episodes_with_false_resolution_candidate": 0
+    },
+    "original": {
+      "baseline_counts": {
+        "compare_not_ok": 0,
+        "episodes_flagged_uncertain": 12,
+        "episodes_with_duplicate_recommendations": 0,
+        "false_resolution": 0,
+        "missed_progress_or_insensitive": 2,
+        "total_mismatches": 2,
+        "unexpected_or_false_signal": 0
+      },
+      "baseline_summary": {
+        "development_total": 9,
+        "episodes_total": 12,
+        "held_out_matches": 2,
+        "held_out_total": 3,
+        "matches": 10,
+        "mismatches": 2
+      },
+      "candidate_counts": {
+        "compare_not_ok": 0,
+        "episodes_flagged_uncertain": 12,
+        "episodes_with_duplicate_recommendations": 0,
+        "false_resolution": 0,
+        "missed_progress_or_insensitive": 0,
+        "total_mismatches": 0,
+        "unexpected_or_false_signal": 0
+      },
+      "candidate_summary": {
+        "development_total": 9,
+        "episodes_total": 12,
+        "held_out_matches": 3,
+        "held_out_total": 3,
+        "matches": 12,
+        "mismatches": 0
+      },
+      "changed_classifications": [
+        {
+          "baseline_discrepancy": "missed_progress_or_insensitive",
+          "baseline_signal": "no_material_delta",
+          "baseline_verdict": "mismatch",
+          "candidate_discrepancy": null,
+          "candidate_signal": "delta_present",
+          "candidate_verdict": "match",
+          "category": "candidate_identity_supersession",
+          "episode_id": "E09",
+          "expected_signal": "delta_present"
+        },
+        {
+          "baseline_discrepancy": "missed_progress_or_insensitive",
+          "baseline_signal": "no_material_delta",
+          "baseline_verdict": "mismatch",
+          "candidate_discrepancy": null,
+          "candidate_signal": "delta_present",
+          "candidate_verdict": "match",
+          "category": "status_progress_outside_modeled_shape",
+          "episode_id": "E10",
+          "expected_signal": "delta_present"
+        }
+      ],
+      "episodes_with_false_resolution_baseline": 0,
+      "episodes_with_false_resolution_candidate": 0
+    }
+  },
+  "directive": "ATLAS-IMPROVEMENT-PLANE-PROGRESS-SENSITIVITY-004"
+}
