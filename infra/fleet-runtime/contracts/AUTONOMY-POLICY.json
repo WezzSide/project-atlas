@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "blocker_classes": [
+    "SELF_RESOLVABLE",
+    "ALTERNATIVE_PATH_AVAILABLE",
+    "EXTERNAL_WAIT",
+    "AUTHORITY_BOUNDARY",
+    "HARD_TECHNICAL_IMPASSE"
+  ],
+  "default_hard_denies": [
+    "protected_branch.merge",
+    "production.deploy",
+    "production.activate",
+    "secrets.expand",
+    "credentials.rotate",
+    "trust_root.modify",
+    "fleet_role.change",
+    "evidence.destroy",
+    "governance.weaken"
+  ],
+  "active_work_triggers": [
+    "queue_nonempty",
+    "mission_progress_due",
+    "self_resolvable_blocker",
+    "recovery_needed",
+    "scheduled_reconciliation_due"
+  ],
+  "idle_conditions": [
+    "terminal_and_healthy",
+    "authority_boundary_with_no_parallel_work",
+    "external_wait_with_no_parallel_work"
+  ]
+}

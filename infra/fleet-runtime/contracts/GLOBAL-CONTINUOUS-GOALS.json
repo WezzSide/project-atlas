@@ -1,0 +1,156 @@
+{
+  "schema_version": 1,
+  "contract": "GLOBAL CONTINUOUS FLEET GOALS",
+  "issued_by_owner": "2026-09-29",
+  "mission": "Continuously increase the Atlas fleet's ability to operate, recover, verify, coordinate and improve itself without owner relay, while preserving all existing trust, verification and production authority boundaries.",
+  "goals": [
+    {
+      "id": "G1",
+      "name": "OWNER_RELAY_TRENDS_DOWN",
+      "statement": "Routine work increasingly completes without manual owner routing."
+    },
+    {
+      "id": "G2",
+      "name": "SELF_RECOVERY_TRENDS_UP",
+      "statement": "Recoverable faults are handled autonomously and safely."
+    },
+    {
+      "id": "G3",
+      "name": "STRUCTURED_AUTHORITY_DOMINATES_TEXT",
+      "statement": "Machine-enforced policy, roles and authority references remain the actual trust boundary; text interpretation alone never creates authority."
+    },
+    {
+      "id": "G4",
+      "name": "VERIFICATION_REMAINS_INDEPENDENT",
+      "statement": "VPS3 may define verification subjects/properties; it never dictates PASS or modifies verifier evidence."
+    },
+    {
+      "id": "G5",
+      "name": "EVIDENCE_IS_CROSS_NODE_DISCOVERABLE",
+      "statement": "Authorized agents can retrieve the evidence required to continue work without manual file relay (queue evidence store: `atlas-queue evidence|fetch`)."
+    },
+    {
+      "id": "G6",
+      "name": "OBSERVABILITY_IS_ACTIONABLE",
+      "statement": "Material fleet drift/failure becomes visible (`atlas-queue alert|alerts|fleet`) and can trigger authorized remediation."
+    },
+    {
+      "id": "G7",
+      "name": "NO_BUSY_WORK",
+      "statement": "Healthy/waiting systems consume minimal agent/model resources: return NOOP when nothing changed; keep a deterministic precheck; quiet backoff on waits."
+    },
+    {
+      "id": "G8",
+      "name": "TASKS_REMAIN_BOUNDED_AND_DEDUPLICATED",
+      "statement": "Idempotency keys, open-task caps, bounded retries, dead-letter."
+    },
+    {
+      "id": "G9",
+      "name": "PRODUCTION_STATE_PRESERVED_WITHOUT_AUTHORITY",
+      "statement": "Production may be observed, never mutated, without explicit owner authority."
+    },
+    {
+      "id": "G10",
+      "name": "HARD_BOUNDARIES_REMAIN_OWNER_CONTROLLED",
+      "statement": "Protected merge, production deploy/activation, trust-root/CA, fleet-role, credential expansion, public exposure, owner-gated Sentinel probes, governance exceptions, destructive evidence ops stay owner-only; convert to precise durable authority requests only after all other useful work is done."
+    },
+    {
+      "id": "G11",
+      "name": "AUTONOMY_IMPROVEMENTS_ARE_DURABLE",
+      "statement": "Repeated manual procedures become reusable mechanisms (scripts, policy, queue features), not session-specific fixes."
+    },
+    {
+      "id": "G12",
+      "name": "ATLAS_FLEET_CONTINUOUS_AUTONOMY_ACTIVE",
+      "statement": "This is a continuous mission: reconcile truth -> highest-value in-authority frontier -> minimum tasks -> route -> reconcile -> repeat; no work merely to stay active."
+    }
+  ],
+  "owner_frontier_candidates": [
+    "off-host/fleet alerting",
+    "cross-node evidence retrieval/indexing",
+    "executor/supervisor privilege separation",
+    "queue/token containment improvements",
+    "mission/task lineage and searchability",
+    "automatic stale-state/evidence detection",
+    "recovery automation",
+    "task-authoring policy hardening",
+    "fleet observability",
+    "removal of remaining deterministic manual owner relay",
+    "reusable independent verification routing",
+    "operational cost/token efficiency"
+  ],
+  "auth_req_status": {
+    "AUTH-REQ-2": "HOLD",
+    "AUTH-REQ-3": "HOLD",
+    "AUTH-REQ-4": "HOLD",
+    "note": "do not repeatedly request unless it becomes the actual highest-value blocking frontier for an active mission"
+  },
+  "remediation_loop": [
+    "classify the defect",
+    "create an authorized remediation task if needed (policy engine)",
+    "route implementation to the execution role",
+    "route independent verification separately where required",
+    "reconcile evidence",
+    "continue until resolved or a genuine authority boundary"
+  ],
+  "report_to_owner_only_when": [
+    "new P0/P1 or material trust failure",
+    "production changes unexpectedly",
+    "a genuine owner authority boundary is the only meaningful blocker",
+    "a major autonomous capability is completed",
+    "the fleet cannot safely recover by itself"
+  ],
+  "mission_goals_2026_09_29": [
+    {
+      "id": "G1",
+      "name": "CURRENT_TRUTH_RECONCILED",
+      "statement": "Fleet decisions reflect live authoritative reality rather than stale narrative."
+    },
+    {
+      "id": "G2",
+      "name": "AUTONOMY_INCREASED",
+      "statement": "More routine work completes end-to-end without owner relay."
+    },
+    {
+      "id": "G3",
+      "name": "TRUST_PRESERVED",
+      "statement": "Role, authority and verification boundaries remain fail-closed."
+    },
+    {
+      "id": "G4",
+      "name": "SELF_RECOVERY_IMPROVED",
+      "statement": "Routine faults and stale state require less human intervention."
+    },
+    {
+      "id": "G5",
+      "name": "EVIDENCE_SUFFICIENT",
+      "statement": "Another trusted agent can understand and continue the work from durable state."
+    },
+    {
+      "id": "G6",
+      "name": "COORDINATION_IMPROVED",
+      "statement": "Useful work reaches the correct role without unnecessary manual routing."
+    },
+    {
+      "id": "G7",
+      "name": "RESOURCE_EFFICIENT",
+      "statement": "Healthy/waiting systems avoid useless model cycles and busywork."
+    },
+    {
+      "id": "G8",
+      "name": "PRODUCTION_PRESERVED",
+      "statement": "No production mutation without distinct authority."
+    },
+    {
+      "id": "G9",
+      "name": "OWNER_RELAY_MINIMIZED",
+      "statement": "Repeated manual coordination is progressively removed."
+    },
+    {
+      "id": "G10",
+      "name": "TERMINAL_OR_PRECISE_FRONTIER",
+      "statement": "Continue autonomously until the fleet is healthy or one genuine external boundary remains."
+    }
+  ],
+  "mission_2026_09_29": "Advance the fleet toward a trustworthy, self-directed engineering system: continuously reconcile reality, identify useful work, coordinate the appropriate nodes, remediate routine defects, verify results independently, reduce owner relay without weakening governance. Authority delta: NONE. Historical statuses/findings are non-authoritative context."
+}

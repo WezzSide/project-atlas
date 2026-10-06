@@ -15,6 +15,14 @@ beside it or names its directory in `ATLAS_LIB_DIR`.
 
 This directory is source only. It deploys nothing, and adding it changes no running service.
 
+## Node contracts
+
+The contract documents each node is given are in [`contracts/`](./contracts/), imported
+unchanged and pinned by digest. Their classification and provenance are in
+[`contracts/PROVENANCE.md`](./contracts/PROVENANCE.md). The supervisor reads them from a
+`contracts` directory under `ATLAS_AUTONOMY_ETC`; placing them there is a deployment step
+and is not done by this repository.
+
 ## Provenance
 
 | Claim | Status |
