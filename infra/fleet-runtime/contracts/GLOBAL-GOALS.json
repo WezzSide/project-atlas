@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "goals": [
+    {
+      "id": "G1",
+      "name": "END_TO_END_AUTONOMY",
+      "statement": "Authorized objectives reach verified terminal outcomes with minimal human relay."
+    },
+    {
+      "id": "G2",
+      "name": "HUMAN_INTERVENTION_ONLY_FOR_REAL_AUTHORITY",
+      "statement": "Routine engineering, recovery, testing and reconciliation proceed autonomously."
+    },
+    {
+      "id": "G3",
+      "name": "CURRENT_TRUTH",
+      "statement": "Mutable decisions use freshly reconciled authoritative state."
+    },
+    {
+      "id": "G4",
+      "name": "FAIL_CLOSED_TRUST",
+      "statement": "Ambiguous, stale, malformed or contradictory trust evidence cannot establish authority."
+    },
+    {
+      "id": "G5",
+      "name": "EXACT_EVIDENCE",
+      "statement": "Authority-relevant results bind to exact identities, artifacts and executions."
+    },
+    {
+      "id": "G6",
+      "name": "INDEPENDENT_ASSURANCE",
+      "statement": "Trust-impacting changes receive genuinely independent verification where required."
+    },
+    {
+      "id": "G7",
+      "name": "SELF_REMEDIATION",
+      "statement": "Routine defects and failures are repaired autonomously within authority."
+    },
+    {
+      "id": "G8",
+      "name": "CONTINUOUS_PROGRESS",
+      "statement": "Intermediate completion/external waits do not create avoidable stalls."
+    },
+    {
+      "id": "G9",
+      "name": "SAFE_CONCURRENCY",
+      "statement": "Parallel agents preserve ownership, leases, CAS and evidence identity."
+    },
+    {
+      "id": "G10",
+      "name": "PRODUCTION_PRESERVATION",
+      "statement": "Production remains unchanged until explicit production authority."
+    },
+    {
+      "id": "G11",
+      "name": "NO_CERTIFICATION_TRANSFER",
+      "statement": "Certification remains bound to the exact object verified."
+    },
+    {
+      "id": "G12",
+      "name": "DURABLE_KNOWLEDGE",
+      "statement": "Decisions, evidence, residuals and recovery remain machine-readable and durable."
+    },
+    {
+      "id": "G13",
+      "name": "REDUCE_FUTURE_OPERATOR_WORK",
+      "statement": "Repeated manual operations become safe reusable automation."
+    },
+    {
+      "id": "G14",
+      "name": "MINIMAL_NECESSARY_CONSTRAINT",
+      "statement": "Directives specify outcomes and invariants rather than unnecessary procedures."
+    },
+    {
+      "id": "G15",
+      "name": "TERMINAL_OUTCOME_OR_PRECISE_FRONTIER",
+      "statement": "Every mission ends in verified success or one precise external frontier."
+    }
+  ]
+}
