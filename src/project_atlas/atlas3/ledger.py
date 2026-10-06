@@ -18,6 +18,7 @@ from project_atlas.atlas3.contracts import (
     write_json_atomic,
 )
 from project_atlas.atlas3.events import normalize_engineering_event, verify_engineering_event
+from project_atlas.secrets import scan_text
 
 PACKAGE_ID: Final[str] = "AT3-014"
 LEDGER_RELATIVE: Final[Path] = OPS_RELATIVE / "ledger"
@@ -25,6 +26,25 @@ LEDGER_RELATIVE: Final[Path] = OPS_RELATIVE / "ledger"
 
 def _ledger_path(vault: Path, project_id: str) -> Path:
     return vault / LEDGER_RELATIVE / f"{project_id}.jsonl"
+
+
+def _reject_secret_record(record: dict[str, Any], *, line_number: int | None = None) -> None:
+    """Fail closed if a decoded ledger row contains secret-shaped text.
+
+    AS-SEC-SCAN-ATLAS3-LEDGER-PAYLOAD-JSON-ESC-001: json.loads can decode
+    ``\\u`` payload fields that scan_text misses on raw bytes. The ledger
+    is evidence substrate — do not persist or silently accept those rows.
+    """
+    blob = json.dumps(record, sort_keys=True, separators=(",", ":"))
+    findings = scan_text(blob)
+    if not findings:
+        return
+    codes = sorted({item.pattern for item in findings})
+    where = f" at line {line_number}" if line_number is not None else ""
+    raise Atlas3Error(
+        "LEDGER_SECRET",
+        f"NFR-004 secret patterns in ledger record{where}: {','.join(codes)}",
+    )
 
 
 def append_event(
@@ -39,6 +59,7 @@ def append_event(
     record = event or normalize_engineering_event(project_id=pid, **kwargs)
     if record.get("project_id") != pid:
         raise Atlas3Error("PROJECT_MISMATCH", "event project_id does not match ledger project")
+    _reject_secret_record(record)
     path = _ledger_path(root, pid)
     path.parent.mkdir(parents=True, exist_ok=True)
     existing = list_events(root, pid)
@@ -99,6 +120,7 @@ def query_events(
             item = json.loads(raw_line)
         except json.JSONDecodeError as exc:
             raise Atlas3Error("LEDGER_CORRUPT", f"malformed ledger line: {exc}") from exc
+        _reject_secret_record(item, line_number=line_number)
         try:
             verify_engineering_event(item, expected_project_id=pid)
         except Atlas3Error as exc:
