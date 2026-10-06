@@ -1,0 +1,187 @@
+{
+  "hosts": {
+    "VPS1": {
+      "agent_backends_available_to_observer": 1,
+      "capacity": "healthy headroom",
+      "components": {
+        "devq_coordinator": {
+          "state": "not found"
+        },
+        "execution_broker": {
+          "state": "disabled"
+        },
+        "facts_export": {
+          "state": "scheduled"
+        },
+        "forge_worker": {
+          "state": "active"
+        },
+        "mission_supervisor": {
+          "progress": "UNKNOWN",
+          "state": "active"
+        },
+        "on_demand_executor": {
+          "state": "installed, idle in window"
+        }
+      },
+      "failed_system_units": false,
+      "reachable": true,
+      "role": "forge / execution",
+      "role_id": "ATLAS-FORGE-01",
+      "supervisor_build": "differs from VPS2 and VPS3",
+      "supervisor_dedicated_identity": true
+    },
+    "VPS2": {
+      "agent_backends_available_to_observer": 2,
+      "agent_backends_installed_but_unable_to_launch": 3,
+      "capacity": "resource-constrained, disk pressure increased since 2026-09-28",
+      "components": {
+        "devq_coordinator": {
+          "state": "not found"
+        },
+        "mission_supervisor": {
+          "cause": "UNKNOWN",
+          "detail": "cycles failing repeatedly since 2026-09-30; executor-failure backoff",
+          "progress": "degraded",
+          "state": "active"
+        },
+        "runner_controller": {
+          "cause": "UNKNOWN",
+          "deployed_main_revision": "b2f97ff268f0e995f1f49871944fbcaedc04a514",
+          "relative_to_main": "behind",
+          "stability": "restarted repeatedly; most recent start 2026-10-06",
+          "state": "active"
+        },
+        "runner_host_guards": {
+          "state": "applied"
+        },
+        "verifier_service": {
+          "intended_release": "UNKNOWN",
+          "release": "older than newest present on host",
+          "state": "active"
+        }
+      },
+      "failed_system_units": false,
+      "reachable": true,
+      "relation_to_supervisor_failures": "UNKNOWN",
+      "role": "verifier and runner",
+      "role_id": "ATLAS-EU-VERIFY-01",
+      "supervisor_dedicated_identity": false,
+      "unable_to_launch_reason": "a required language runtime was not available"
+    },
+    "VPS3": {
+      "agent_backends_available_to_observer": 5,
+      "capacity": "healthy headroom, largest host",
+      "components": {
+        "control_service": {
+          "release_present": false,
+          "state": "disabled"
+        },
+        "database_server": {
+          "state": "active, local only"
+        },
+        "devq_coordinator": {
+          "state": "not found"
+        },
+        "mission_supervisor": {
+          "last_success_date_utc": "2026-10-06",
+          "progress": "progressing",
+          "state": "active"
+        },
+        "owner_gateway": {
+          "state": "active"
+        },
+        "queue_service": {
+          "state": "active"
+        },
+        "scheduled_backup_and_health_jobs": {
+          "state": "scheduled"
+        }
+      },
+      "failed_system_units": false,
+      "reachable": true,
+      "role": "control plane",
+      "role_id": "ATLAS-EU-CONTROL-01",
+      "supervisor_dedicated_identity": false
+    }
+  },
+  "labels": [
+    "OBSERVED",
+    "INFERRED",
+    "UNKNOWN",
+    "PLANNED"
+  ],
+  "local_fleet_state_record": {
+    "in_repository": false,
+    "modified_by_this_record": false,
+    "observed_date_utc": "2026-09-28",
+    "revision": 34,
+    "schema": "atlas-fleet-state/v1",
+    "sha256": "8efc2cf7a74f9672adb5aac75a357303b62fb222deb0065648a99a4153ec198a"
+  },
+  "not_asserted": [
+    "ATLAS_VPS_FLEET_AUTONOMOUS",
+    "any PROVEN claim",
+    "causality for any failure"
+  ],
+  "not_read": [
+    "secrets, tokens, environment values",
+    "authority entries",
+    "journals",
+    "container state",
+    "database and queue contents",
+    "state requiring elevated access"
+  ],
+  "observed_date_utc": "2026-10-06",
+  "observer": {
+    "access": "read-only access",
+    "elevated_access_used": false,
+    "kind": "agent session",
+    "mutations": "none"
+  },
+  "projection": {
+    "full_observation": "kept off this repository",
+    "reduced": [
+      "host addresses and access details",
+      "account names",
+      "port numbers",
+      "host file layout",
+      "exact capacity figures",
+      "internal release numbers",
+      "failure and restart counters"
+    ],
+    "rule": "detail is reduced; no unhealthy state is rounded upward"
+  },
+  "repository_cross_check": {
+    "components_with_source_in_repository": [
+      "runner controller",
+      "DEVQ planner / coordinator / spool (not deployed)"
+    ],
+    "components_without_source_in_repository": [
+      "mission supervisor",
+      "queue service",
+      "owner gateway",
+      "verifier service",
+      "forge worker",
+      "on-demand executor",
+      "execution broker",
+      "control service"
+    ],
+    "node_role_strings_absent_from_repository": 2,
+    "runner_controller_deployed_revision": {
+      "committed_utc": "2026-10-01T07:47:56Z",
+      "is_main_commit": true,
+      "later_main_commits_touching_infra_atlas_runner": 2,
+      "main_ahead_by": 126,
+      "sha": "b2f97ff268f0e995f1f49871944fbcaedc04a514",
+      "subject": "Merge pull request #1036"
+    }
+  },
+  "repository_identity": {
+    "main": "9b7bc8f3cffa1ba880b24e07d730dfe3adfb2867",
+    "repository": "WezzSide/project-atlas",
+    "tree": "70f3baa3b0dc678e2713d241f4cdbdc47de4478a"
+  },
+  "schema": "atlas-fleet-observation-public/v1",
+  "status": "Public projection of a fuller local observation. Dated record, not canonical fleet state. Grants nothing. Unsigned; no publisher identity."
+}
