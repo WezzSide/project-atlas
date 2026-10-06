@@ -1,11 +1,15 @@
 # Node contract documents: classification and provenance
 
-Four contract documents from the release copy of the node contracts in the operator's fleet
-bundle. They are imported here unchanged, as versioned documentation of the texts that
-bundle gives to nodes.
+Four contract documents are versioned in this directory, imported unchanged from the release
+copy of the node contracts in the operator's fleet bundle. Their presence in the repository
+does not itself deploy them or establish that every node has loaded them. At revision
+`a66f8ec01d632d747d398f0e9ab68e6016a59504`, the supervisor reads the operating contract and
+goals listed below, and includes the continuous-goals file when present. No runtime reader
+for `AUTONOMY-POLICY.json` was found. Node availability depends on separate deployment and
+configuration.
 
-Their presence in this repository does not establish three things: that a node holds them
-now, that the runtime reads them, or that anything enforces them. The README section
+Nor does presence here establish that the runtime reads a file or that anything enforces
+it. The README section
 [Node contracts](../README.md#node-contracts) defines the terms used below.
 
 | File | sha256 | Class | Runtime use at this revision |
