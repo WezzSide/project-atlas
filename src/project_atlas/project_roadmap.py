@@ -27,6 +27,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from project_atlas.secrets import scan_text
+
 PACKAGE_ID = "AS-PROJECT-ROADMAP-001"
 GENERATOR_ID = "atlas-project-roadmap-001"
 SCHEMA_ID = "atlas.project-roadmap.v1"
@@ -81,6 +83,18 @@ _COUNT_THEATRE_RE = re.compile(
 
 class ProjectRoadmapError(ValueError):
     """Fail-closed roadmap error."""
+
+
+def _safe_label(raw: Any, *, default: str) -> str:
+    """Return a persist-safe label; secret-shaped decoded values stay UNKNOWN.
+
+    AS-SEC-SCAN-ROADMAP-TITLE-JSON-ESC-001: json.loads of fenced roadmap
+    records can decode ``\\u`` titles/ids that scan_text misses on raw bytes.
+    """
+    text = str(raw or "").strip()
+    if not text or scan_text(text):
+        return default
+    return text
 
 
 def _write_atomic(path: Path, content: bytes) -> None:
@@ -151,6 +165,11 @@ def _normalize_status(raw: Any) -> tuple[str, list[str]]:
     text = str(raw).strip()
     if not text:
         return "UNKNOWN", ["status empty"]
+    if scan_text(text):
+        # AS-SEC-SCAN-ROADMAP-TITLE-JSON-ESC-001: do not interpolate
+        # decoded secret-shaped status into flags / milestone notes.
+        notes.append("unrecognized_status")
+        return "UNKNOWN", notes
     if _PERCENT_RE.search(text) or _COUNT_THEATRE_RE.search(text):
         notes.append("rejected_package_count_theatre")
         return "UNKNOWN", notes
@@ -203,23 +222,29 @@ def _normalize_status(raw: Any) -> tuple[str, list[str]]:
 def _normalize_lifecycle(raw: Any, *, progress: str, notes: list[str]) -> str:
     """Preserve lifecycle distinctions. MERGED != CLOSED. IMPLEMENTED != VERIFIED."""
     if raw is not None and str(raw).strip():
-        key = str(raw).strip().upper().replace(" ", "_").replace("-", "_")
-        key = {
-            "CERTIFIED": "CERTIFIED_MERGE_ELIGIBLE",
-            "CERTIFIED_MERGE_ELIGIBLE": "CERTIFIED_MERGE_ELIGIBLE",
-            "IMPLEMENTATION-COMPLETE": "IMPLEMENTATION_COMPLETE",
-            "VERIFICATION-IN-PROGRESS": "VERIFICATION_IN_PROGRESS",
-            "POST-MERGE-VERIFIED": "POST_MERGE_VERIFIED",
-            "ENTRY-GATE": "ENTRY_GATE",
-            "MERGE-AUTHORIZED": "MERGE_AUTHORIZED",
-        }.get(key, key)
-        if key in LIFECYCLES:
-            if key == "CLOSED":
-                notes.append("closed_is_not_merged")
-            if key == "MERGED":
-                notes.append("merged_neq_closed")
-            return key
-        notes.append(f"unrecognized_lifecycle:{raw}")
+        text = str(raw).strip()
+        if scan_text(text):
+            # AS-SEC-SCAN-ROADMAP-TITLE-JSON-ESC-001: do not interpolate
+            # decoded secret-shaped lifecycle into item flags.
+            notes.append("unrecognized_lifecycle")
+        else:
+            key = text.upper().replace(" ", "_").replace("-", "_")
+            key = {
+                "CERTIFIED": "CERTIFIED_MERGE_ELIGIBLE",
+                "CERTIFIED_MERGE_ELIGIBLE": "CERTIFIED_MERGE_ELIGIBLE",
+                "IMPLEMENTATION-COMPLETE": "IMPLEMENTATION_COMPLETE",
+                "VERIFICATION-IN-PROGRESS": "VERIFICATION_IN_PROGRESS",
+                "POST-MERGE-VERIFIED": "POST_MERGE_VERIFIED",
+                "ENTRY-GATE": "ENTRY_GATE",
+                "MERGE-AUTHORIZED": "MERGE_AUTHORIZED",
+            }.get(key, key)
+            if key in LIFECYCLES:
+                if key == "CLOSED":
+                    notes.append("closed_is_not_merged")
+                if key == "MERGED":
+                    notes.append("merged_neq_closed")
+                return key
+            notes.append(f"unrecognized_lifecycle:{raw}")
     if progress == "VERIFIED_COMPLETION":
         return "POST_MERGE_VERIFIED"
     if progress == "IMPLEMENTED":
@@ -369,15 +394,28 @@ def _normalize_item(
     *,
     index: int,
 ) -> dict[str, Any]:
-    item_id = str(raw.get("id") or raw.get("item_id") or f"item-{index:03d}")
-    title = str(raw.get("title") or raw.get("name") or item_id)
+    item_id = _safe_label(
+        raw.get("id") or raw.get("item_id") or f"item-{index:03d}",
+        default=f"item-{index:03d}",
+    )
+    title = _safe_label(raw.get("title") or raw.get("name") or item_id, default="UNKNOWN")
     status, status_notes = _normalize_status(raw.get("status") or raw.get("lifecycle"))
     depends_on = [
-        str(dep)
-        for dep in (raw.get("depends_on") or raw.get("dependencies") or [])
-        if str(dep).strip()
+        dep
+        for dep in (
+            _safe_label(raw_dep, default="")
+            for raw_dep in (raw.get("depends_on") or raw.get("dependencies") or [])
+        )
+        if dep
     ]
-    evidence = [str(ref) for ref in (raw.get("evidence") or []) if str(ref).strip()]
+    evidence = [
+        ref
+        for ref in (
+            _safe_label(raw_ref, default="")
+            for raw_ref in (raw.get("evidence") or [])
+        )
+        if ref
+    ]
     missing = [ref for ref in evidence if not _evidence_exists(vault, ref)]
     present = [ref for ref in evidence if ref not in missing]
     flags: list[str] = list(status_notes)
@@ -394,17 +432,29 @@ def _normalize_item(
             if isinstance(blocker, str) and blocker.strip():
                 blockers.append(
                     {
-                        "reason": blocker.strip(),
+                        "reason": _safe_label(blocker, default="UNKNOWN"),
                         "waiting_on": None,
                         "unlock_condition": None,
                     }
                 )
             elif isinstance(blocker, dict):
+                waiting = blocker.get("waiting_on")
+                unlock = blocker.get("unlock_condition")
                 blockers.append(
                     {
-                        "reason": str(blocker.get("reason") or "UNKNOWN"),
-                        "waiting_on": blocker.get("waiting_on"),
-                        "unlock_condition": blocker.get("unlock_condition"),
+                        "reason": _safe_label(
+                            blocker.get("reason") or "UNKNOWN", default="UNKNOWN"
+                        ),
+                        "waiting_on": (
+                            None
+                            if waiting in (None, "")
+                            else _safe_label(waiting, default="UNKNOWN")
+                        ),
+                        "unlock_condition": (
+                            None
+                            if unlock in (None, "")
+                            else _safe_label(unlock, default="UNKNOWN")
+                        ),
                     }
                 )
     if status == "BLOCKED" and not blockers:
@@ -435,7 +485,11 @@ def _normalize_item(
         "status": status,
         "progress": status,
         "lifecycle": lifecycle,
-        "milestone": raw.get("milestone"),
+        "milestone": (
+            None
+            if raw.get("milestone") in (None, "")
+            else _safe_label(raw.get("milestone"), default="UNKNOWN")
+        ),
         "depends_on": depends_on,
         "evidence": evidence,
         "evidence_present": present,
@@ -445,7 +499,14 @@ def _normalize_item(
         "missing_acceptance_evidence": "MISSING_ACCEPTANCE_EVIDENCE" in flags,
         "missing_dependencies": [],
         "flags": sorted(set(flags)),
-        "notes": list(raw.get("notes") or []),
+        "notes": [
+            note
+            for note in (
+                _safe_label(raw_note, default="")
+                for raw_note in (raw.get("notes") or [])
+            )
+            if note
+        ],
     }
 
 
@@ -577,7 +638,7 @@ def _you_are_here(
         }
     if state_lens:
         rollup = state_lens.get("rollup") or state_lens.get("status")
-        summary = state_lens.get("summary")
+        summary = _safe_label(state_lens.get("summary"), default="")
         if rollup or summary:
             status, notes = _normalize_status(rollup)
             return {
@@ -931,13 +992,20 @@ def build_roadmap_lens(vault: Path, project_id: str) -> dict[str, Any]:
     if isinstance(raw_milestones, list):
         for raw in raw_milestones:
             if isinstance(raw, str):
-                milestones.append({"id": raw, "title": raw, "status": "UNKNOWN"})
+                label = _safe_label(raw, default="UNKNOWN")
+                milestones.append({"id": label, "title": label, "status": "UNKNOWN"})
             elif isinstance(raw, dict):
                 status, notes = _normalize_status(raw.get("status"))
                 milestones.append(
                     {
-                        "id": str(raw.get("id") or raw.get("title") or "milestone"),
-                        "title": str(raw.get("title") or raw.get("id") or "milestone"),
+                        "id": _safe_label(
+                            raw.get("id") or raw.get("title") or "milestone",
+                            default="milestone",
+                        ),
+                        "title": _safe_label(
+                            raw.get("title") or raw.get("id") or "milestone",
+                            default="UNKNOWN",
+                        ),
                         "status": status,
                         "notes": notes,
                     }
