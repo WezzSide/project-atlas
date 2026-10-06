@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
+from project_atlas.secrets import scan_text
 from project_atlas.source_identity import (
     IdentityLockError,
     ProjectIdentityLock,
@@ -105,6 +106,10 @@ def active_source_rows(manifest: dict[str, Any]) -> list[dict[str, str]]:
             continue
         path = _posix_source_path(path_raw)
         if path is None:
+            continue
+        # AS-SEC-SCAN-INCREMENTAL-PATH-JSON-ESC-001: json.loads of a prior
+        # connect-manifest can decode \\u path escapes that scan_text misses.
+        if scan_text(path) or scan_text(path_raw):
             continue
         project = entry.get("likely_project") or "unknown-project"
         source_id = entry.get("source_id") or ""

@@ -12,11 +12,14 @@ from project_atlas.agent_handoff import export_agent_context
 from project_atlas.connect import ConnectError, connect_project
 from project_atlas.incremental_connect import (
     classify_active_delta,
+    evaluate_incremental_reconnect,
     identity_lock_path,
     inventory_fingerprint,
+    write_incremental_receipt,
 )
 from project_atlas.project_brief import build_project_brief
 from project_atlas.project_next import derive_next_lenses
+from project_atlas.secrets import scan_text
 from project_atlas.source_health import explain_source_health
 from project_atlas.source_identity import ProjectIdentityLock
 
@@ -406,3 +409,71 @@ def test_cross_project_skip_does_not_leak(tmp_path: Path) -> None:
     ]
     assert leaked == []
     assert len(after_ids) == len(set(after_ids))
+
+
+def test_json_unicode_escape_prior_path_is_not_persisted(tmp_path: Path) -> None:
+    """AS-SEC-SCAN-INCREMENTAL-PATH-JSON-ESC-001: decoded prior path must not persist."""
+    token = "AKIAAAAAAAAAAAAAAAAA"
+    sha = "a" * 64
+    vault = tmp_path / "vault"
+    root = tmp_path / "root"
+    root.mkdir()
+    (vault / "projects" / "harbor-api").mkdir(parents=True)
+    (vault / "generated" / "ops").mkdir(parents=True)
+    (vault / "generated" / "indexes").mkdir(parents=True)
+    receipt = {
+        "schema": "atlas.connect.receipt.v1",
+        "status": "connected",
+        "vault_id": "v1",
+        "projects": ["harbor-api"],
+        "steps": ["ingest"],
+        "project_root": str(root),
+        "compile_options": {
+            "include_portfolio": False,
+            "skip_validate": True,
+            "excludes": [],
+            "max_file_size": 1000,
+        },
+    }
+    (vault / "generated" / "ops" / "connect-receipt.json").write_text(
+        json.dumps(receipt), encoding="utf-8"
+    )
+    raw = (
+        '{"source_root":'
+        + json.dumps(str(root))
+        + ',"sources":[{"path":"docs/\\u0041KIAAAAAAAAAAAAAAAAA.md","sha256":"'
+        + sha
+        + '","likely_project":"harbor-api","source_id":"src-1"}]}'
+    )
+    (vault / "generated" / "ops" / "connect-manifest.json").write_text(
+        raw, encoding="utf-8"
+    )
+    current = {
+        "source_root": str(root),
+        "sources": [
+            {
+                "path": "docs/other.md",
+                "sha256": "b" * 64,
+                "likely_project": "harbor-api",
+                "source_id": "src-2",
+            }
+        ],
+    }
+    assert scan_text(raw) == []
+    dec = evaluate_incremental_reconnect(
+        vault=vault,
+        project_root=root,
+        current_manifest=current,
+        vault_id="v1",
+        include_portfolio=False,
+        skip_validate=True,
+        excludes=[],
+        max_file_size=1000,
+        manifest_relative=Path("generated/ops/connect-manifest.json"),
+        staging_relative=Path("generated/ops/staging"),
+        receipt_relative=Path("generated/ops/connect-receipt.json"),
+    )
+    path = write_incremental_receipt(vault, dec)
+    text = path.read_text(encoding="utf-8")
+    assert token not in text
+    assert scan_text(text) == []
