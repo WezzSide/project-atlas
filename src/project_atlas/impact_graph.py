@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from project_atlas.schema import validate_record
+from project_atlas.secrets import scan_text
 
 PACKAGE_ID = "AS-J-005"
 GENERATOR_ID = "atlas-j-005"
@@ -125,6 +126,14 @@ def _load_relationships(vault: Path) -> list[dict[str, Any]]:
         if not isinstance(payload, dict):
             raise ImpactGraphError(f"relationship record must be object: {rel}")
         validate_record(payload, "graph-relationship")
+        identity_fields = (
+            str(payload.get("source_entity_id") or ""),
+            str(payload.get("target_entity_id") or ""),
+            str(payload.get("project_id") or ""),
+            str(payload.get("relationship_id") or ""),
+        )
+        if any(scan_text(field) for field in identity_fields):
+            continue
         records.append(payload)
     records.sort(
         key=lambda item: (
