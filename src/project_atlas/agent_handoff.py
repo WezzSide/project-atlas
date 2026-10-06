@@ -34,6 +34,7 @@ from project_atlas.conversation_capture import (
 from project_atlas.inventory_drift import CONNECT_MANIFEST, attach_source_drift
 from project_atlas.inventory_drift import PACKAGE_ID as DRIFT_PACKAGE
 from project_atlas.project_brief import ProjectBriefError, build_project_brief
+from project_atlas.secrets import scan_text
 from project_atlas.session_capture import (
     SessionCaptureError,
     capture_session,
@@ -169,6 +170,11 @@ def connect_manifest_identity(vault: Path, project_id: str) -> dict[str, Any]:
             rel = item.get("path")
             sha = item.get("sha256")
             if isinstance(rel, str) and rel and isinstance(sha, str) and sha:
+                # AS-SEC-SCAN-HANDOFF-MANIFEST-PATH-JSON-ESC-001: json.loads of
+                # connect-manifest path can decode ``\u`` escapes that
+                # scan_text misses on raw bytes.
+                if scan_text(rel):
+                    continue
                 rows.append({"path": rel, "sha256": sha})
     rows.sort(key=lambda row: row["path"])
     return {
