@@ -62,6 +62,11 @@ INITIAL_RETARGET_EVIDENCE_DIGEST: Final[str] = (
     "7265052e8e30a6c3058751a96a9b10c410f2c49797fab700983a562528bdd04a"
 )
 CANONICAL_REPOSITORY_IDENTITY: Final[str] = "github.com/b0lk13/project-atlas"
+# Live GitHub owner after the repository transfer. The sealed pin above
+# is historical and must not be rewritten without an owner pin-retarget
+# (it is hashed into INITIAL_RETARGET_EVIDENCE_DIGEST). Trust compares
+# these as one repository via repository_identities_match().
+LIVE_REPOSITORY_IDENTITY: Final[str] = "github.com/wezzside/project-atlas"
 PILOT_PACKAGE_ID: Final[str] = "AS-ORCH-AUTONOMY-001-PILOT"
 #: ``MutationSurface.semantic`` every origination-derived ``WorkNode``
 #: carries, set by the single function that builds them

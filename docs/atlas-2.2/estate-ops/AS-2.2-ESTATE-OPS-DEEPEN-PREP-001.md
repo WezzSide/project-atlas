@@ -17,7 +17,7 @@
 
 Deepen the wave-2 estate-ops PREP **beyond** the base cockpit / lens / action
 stubs already landed under `docs/atlas-2.2/estate-ops/` (PR
-[#197](https://github.com/B0LK13/project-atlas/pull/197)).
+[#197](https://github.com/WezzSide/project-atlas/pull/197)).
 
 This PREP owns a **unique deepen path** under `docs/atlas-2.2/estate-ops/**` for:
 

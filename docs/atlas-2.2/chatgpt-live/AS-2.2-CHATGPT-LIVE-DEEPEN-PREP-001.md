@@ -18,7 +18,7 @@
 Deepen the wave-1 quarantine-first live ChatGPT bridge PREP **beyond** the base
 architecture / stub schemas already landed under
 `docs/atlas-2.2/chatgpt-live/` (PR
-[#194](https://github.com/B0LK13/project-atlas/pull/194)).
+[#194](https://github.com/WezzSide/project-atlas/pull/194)).
 
 This PREP owns a **unique deepen path** under `docs/atlas-2.2/chatgpt-live/**` for:
 

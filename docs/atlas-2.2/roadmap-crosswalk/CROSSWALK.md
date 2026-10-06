@@ -26,25 +26,25 @@ production slots in
 
 | Short | PREP package | PR | Roadmap slot(s) | Relation | PREP entry |
 |---|---|---|---|---|---|
-| RET | `AS-2.2-RET-HYBRID-001` | [#159](https://github.com/B0LK13/project-atlas/pull/159) | `AS-2.2-RET-CTX-001` | feeds | [`AS-2.2-RET-HYBRID-001.md`](../AS-2.2-RET-HYBRID-001.md) |
-| CTX | `AS-2.2-CTX-COMPILER-001` | [#161](https://github.com/B0LK13/project-atlas/pull/161) | `AS-2.2-RET-CTX-001` | feeds | [`ctx-compiler/`](../ctx-compiler/) |
-| KCI | `AS-2.2-KCI-ENGINE-PREP-001` | [#160](https://github.com/B0LK13/project-atlas/pull/160) | `AS-2.2-KCI-001` | direct | [`AS-2.2-KCI-ENGINE-PREP-001.md`](../AS-2.2-KCI-ENGINE-PREP-001.md) |
-| MEM | `AS-2.2-MEM-GOV-001` | [#169](https://github.com/B0LK13/project-atlas/pull/169) | *(enabler)* | enabler | [`mem-gov/`](../mem-gov/) |
-| DoD | `AS-2.2-DOD-COMPILER-001` | [#170](https://github.com/B0LK13/project-atlas/pull/170) | *(enabler)* | enabler | [`dod-compiler/`](../dod-compiler/) |
-| TIME | `AS-2.2-TIME-MACHINE-001` | [#168](https://github.com/B0LK13/project-atlas/pull/168) | `AS-2.2-TEMPORAL-001` | feeds | [`time-machine/`](../time-machine/) |
-| REALITY-LIVE | `AS-2.2-REALITY-LIVE-001` | [#167](https://github.com/B0LK13/project-atlas/pull/167) | *(enabler)* | enabler | [`reality-live/`](../reality-live/) |
-| REALITY-GAP | `AS-2.2-REALITY-GAP-PREP-001` | [#172](https://github.com/B0LK13/project-atlas/pull/172) | *(enabler)* | enabler | [`reality-gap/`](../reality-gap/) |
-| RESEARCH | `AS-2.2-RESEARCH-001` | [#171](https://github.com/B0LK13/project-atlas/pull/171) | `AS-2.2-ASK2-001` *(peer)* | feeds | [`research/`](../research/) |
-| CONFLICT | `AS-2.2-CONFLICT-UX-PREP-001` | [#181](https://github.com/B0LK13/project-atlas/pull/181) | `AS-2.2-CONFLICT-UX-001` | direct | [`conflict-ux/`](../conflict-ux/) |
-| XPROJ | `AS-2.2-XPROJ-CONTRACT-PREP-001` | [#179](https://github.com/B0LK13/project-atlas/pull/179) | `AS-2.2-XPROJ-001` | direct | [`xproj/`](../xproj/) |
-| KF2 | `AS-2.2-KF2-FABRIC-PREP-001` | [#186](https://github.com/B0LK13/project-atlas/pull/186) | `AS-2.2-KF2-FABRIC-001` | direct | [`kf2-fabric/`](../kf2-fabric/) |
-| ASK2 | `AS-2.2-ASK2-DEEPEN-PREP-001` | [#188](https://github.com/B0LK13/project-atlas/pull/188) | `AS-2.2-ASK2-001` *(peer)* | direct | [`ask-atlas-2/`](../ask-atlas-2/) |
-| INTEL | `AS-2.2-INTEL-SLICE-PREP-001` | [#189](https://github.com/B0LK13/project-atlas/pull/189) | `AS-2.2-INTEL-SLICE-001` | direct | [`intel-slice/`](../intel-slice/) |
-| CHATGPT | `AS-2.2-CHATGPT-LIVE-PREP-001` | [#191](https://github.com/B0LK13/project-atlas/pull/191) | `AS-2.2-CHATGPT-LIVE-001` | optional | [`chatgpt-live/`](../chatgpt-live/) |
-| TEMPORAL | `AS-2.2-TEMPORAL-UX-PREP-001` | [#192](https://github.com/B0LK13/project-atlas/pull/192) | `AS-2.2-TEMPORAL-001` | direct | [`temporal-ux/`](../temporal-ux/) |
-| COMPAT-PIN | `AS-2.2-COMPAT-PIN-PREP-001` | [#196](https://github.com/B0LK13/project-atlas/pull/196) | `AS-2.2-COMPAT-PIN-001` | direct | [`compat-pin/`](../compat-pin/) |
-| ESTATE-OPS | `AS-2.2-ESTATE-OPS-PREP-001` | [#197](https://github.com/B0LK13/project-atlas/pull/197) | `AS-2.2-ESTATE-OPS-001` | direct | [`estate-ops/`](../estate-ops/) |
-| DOC-CHARTER | `AS-2.2-DOC-CHARTER-PREP-001` | [#199](https://github.com/B0LK13/project-atlas/pull/199) | `AS-2.2-DOC-CHARTER-001` | direct | [`doc-charter/`](../doc-charter/) |
+| RET | `AS-2.2-RET-HYBRID-001` | [#159](https://github.com/WezzSide/project-atlas/pull/159) | `AS-2.2-RET-CTX-001` | feeds | [`AS-2.2-RET-HYBRID-001.md`](../AS-2.2-RET-HYBRID-001.md) |
+| CTX | `AS-2.2-CTX-COMPILER-001` | [#161](https://github.com/WezzSide/project-atlas/pull/161) | `AS-2.2-RET-CTX-001` | feeds | [`ctx-compiler/`](../ctx-compiler/) |
+| KCI | `AS-2.2-KCI-ENGINE-PREP-001` | [#160](https://github.com/WezzSide/project-atlas/pull/160) | `AS-2.2-KCI-001` | direct | [`AS-2.2-KCI-ENGINE-PREP-001.md`](../AS-2.2-KCI-ENGINE-PREP-001.md) |
+| MEM | `AS-2.2-MEM-GOV-001` | [#169](https://github.com/WezzSide/project-atlas/pull/169) | *(enabler)* | enabler | [`mem-gov/`](../mem-gov/) |
+| DoD | `AS-2.2-DOD-COMPILER-001` | [#170](https://github.com/WezzSide/project-atlas/pull/170) | *(enabler)* | enabler | [`dod-compiler/`](../dod-compiler/) |
+| TIME | `AS-2.2-TIME-MACHINE-001` | [#168](https://github.com/WezzSide/project-atlas/pull/168) | `AS-2.2-TEMPORAL-001` | feeds | [`time-machine/`](../time-machine/) |
+| REALITY-LIVE | `AS-2.2-REALITY-LIVE-001` | [#167](https://github.com/WezzSide/project-atlas/pull/167) | *(enabler)* | enabler | [`reality-live/`](../reality-live/) |
+| REALITY-GAP | `AS-2.2-REALITY-GAP-PREP-001` | [#172](https://github.com/WezzSide/project-atlas/pull/172) | *(enabler)* | enabler | [`reality-gap/`](../reality-gap/) |
+| RESEARCH | `AS-2.2-RESEARCH-001` | [#171](https://github.com/WezzSide/project-atlas/pull/171) | `AS-2.2-ASK2-001` *(peer)* | feeds | [`research/`](../research/) |
+| CONFLICT | `AS-2.2-CONFLICT-UX-PREP-001` | [#181](https://github.com/WezzSide/project-atlas/pull/181) | `AS-2.2-CONFLICT-UX-001` | direct | [`conflict-ux/`](../conflict-ux/) |
+| XPROJ | `AS-2.2-XPROJ-CONTRACT-PREP-001` | [#179](https://github.com/WezzSide/project-atlas/pull/179) | `AS-2.2-XPROJ-001` | direct | [`xproj/`](../xproj/) |
+| KF2 | `AS-2.2-KF2-FABRIC-PREP-001` | [#186](https://github.com/WezzSide/project-atlas/pull/186) | `AS-2.2-KF2-FABRIC-001` | direct | [`kf2-fabric/`](../kf2-fabric/) |
+| ASK2 | `AS-2.2-ASK2-DEEPEN-PREP-001` | [#188](https://github.com/WezzSide/project-atlas/pull/188) | `AS-2.2-ASK2-001` *(peer)* | direct | [`ask-atlas-2/`](../ask-atlas-2/) |
+| INTEL | `AS-2.2-INTEL-SLICE-PREP-001` | [#189](https://github.com/WezzSide/project-atlas/pull/189) | `AS-2.2-INTEL-SLICE-001` | direct | [`intel-slice/`](../intel-slice/) |
+| CHATGPT | `AS-2.2-CHATGPT-LIVE-PREP-001` | [#191](https://github.com/WezzSide/project-atlas/pull/191) | `AS-2.2-CHATGPT-LIVE-001` | optional | [`chatgpt-live/`](../chatgpt-live/) |
+| TEMPORAL | `AS-2.2-TEMPORAL-UX-PREP-001` | [#192](https://github.com/WezzSide/project-atlas/pull/192) | `AS-2.2-TEMPORAL-001` | direct | [`temporal-ux/`](../temporal-ux/) |
+| COMPAT-PIN | `AS-2.2-COMPAT-PIN-PREP-001` | [#196](https://github.com/WezzSide/project-atlas/pull/196) | `AS-2.2-COMPAT-PIN-001` | direct | [`compat-pin/`](../compat-pin/) |
+| ESTATE-OPS | `AS-2.2-ESTATE-OPS-PREP-001` | [#197](https://github.com/WezzSide/project-atlas/pull/197) | `AS-2.2-ESTATE-OPS-001` | direct | [`estate-ops/`](../estate-ops/) |
+| DOC-CHARTER | `AS-2.2-DOC-CHARTER-PREP-001` | [#199](https://github.com/WezzSide/project-atlas/pull/199) | `AS-2.2-DOC-CHARTER-001` | direct | [`doc-charter/`](../doc-charter/) |
 
 ## DAG coverage notes
 
@@ -83,10 +83,10 @@ production slots in
 
 | Package | PR | Role |
 |---|---|---|
-| `AS-2.2-PREP-STATUS-001` | [#203](https://github.com/B0LK13/project-atlas/pull/203) | Status snapshot — see [`../PREP-STATUS.md`](../PREP-STATUS.md) |
-| `AS-2.2-PREP-FIXTURE-ROLLUP-001` | [#242](https://github.com/B0LK13/project-atlas/pull/242) | Fixture-plan + contract-stub rollup — see [`../AS-2.2-PREP-FIXTURE-ROLLUP-001.md`](../AS-2.2-PREP-FIXTURE-ROLLUP-001.md) |
-| `AS-2.2-ADV-POOL-001` | [#243](https://github.com/B0LK13/project-atlas/pull/243) | ADV threat-matrix pool — see [`../adv-pool/`](../adv-pool/) |
-| README index lanes | [#173](https://github.com/B0LK13/project-atlas/pull/173) · [#195](https://github.com/B0LK13/project-atlas/pull/195) · [#198](https://github.com/B0LK13/project-atlas/pull/198) · [#202](https://github.com/B0LK13/project-atlas/pull/202) · [#244](https://github.com/B0LK13/project-atlas/pull/244) (INDEX-013) · [#245](https://github.com/B0LK13/project-atlas/pull/245) (INDEX-014) | Multi-package restore / rollup+ADV index — see [`../README.md`](../README.md) |
+| `AS-2.2-PREP-STATUS-001` | [#203](https://github.com/WezzSide/project-atlas/pull/203) | Status snapshot — see [`../PREP-STATUS.md`](../PREP-STATUS.md) |
+| `AS-2.2-PREP-FIXTURE-ROLLUP-001` | [#242](https://github.com/WezzSide/project-atlas/pull/242) | Fixture-plan + contract-stub rollup — see [`../AS-2.2-PREP-FIXTURE-ROLLUP-001.md`](../AS-2.2-PREP-FIXTURE-ROLLUP-001.md) |
+| `AS-2.2-ADV-POOL-001` | [#243](https://github.com/WezzSide/project-atlas/pull/243) | ADV threat-matrix pool — see [`../adv-pool/`](../adv-pool/) |
+| README index lanes | [#173](https://github.com/WezzSide/project-atlas/pull/173) · [#195](https://github.com/WezzSide/project-atlas/pull/195) · [#198](https://github.com/WezzSide/project-atlas/pull/198) · [#202](https://github.com/WezzSide/project-atlas/pull/202) · [#244](https://github.com/WezzSide/project-atlas/pull/244) (INDEX-013) · [#245](https://github.com/WezzSide/project-atlas/pull/245) (INDEX-014) | Multi-package restore / rollup+ADV index — see [`../README.md`](../README.md) |
 
 ## Sync note (AS-2.2-ROADMAP-CROSSWALK-SYNC-001)
 

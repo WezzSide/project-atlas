@@ -5284,7 +5284,7 @@ Additive `tests/unit/test_as_accept_002_graph.py` only.
 **Impl HEAD / TREE:** 1314718b / c790577c
 **Gate:** READY WITH CONSTRAINTS — AS-GRAPH-005-REENTRY-GATE.md
 **Contract:** as-wp-005-entry/AS-GRAPH-005-PACKAGE-CONTRACT.md
-**PR:** https://github.com/B0LK13/project-atlas/pull/41
+**PR:** https://github.com/WezzSide/project-atlas/pull/41
 
 ### Scope
 - New project_atlas.graph_projections: relationships.md + graph-health.md emitters
@@ -7037,7 +7037,7 @@ North-star daily journey still lacked a first-class **What next** step. Substrat
 **Directive:** D-PROJECT-ATLAS-CLOUD-AS-ORCH-001C-001
 **Package:** AS-ORCH-001C
 **Branch:** `cursor/as-orch-001c-cursor-integration-d054`
-**PR:** https://github.com/B0LK13/project-atlas/pull/395 (draft)
+**PR:** https://github.com/WezzSide/project-atlas/pull/395 (draft)
 **Base:** live `origin/main` `5d7224fc8a51ce86d37b883dd9fa5f70dc47e94e` / TREE `b7725d4c31a419a1bf39aaabb4e01e09e641340b`
 **TARGET_MOVED:** NO
 
@@ -7092,7 +7092,7 @@ North-star daily journey still lacked a first-class **What next** step. Substrat
 **Directive:** D-PROJECT-ATLAS-CLOUD-AS-ORCH-001C-R1-001
 **Package:** AS-ORCH-001C-R1
 **Branch:** `cursor/as-orch-001c-cursor-integration-d054`
-**PR:** https://github.com/B0LK13/project-atlas/pull/395 (draft; not merge-ready)
+**PR:** https://github.com/WezzSide/project-atlas/pull/395 (draft; not merge-ready)
 **Base:** live `origin/main` `5d7224fc8a51ce86d37b883dd9fa5f70dc47e94e` / TREE `b7725d4c31a419a1bf39aaabb4e01e09e641340b`
 **OLD_PR_HEAD:** `70116b16108859622c3f39a71ee8605b361358a4`
 **OLD_PR_TREE:** `8c15c53445e53536b2e9b30734bd26c4aa411e84`
@@ -9758,7 +9758,7 @@ recovery independently re-verified PASS and merged via PR #638.)
 ## 2026-08-31 — DOGFOOD-001: source-safe genesis identity write
 
 - Context: the first authentic Atlas dogfood run (real CLI against real
-  `B0LK13/project-atlas` content, pinned to `e1bcca47` / tree `2e89b36c`,
+  `WezzSide/project-atlas` content, pinned to `e1bcca47` / tree `2e89b36c`,
   before `#654` merged) reproduced -- 3x independently, plus a fresh
   isolated red/green repro on this branch (base `818dd140` / tree
   `0eaf751b`) -- an unintended P1 source-safety defect: a project's first

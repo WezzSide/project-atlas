@@ -120,14 +120,14 @@ def test_bind_repo_omitted_foreign_baseline() -> None:
     with pytest.raises(SdkRuntimeError) as exc:
         bind_terminal_git_repository(
             git,
-            attribution=_baseline(repository="https://gitlab.com/B0LK13/project-atlas"),
+            attribution=_baseline(repository="https://gitlab.com/WezzSide/project-atlas"),
         )
     assert exc.value.code == "REMOTE_ATTRIBUTION_UNDETERMINED"
 
 
 def test_bind_repo_present_foreign_host() -> None:
     git = RunGitInfo(
-        repo_url="https://gitlab.com/B0LK13/project-atlas", branches=(BRANCH,)
+        repo_url="https://gitlab.com/WezzSide/project-atlas", branches=(BRANCH,)
     )
     with pytest.raises(SdkRuntimeError) as exc:
         bind_terminal_git_repository(git, attribution=_baseline())
@@ -138,7 +138,7 @@ def test_bind_nested_foreign_repo_url() -> None:
     payload = {
         "run": {
             "git": {
-                "repo_url": "https://evil.com/B0LK13/project-atlas",
+                "repo_url": "https://evil.com/WezzSide/project-atlas",
                 "branches": [BRANCH],
             }
         }
@@ -645,7 +645,7 @@ def test_remote_diff_returns_none_when_objects_missing(
 
     monkeypatch.setattr(sp, "run", fake_run)
     result = ma.default_resolve_remote_diff(
-        "https://github.com/B0LK13/project-atlas",
+        "https://github.com/WezzSide/project-atlas",
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         work_root=tmp_path,
@@ -660,10 +660,10 @@ def test_extract_omitted_branch_name_from_authentic_wire_shape() -> None:
     info = extract_terminal_run_git(
         {
             "git": {
-                "branches": [{"repoUrl": "github.com/B0LK13/project-atlas"}],
+                "branches": [{"repoUrl": "github.com/WezzSide/project-atlas"}],
             }
         }
     )
     assert info is not None
-    assert info.repo_url == "github.com/B0LK13/project-atlas"
+    assert info.repo_url == "github.com/WezzSide/project-atlas"
     assert info.branches == ()

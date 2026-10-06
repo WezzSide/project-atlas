@@ -61,7 +61,7 @@ CRITICAL or HIGH open items **block** `TECHNICAL_DEMO_VERIFIED=YES`.
 
 | Item | Disposition |
 |---|---|
-| Ruff F841 / E501 / I001 on tip | Fixed and merged [#251](https://github.com/B0LK13/project-atlas/pull/251) |
+| Ruff F841 / E501 / I001 on tip | Fixed and merged [#251](https://github.com/WezzSide/project-atlas/pull/251) |
 
 ## Verdict linkage
 

@@ -46,8 +46,8 @@
       "git log --all --grep=D-027 -i (all branches)",
       "git grep -li D-027 across current main tree",
       "git grep -li D-027 across all refs/remotes/origin/* trees (80 branches sampled)",
-      "gh search issues 'D-027' --repo B0LK13/project-atlas",
-      "gh search prs 'D-027' --repo B0LK13/project-atlas"
+      "gh search issues 'D-027' --repo WezzSide/project-atlas",
+      "gh search prs 'D-027' --repo WezzSide/project-atlas"
     ],
     "result": "zero hits in every search performed across two independent sessions (D-033, D-034)",
     "impact": "No Golden Estate result in this document depends on D-027 being true."

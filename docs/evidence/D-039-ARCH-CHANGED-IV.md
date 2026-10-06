@@ -1,7 +1,7 @@
 # IV — AS-CODER-ALPHA-ARCH-001 + CHANGED-002 (unchanged baseline)
 
 **Directive:** D-PROJECT-ATLAS-CODER-ALPHA-039 / D-040
-**PR:** https://github.com/B0LK13/project-atlas/pull/340
+**PR:** https://github.com/WezzSide/project-atlas/pull/340
 **Result:** PASS
 
 ## Certified tip (pre-merge)

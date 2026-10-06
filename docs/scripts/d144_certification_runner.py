@@ -36,7 +36,7 @@ RECEIPT_DIR_REL = Path(".atlas") / "orchestration" / "sdk-runtime"
 HARBOR_FIXTURE_REL = Path("tests/fixtures/demo/estate/harbor-api")
 PR431_MERGE_SHA = "72b6d255aa6a6a7d987cdc59f75657c0d4122136"
 PR433_MERGE_SHA = "d5e1e988c090fc3fc783ef9913f8043c4efb22b4"
-REPO_CLONE_URL = "https://github.com/B0LK13/project-atlas.git"
+REPO_CLONE_URL = "https://github.com/WezzSide/project-atlas.git"
 
 
 def _repo_root() -> Path:
