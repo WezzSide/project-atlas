@@ -1,0 +1,173 @@
+{
+  "profile_defaults": {
+    "credential": "SUBSCRIPTION_OAUTH"
+  },
+  "profiles": {
+    "claude-impl": {
+      "adapter": "claude-code",
+      "adapter_min_version": "2.1.259",
+      "agent_id": "claude-worker",
+      "allowed_mutation_prefixes": [
+        "claude-1.txt",
+        "claude-2.txt"
+      ],
+      "capabilities": [
+        "IMPLEMENT"
+      ],
+      "description": "Real Claude Code worker.",
+      "env_allowlist": [],
+      "limits": {
+        "max_attempts": 2,
+        "max_seconds": 420
+      },
+      "model": "sonnet",
+      "permission_mode": "acceptEdits",
+      "tools": [
+        "Read",
+        "Write",
+        "Edit",
+        "Glob",
+        "Grep"
+      ]
+    },
+    "codex-impl": {
+      "adapter": "codex",
+      "agent_id": "codex-worker",
+      "allowed_mutation_prefixes": [
+        "codex-1.txt",
+        "codex-2.txt"
+      ],
+      "capabilities": [
+        "IMPLEMENT"
+      ],
+      "description": "Real Codex worker.",
+      "env_allowlist": [],
+      "limits": {
+        "max_attempts": 2,
+        "max_seconds": 420
+      },
+      "permission_mode": "acceptEdits"
+    }
+  },
+  "program": {
+    "approval_reference": "docs/orchestration/program/evidence/SYSTEMWIDE-ACCEPTANCE.md",
+    "approved_by": "wesley",
+    "base_pin": "87db3e5be5a7d9359c3c78618f33d42f5f21d8de",
+    "limits": {
+      "idle_sleep_seconds": 0.0,
+      "max_attempts_per_task": 2,
+      "max_concurrent_workers": 2,
+      "max_cycles": 20,
+      "max_idle_cycles": 3,
+      "max_program_seconds": 2400,
+      "max_task_launches": 8,
+      "max_task_seconds": 420
+    },
+    "objective": "Codex and Claude workers progressing through separate approved task queues under one supervisor, with no user prompt between eligible tasks.",
+    "program_id": "atlas-systemwide-acceptance",
+    "tasks": [
+      {
+        "acceptance": [
+          {
+            "check_id": "claude-a-content",
+            "description": "claude-1.txt contains CLAUDE-A-DONE",
+            "kind": "FILE_MATCHES",
+            "path": "claude-1.txt",
+            "pattern": "CLAUDE-A-DONE"
+          }
+        ],
+        "capabilities_required": [
+          "IMPLEMENT"
+        ],
+        "depends_on": [],
+        "instruction": "Create a file named exactly claude-1.txt in the current working directory whose entire content is the single line: CLAUDE-A-DONE\nDo not create or modify any other file. Stop when it exists.",
+        "mutation_paths": [
+          "claude-1.txt"
+        ],
+        "profile_ref": "claude-impl",
+        "surface_id": "claude-a",
+        "surface_semantic": "CLAUDE_A",
+        "task_id": "claude-a",
+        "title": "claude writes claude-1.txt"
+      },
+      {
+        "acceptance": [
+          {
+            "check_id": "claude-b-content",
+            "description": "claude-2.txt contains CLAUDE-B-DONE",
+            "kind": "FILE_MATCHES",
+            "path": "claude-2.txt",
+            "pattern": "CLAUDE-B-DONE"
+          }
+        ],
+        "capabilities_required": [
+          "IMPLEMENT"
+        ],
+        "depends_on": [
+          "claude-a"
+        ],
+        "instruction": "Create a file named exactly claude-2.txt in the current working directory whose entire content is the single line: CLAUDE-B-DONE\nDo not create or modify any other file. Stop when it exists.",
+        "mutation_paths": [
+          "claude-2.txt"
+        ],
+        "profile_ref": "claude-impl",
+        "surface_id": "claude-b",
+        "surface_semantic": "CLAUDE_B",
+        "task_id": "claude-b",
+        "title": "claude writes claude-2.txt"
+      },
+      {
+        "acceptance": [
+          {
+            "check_id": "codex-a-content",
+            "description": "codex-1.txt contains CODEX-A-DONE",
+            "kind": "FILE_MATCHES",
+            "path": "codex-1.txt",
+            "pattern": "CODEX-A-DONE"
+          }
+        ],
+        "capabilities_required": [
+          "IMPLEMENT"
+        ],
+        "depends_on": [],
+        "instruction": "Create a file named exactly codex-1.txt in the current working directory whose entire content is the single line: CODEX-A-DONE\nDo not create or modify any other file. Stop when it exists.",
+        "mutation_paths": [
+          "codex-1.txt"
+        ],
+        "profile_ref": "codex-impl",
+        "surface_id": "codex-a",
+        "surface_semantic": "CODEX_A",
+        "task_id": "codex-a",
+        "title": "codex writes codex-1.txt"
+      },
+      {
+        "acceptance": [
+          {
+            "check_id": "codex-b-content",
+            "description": "codex-2.txt contains CODEX-B-DONE",
+            "kind": "FILE_MATCHES",
+            "path": "codex-2.txt",
+            "pattern": "CODEX-B-DONE"
+          }
+        ],
+        "capabilities_required": [
+          "IMPLEMENT"
+        ],
+        "depends_on": [
+          "codex-a"
+        ],
+        "instruction": "Create a file named exactly codex-2.txt in the current working directory whose entire content is the single line: CODEX-B-DONE\nDo not create or modify any other file. Stop when it exists.",
+        "mutation_paths": [
+          "codex-2.txt"
+        ],
+        "profile_ref": "codex-impl",
+        "surface_id": "codex-b",
+        "surface_semantic": "CODEX_B",
+        "task_id": "codex-b",
+        "title": "codex writes codex-2.txt"
+      }
+    ],
+    "workspace_root": "workspace"
+  },
+  "schema_version": 1
+}
