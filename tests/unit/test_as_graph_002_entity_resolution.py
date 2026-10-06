@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import shutil
 import time
 from pathlib import Path
@@ -25,6 +26,7 @@ from project_atlas.graph_resolution import (
     write_resolution_outputs,
 )
 from project_atlas.schema import available_schemas, validate_record
+from project_atlas.secrets import scan_text
 from project_atlas.source_identity import lineage_id, validate_project_uuid
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "graphify-present"
@@ -413,3 +415,18 @@ def test_optional_write_validates_under_atlas_validate(tmp_path: Path) -> None:
     report = validate(vault)
     graph_errors = [e for e in report["errors"] if "graph resolution" in e]
     assert graph_errors == []
+
+
+def test_json_escape_mapping_target_is_not_persisted(tmp_path: Path) -> None:
+    """AS-SEC-SCAN-GRAPH-MAPPING-JSON-ESC-001: decoded mapping targets must not persist."""
+    token = "AKIAAAAAAAAAAAAAAAAA"
+    raw = '{"n1":"\\u0041KIAAAAAAAAAAAAAAAAA"}'
+    assert scan_text(raw) == []
+    assert token not in raw
+    mapping = json.loads(raw)
+    with pytest.raises(GraphResolutionError, match="secret-content"):
+        resolve_nodes(
+            [{"id": "n1", "type": "document"}],
+            project_id="harbor-api",
+            mapping_table=mapping,
+        )

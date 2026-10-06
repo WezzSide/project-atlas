@@ -27,6 +27,7 @@ from project_atlas.graph_acceptance import (
     accept_graphify_artifacts,
 )
 from project_atlas.schema import validate_record
+from project_atlas.secrets import scan_text
 from project_atlas.source_identity import validate_project_uuid
 
 PACKAGE_ID = "AS-GRAPH-002"
@@ -170,6 +171,8 @@ class MappingTable:
                 eid = str(item.get("resolved_entity_id") or "").strip()
                 if not gid or not eid:
                     raise GraphResolutionError("mapping-table-malformed")
+                if scan_text(gid) or scan_text(eid):
+                    raise GraphResolutionError("secret-content")
                 if gid in entries and entries[gid].resolved_entity_id != eid:
                     raise GraphResolutionError("mapping-table-malformed")
                 entity_class = _optional_entity_class(item.get("entity_class"))
@@ -196,6 +199,8 @@ class MappingTable:
                 raise GraphResolutionError("mapping-table-malformed")
             if not eid:
                 raise GraphResolutionError("mapping-table-malformed")
+            if scan_text(gid) or scan_text(eid):
+                raise GraphResolutionError("secret-content")
             if gid in entries and entries[gid].resolved_entity_id != eid:
                 raise GraphResolutionError("mapping-table-malformed")
             entries[gid] = MappingEntry(
