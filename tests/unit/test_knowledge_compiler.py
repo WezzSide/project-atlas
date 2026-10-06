@@ -23,6 +23,7 @@ from project_atlas.knowledge_compiler import (
     validate_lifecycle_transition,
 )
 from project_atlas.schema import validate_record
+from project_atlas.secrets import scan_text
 
 HASH_A = "a" * 64
 HASH_B = "b" * 64
@@ -205,3 +206,33 @@ def test_legacy_source_identity_emits_compatibility_receipt(tmp_path: Path) -> N
         compile_knowledge("legacy-project", [entry], tmp_path), "legacy-project"
     )
     assert any("legacy-" in name for name in rendered if "receipts/claims" in name)
+
+
+def test_json_unicode_escape_lifecycle_claim_id_is_not_persisted(tmp_path: Path) -> None:
+    """AS-SEC-SCAN-KC-LIFECYCLE-JSON-ESC-001: decoded claim_id must not persist."""
+    token = "AKIAAAAAAAAAAAAAAAAA"
+    sha = "a" * 64
+    path = tmp_path / "state" / "claim-lifecycle"
+    path.mkdir(parents=True)
+    rec = {
+        "schema_version": 1,
+        "claim_id": token,
+        "project_id": "harbor-api",
+        "lifecycle": "new",
+        "content_sha256": sha,
+        "source_ids": ["src-1"],
+        "previous_source_ids": [],
+        "observation_count": 1,
+        "transitions": [],
+    }
+    raw = json.dumps({"schema_version": 1, "claims": [rec]}).replace(
+        '"' + token + '"', '"\\u0041KIAAAAAAAAAAAAAAAAA"'
+    )
+    (path / "harbor-api.json").write_text(raw, encoding="utf-8")
+    assert scan_text(raw) == []
+    bundle = compile_knowledge("harbor-api", [], tmp_path)
+    rendered = render_bundle(bundle, "harbor-api")
+    life_key = "state/claim-lifecycle/harbor-api.json"
+    text = rendered[life_key]
+    assert token not in text
+    assert scan_text(text) == []
