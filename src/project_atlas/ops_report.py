@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from project_atlas.schema import validate_record
+from project_atlas.secrets import scan_text
 
 SCHEMA_ID = "atlas.ops.report.v1"
 GENERATOR_ID = "atlas-obs-003"
@@ -207,7 +208,8 @@ def build_ops_report(
                 for key in ("vault_uuid", "vault_id"):
                     value = identity.get(key)
                     if isinstance(value, str) and value.strip():
-                        estate_id = value.strip()
+                        token = value.strip()
+                        estate_id = "unknown" if scan_text(token) else token
                         break
         unknown = _unknown_report(estate_id=estate_id, snapshot_status=status)
         if include_events:
@@ -234,7 +236,11 @@ def build_ops_report(
             {
                 "signal_id": signal.get("signal_id"),
                 "scope": signal.get("scope"),
-                "scope_id": signal.get("scope_id"),
+                "scope_id": (
+                    "unknown"
+                    if scan_text(str(signal.get("scope_id") or ""))
+                    else signal.get("scope_id")
+                ),
                 "status": signal.get("status"),
                 "severity": signal.get("severity"),
                 "observed_value": signal.get("observed_value"),
@@ -268,14 +274,22 @@ def build_ops_report(
         "truth_plane": "operational",
         "authority_plane": "none",
         "note": NOTE,
-        "estate_id": str(snapshot.get("estate_id") or "unknown"),
+        "estate_id": (
+            "unknown"
+            if scan_text(str(snapshot.get("estate_id") or ""))
+            else str(snapshot.get("estate_id") or "unknown")
+        ),
         "source_snapshot": SNAPSHOT_RELATIVE.as_posix(),
         "snapshot_status": "present",
         "rollup": {"estate": estate},
         "scopes": [
             {
                 "scope": scope.get("scope"),
-                "scope_id": scope.get("scope_id"),
+                "scope_id": (
+                    "unknown"
+                    if scan_text(str(scope.get("scope_id") or ""))
+                    else scope.get("scope_id")
+                ),
                 "health": scope.get("health"),
             }
             for scope in ordered_scopes

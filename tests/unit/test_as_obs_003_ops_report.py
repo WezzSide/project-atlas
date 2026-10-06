@@ -27,6 +27,7 @@ from project_atlas.ops_report import (
     report_to_markdown,
 )
 from project_atlas.schema import validate_record
+from project_atlas.secrets import scan_text
 
 
 def _write(path: Path, payload: object) -> None:
@@ -167,3 +168,35 @@ def test_cli_ops_report(tmp_path: Path) -> None:
     assert code == 0
     assert (vault / "generated" / "ops" / "ops-report.json").is_file()
     assert (vault / "generated" / "ops" / "ops-report.md").is_file()
+
+
+def test_json_unicode_escape_estate_id_is_not_persisted(tmp_path: Path) -> None:
+    """AS-SEC-SCAN-OPS-REPORT-JSON-ESC-001: decoded estate_id must not persist."""
+    token = "AKIAAAAAAAAAAAAAAAAA"
+    vault = tmp_path / "vault"
+    (vault / "generated" / "ops").mkdir(parents=True)
+    snap = {
+        "schema": "atlas.ops.health_snapshot.v1",
+        "truth_plane": "operational",
+        "authority_plane": "none",
+        "note": "OPERATIONAL HEALTH ≠ PROJECT AUTHORITY",
+        "estate_id": token,
+        "project_filter": None,
+        "rollup": {"estate": "healthy"},
+        "scopes": [{"scope": "estate", "scope_id": token, "health": "unknown"}],
+        "signals": [],
+        "collector": "atlas.ops.health",
+        "generated": {"by": "atlas-obs-001"},
+    }
+    raw = json.dumps(snap).replace('"' + token + '"', '"\\u0041KIAAAAAAAAAAAAAAAAA"')
+    (vault / "generated" / "ops" / "health-snapshot.json").write_text(
+        raw, encoding="utf-8"
+    )
+    assert scan_text(raw) == []
+    rec = emit_ops_report(vault, persist=True, include_events=False)
+    written = (vault / "generated" / "ops" / "ops-report.json").read_text(
+        encoding="utf-8"
+    )
+    assert rec.get("estate_id") != token
+    assert token not in written
+    assert scan_text(written) == []
