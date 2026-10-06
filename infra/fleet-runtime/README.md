@@ -94,5 +94,6 @@ commit on `main`, so a deployment done this way becomes provable without further
 - Imported as written: dense single-line style, no type annotations. It is outside the
   repository's lint and type-check scope, like other `infra/` components.
 - The supervisor needs a POSIX host (`fcntl`).
-- The task-policy engine has no test here yet; its test needs the policy document, which
-  was not imported.
+- The task-policy engine is tested against a synthetic policy only
+  (`tests/unit/test_fleet_runtime_policy_synthetic.py`); the operator policy document was
+  not imported, so those tests say nothing about it.
