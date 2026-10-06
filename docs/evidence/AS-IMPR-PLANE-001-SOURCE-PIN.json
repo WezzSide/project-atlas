@@ -1,0 +1,12 @@
+{
+  "package_id": "AS-IMPR-PLANE-001",
+  "directive": "ATLAS-PARALLEL-IMPROVEMENT-PLANE-20260910",
+  "pin_kind": "source_snapshot",
+  "base_ref": "origin/main",
+  "head": "b87b4a226f4aa8b2f669edf112aa3476454f754f",
+  "tree": "46d1989b026a2f15920ec5e1c78a106799bd1249",
+  "note": "Lane analysis pinned to this snapshot; upstream movement does not invalidate this pin until explicitly refreshed.",
+  "merge_authorized": false,
+  "execution_authorized": false,
+  "authority": "RECOMMENDATION_ONLY"
+}

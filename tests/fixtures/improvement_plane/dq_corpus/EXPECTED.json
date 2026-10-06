@@ -1,0 +1,44 @@
+{
+  "schema": "atlas.improvement-plane.dq-corpus.v1",
+  "package_id": "AS-IMPR-PLANE-001",
+  "directive": "ATLAS-IMPROVEMENT-PLANE-DECISION-QUALITY-003",
+  "note": "Controlled transitions (not longitudinal production evidence). Labels are expected classifications for regression, not Truth Core.",
+  "cases": [
+    {
+      "id": "T01_planted_closure",
+      "transition_kind": "controlled",
+      "description": "OPEN finding disappears; CLOSED planted only on a new unrelated path.",
+      "expected_compare": "claimed_closure",
+      "expected_evaluate": "inconclusive",
+      "outcome_status": "completed",
+      "provenance": "synthetic-fixture"
+    },
+    {
+      "id": "T02_path_continuous",
+      "transition_kind": "controlled",
+      "description": "OPEN finding disappears; CLOSED on an overlapping before-open source path.",
+      "expected_compare": "resolved",
+      "expected_evaluate": "improved",
+      "outcome_status": "completed",
+      "provenance": "synthetic-fixture"
+    },
+    {
+      "id": "T03_coverage_reduced",
+      "transition_kind": "controlled",
+      "description": "Finding disappears while accepted coverage shrinks; no CLOSED evidence.",
+      "expected_compare": "unobservable",
+      "expected_evaluate": "inconclusive",
+      "outcome_status": "completed",
+      "provenance": "synthetic-fixture"
+    },
+    {
+      "id": "T04_persisted",
+      "transition_kind": "controlled",
+      "description": "Finding remains OPEN after completed annotation.",
+      "expected_compare": "persistent",
+      "expected_evaluate": "persisted",
+      "outcome_status": "completed",
+      "provenance": "synthetic-fixture"
+    }
+  ]
+}
