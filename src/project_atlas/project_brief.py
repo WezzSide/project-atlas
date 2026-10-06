@@ -23,6 +23,7 @@ from project_atlas.project_changed import ProjectChangedError, materialize_chang
 from project_atlas.project_decisions import materialize_decisions_lenses
 from project_atlas.project_state import materialize_state_lenses
 from project_atlas.project_unknown import materialize_unknown_lenses
+from project_atlas.secrets import scan_text
 from project_atlas.web_api.knowledge import list_knowledge_answers
 
 PACKAGE_ID = "AS-CODER-ALPHA-BRIEF-001"
@@ -81,7 +82,22 @@ def _load_answer(vault: Path, answer_id: str) -> dict[str, Any] | None:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError):
         return None
-    return raw if isinstance(raw, dict) else None
+    if not isinstance(raw, dict):
+        return None
+    # AS-SEC-SCAN-BRIEF-ANSWERID-JSON-ESC-001: json.loads of answer JSON can
+    # decode ``\u`` answer_id / inspected_artifacts escapes that scan_text
+    # misses on raw bytes.
+    loaded_id = raw.get("answer_id")
+    if isinstance(loaded_id, str) and scan_text(loaded_id):
+        raw["answer_id"] = None
+    artifacts = raw.get("inspected_artifacts")
+    if isinstance(artifacts, list):
+        raw["inspected_artifacts"] = [
+            item
+            for item in artifacts
+            if not (isinstance(item, str) and scan_text(item))
+        ]
+    return raw
 
 
 def _next_honesty_flag(next_lens: dict[str, Any] | None, key: str) -> bool:
@@ -148,6 +164,10 @@ def _field(lens: dict[str, Any] | None, key: str = "summary") -> str | None:
         return None
     value = lens.get(key)
     if isinstance(value, str) and value.strip():
+        # Same persist class as answer_id: decoded ``\u`` summary must not
+        # become purpose / stack / state prose.
+        if scan_text(value):
+            return None
         return value
     return None
 
@@ -276,7 +296,9 @@ def build_project_brief(
     if isinstance(unknown_signals, dict):
         raw_absent = unknown_signals.get("coverage_absent")
         if isinstance(raw_absent, list):
-            coverage_absent = [str(item) for item in raw_absent]
+            coverage_absent = [
+                str(item) for item in raw_absent if not scan_text(str(item))
+            ]
 
     # Suggested next work: prefer the composed What Next lens, then honesty fallbacks.
     next_lens: dict[str, Any] | None = None
@@ -318,14 +340,14 @@ def build_project_brief(
         if not lens:
             continue
         for item in lens.get("inspected_artifacts") or []:
-            if isinstance(item, str) and item not in evidence:
+            if isinstance(item, str) and item not in evidence and not scan_text(item):
                 evidence.append(item)
 
     tech_stack = _extract_stack_blurb(vault, project_id)
     architecture_evidence = (architecture or {}).get("evidence")
     if isinstance(architecture_evidence, list):
         for item in architecture_evidence:
-            if isinstance(item, str) and item not in evidence:
+            if isinstance(item, str) and item not in evidence and not scan_text(item):
                 evidence.append(item)
 
     brief = {
@@ -357,6 +379,9 @@ def build_project_brief(
             row["answer_id"]
             for row in list_knowledge_answers(vault)
             if row.get("subject") == project_id
+            and not (
+                isinstance(row.get("answer_id"), str) and scan_text(str(row["answer_id"]))
+            )
         ],
         "generated": {"by": GENERATOR_ID},
         "source_drift": live_honesty["source_drift"],
