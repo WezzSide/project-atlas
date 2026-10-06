@@ -23,6 +23,7 @@ from project_atlas.orchestration.origination.adapter import EligibleRoadmapItem
 from project_atlas.orchestration.origination.pipeline import originate_all
 from project_atlas.orchestration.origination.proposal import RiskClass
 from project_atlas.orchestration.origination.sources import eligible_work_items
+from project_atlas.secrets import scan_text
 
 
 def _write(root: Path, rel: str, text: str) -> None:
@@ -727,3 +728,23 @@ def test_evidence_merge_exceeding_provenance_cap_fails_closed_not_a_raw_crash(
     contract = _contract("AAA-001", evidence=tuple(marks))
     with pytest.raises(AcceptanceContractConfigError):
         apply_acceptance_contracts((item,), (contract,))
+
+
+def test_yaml_escaped_contract_scalars_fail_closed(tmp_path: Path) -> None:
+    """AS-SEC-SCAN-ORIGIN-YAML-CONTRACT-001: YAML \\u secrets must not load."""
+    token = "AKIAAAAAAAAAAAAAAAAA"
+    evidence = _skip_marked_test(tmp_path)
+    contracts = (
+        "contracts:\n"
+        "  - item_id: AAA-001\n"
+        "    source_path: docs/backlog.md\n"
+        f"    evidence: [{evidence}]\n"
+        '    proposed_scope: ["src/\\u0041KIAAAAAAAAAAAAAAAAA.py"]\n'
+        '    success_criteria: ["\\u0041KIAAAAAAAAAAAAAAAAA"]\n'
+    )
+    _write(tmp_path, "docs/acceptance-contracts.yaml", contracts)
+    _write_project_marker(tmp_path, "docs/acceptance-contracts.yaml")
+    assert scan_text(contracts) == []
+    assert token not in contracts
+    with pytest.raises(AcceptanceContractConfigError, match="secret-content"):
+        load_acceptance_contracts(tmp_path)
