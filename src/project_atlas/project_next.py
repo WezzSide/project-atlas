@@ -33,6 +33,7 @@ from project_atlas.inventory_drift import (
     attach_source_drift,
     evaluate_connect_inventory_drift,
 )
+from project_atlas.secrets import scan_text
 
 PACKAGE_ID = "AS-CODER-ALPHA-NEXT-001"
 GENERATOR_ID = "atlas-coder-alpha-next-001"
@@ -121,6 +122,13 @@ def _queue_item(
     source_package: str,
     subject_id: str | None = None,
 ) -> dict[str, Any]:
+    # AS-SEC-SCAN-NEXT-JSON-ESC-001: json.loads of pending review_id can
+    # decode \\u escapes that scan_text misses on raw bytes.
+    if subject_id and scan_text(subject_id):
+        subject_id = None
+    if scan_text(title) or scan_text(why):
+        title = "UNKNOWN"
+        why = "secret-shaped attention scalar redacted"
     return {
         "kind": kind,
         "title": title,

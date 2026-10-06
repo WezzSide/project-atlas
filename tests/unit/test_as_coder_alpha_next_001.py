@@ -18,6 +18,7 @@ from project_atlas.project_next import (
     derive_next_lenses,
     materialize_next_lenses,
 )
+from project_atlas.secrets import scan_text
 
 
 def _write(path: Path, payload: object) -> None:
@@ -228,3 +229,24 @@ def test_connect_materializes_next_and_brief_uses_it(tmp_path: Path) -> None:
     assert "## What next (derived)" in markdown
     assert payload["next"]["package"] == PACKAGE_ID
     assert "next_is_command: false" in markdown
+
+
+def test_json_unicode_escape_review_id_is_not_persisted(tmp_path: Path) -> None:
+    """AS-SEC-SCAN-NEXT-JSON-ESC-001: decoded pending review_id must not persist."""
+    token = "AKIAAAAAAAAAAAAAAAAA"
+    vault = tmp_path / "vault"
+    (vault / "projects" / "harbor-api").mkdir(parents=True)
+    pending = vault / "review" / "pending"
+    pending.mkdir(parents=True)
+    raw = (
+        '{"schema_version":1,"entries":[{"review_id":"\\u0041KIAAAAAAAAAAAAAAAAA",'
+        '"status":"pending","category":"gap"}]}'
+    )
+    (pending / "harbor-api.json").write_text(raw, encoding="utf-8")
+    assert scan_text(raw) == []
+    materialize_next_lenses(vault, project_ids=["harbor-api"])
+    answer = (vault / "generated" / "answers" / "ans-next-harbor-api.json").read_text(
+        encoding="utf-8"
+    )
+    assert token not in answer
+    assert scan_text(answer) == []
