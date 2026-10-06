@@ -1,7 +1,11 @@
 # Node contract documents: classification and provenance
 
-Four contract documents that every fleet node receives. They are imported here unchanged,
-as versioned documentation of what the nodes are given.
+Four contract documents are versioned in this directory. Their presence in the repository
+does not itself deploy them or establish that every node has loaded them. At revision
+`a66f8ec01d632d747d398f0e9ab68e6016a59504`, the supervisor reads the operating contract and
+goals listed below, and includes the continuous-goals file when present. No runtime reader
+for `AUTONOMY-POLICY.json` was found. Node availability depends on separate deployment and
+configuration.
 
 | File | sha256 | Class | Read by |
 |---|---|---|---|
