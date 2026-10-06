@@ -21,6 +21,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
 from project_atlas.schema import SCHEMA_FILES, validate_record
+from project_atlas.secrets import scan_text
 
 GENERATOR_ID = "atlas-int-012"
 REPORT_SCHEMA = "schema-compat-report"
@@ -93,6 +94,10 @@ def detect_schema_identity(record: Mapping[str, Any]) -> tuple[str | None, int |
     version = record.get("schema_version")
     schema_s = str(schema) if isinstance(schema, str) and schema else None
     version_i = int(version) if isinstance(version, int) else None
+    # AS-SEC-SCAN-SCHEMA-COMPAT-JSON-ESC-001: json.loads can decode ``\\u``
+    # schema ids that scan_text misses on raw bytes. Do not persist them.
+    if schema_s and scan_text(schema_s):
+        schema_s = None
     return schema_s, version_i
 
 
