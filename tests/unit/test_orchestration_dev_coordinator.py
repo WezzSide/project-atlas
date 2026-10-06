@@ -7,6 +7,7 @@ recovery re-publishes the same record and the adapter's ledger refuses a second 
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -27,6 +28,7 @@ from project_atlas.orchestration.autonomy.dev_planner import (
     SAME_FILESYSTEM,
     SEPARATE_FILESYSTEM,
     STORE_MARKER,
+    Activation,
     Coordinator,
     DirJournal,
     JournalCorrupt,
@@ -1643,3 +1645,385 @@ def test_a_spool_missing_when_pump_claims_halts_the_tick_and_is_not_quarantined(
     # the planner alone does not swallow it either
     with pytest.raises(TransportUnavailable):
         c.planner.pump()
+
+
+# --- ATLAS-DEVQ-0014: operator-declared activation ------------------------------------------
+
+
+def _declared(tmp_path, **kw):
+    """A created store with a bound spool and a declared activation; returns (journal, record)."""
+    j = store(tmp_path)
+    SpoolTransport.create(tmp_path / "spool", j.store_id)
+    record = tmp_path / "ops" / "activation.json"
+    kw.setdefault("accept_same_filesystem", True)
+    Activation.declare(
+        record,
+        store_id=j.store_id,
+        journal=j.home,
+        anchor=j.anchor_home,
+        spool=tmp_path / "spool",
+        **kw,
+    )
+    return j, record
+
+
+def _open(tmp_path, record, identity="coord-1", **kw):
+    return Activation.open(
+        record,
+        identity=identity,
+        verifier_identities=(VER,),
+        status_path=tmp_path / "status" / "status.json",
+        **kw,
+    )
+
+
+def _status(tmp_path):
+    return json.loads((tmp_path / "status" / "status.json").read_text())
+
+
+def test_an_activation_is_declared_once_and_opened_without_creating_anything(tmp_path):
+    j, record = _declared(tmp_path)
+    raw = json.loads(record.read_text())
+    assert raw == {
+        "v": 1,
+        "store": j.store_id,
+        "journal": str(j.home.resolve()),
+        "anchor": str(j.anchor_home.resolve()),
+        "spool": str((tmp_path / "spool").resolve()),
+        "accept_same_filesystem": True,
+        "seq": 0,
+        "head": "",
+    }
+    before = tree(tmp_path)
+    a = _open(tmp_path, record)
+    assert tree(tmp_path) == before  # opening wrote nothing into store or spool
+    assert a.coordinator.journal.store_id == j.store_id
+    assert a.coordinator.planner.transport.store_id == j.store_id
+    st = a.tick([cand("A", "src/a")])
+    assert st["state"] == "OK" and st["admitted"] == ["A"] and st["transport_store"] == j.store_id
+    # the floor is the head the tick saw: sequence number and digest of the stored event
+    raw = json.loads(record.read_text())
+    event = (j.root / "000000000001.json").read_bytes()
+    assert (raw["seq"], raw["head"]) == (1, hashlib.sha256(event).hexdigest()) == a.floor
+    assert a.tick([])["state"] == "OK" and json.loads(record.read_text()) == raw
+    # declared once: never overwritten, whatever is declared the second time
+    with pytest.raises(PlannerError, match=r"ACTIVATION_RECORD:.* exists"):
+        Activation.declare(
+            record,
+            store_id=j.store_id,
+            journal=j.home,
+            anchor=j.anchor_home,
+            spool=tmp_path / "spool",
+            accept_same_filesystem=True,
+        )
+    assert json.loads(record.read_text()) == raw
+
+
+def test_nothing_is_activated_without_a_valid_record(tmp_path):
+    _j, record = _declared(tmp_path)
+    good = record.read_text()
+    before = tree(tmp_path)
+    with pytest.raises(PlannerError, match=r"ACTIVATION_RECORD:.* does not exist"):
+        _open(tmp_path, tmp_path / "ops" / "nothing.json")
+    raw = json.loads(good)
+    bads = [
+        "{",
+        "[]",
+        json.dumps(raw | {"v": 2}),
+        json.dumps(raw | {"v": 1.0}),
+        json.dumps(raw | {"extra": 1}),
+        json.dumps({k: v for k, v in raw.items() if k != "spool"}),
+        json.dumps(raw | {"store": "xyz"}),
+        json.dumps(raw | {"journal": "relative/journal"}),
+        json.dumps(raw | {"accept_same_filesystem": 1}),
+        json.dumps(raw | {"seq": -1}),
+        json.dumps(raw | {"seq": 1}),  # a floor without its digest
+        json.dumps(raw | {"head": "0" * 64}),  # a digest without a floor
+        json.dumps(raw | {"seq": True}),
+    ]
+    for bad in bads:
+        record.write_text(bad)
+        with pytest.raises(PlannerError, match="ACTIVATION_RECORD"):
+            _open(tmp_path, record)
+    record.write_text(good)
+    # a configuration refusal: nothing written anywhere, no status, no fallback of any kind
+    assert tree(tmp_path) == before and not (tmp_path / "status").exists()
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["ops", "spool", "state", "witness"]
+    with pytest.raises(PlannerError, match="STATUS_PATH"):
+        Activation.open(record, identity="c", verifier_identities=(VER,), status_path=record)
+    assert record.read_text() == good
+
+
+def test_declare_needs_the_existing_store_and_spool_it_names(tmp_path):
+    j = store(tmp_path)
+    record = tmp_path / "ops" / "activation.json"
+    kw = dict(store_id=j.store_id, journal=j.home, anchor=j.anchor_home, spool=tmp_path / "spool")
+    with pytest.raises(TransportError, match="SPOOL_BINDING"):
+        Activation.declare(record, accept_same_filesystem=True, **kw)  # no spool yet
+    assert not (tmp_path / "spool").exists() and not record.exists()
+    SpoolTransport.create(tmp_path / "spool", j.store_id)
+    before = tree(tmp_path)
+    other = StoreJournal.create(tmp_path / "o" / "journal", tmp_path / "o" / "anchor")
+    refusals = [
+        (PlannerError, "STORE_BOUNDARY", kw),  # the reduced boundary is declared, not assumed
+        (JournalCorrupt, "STORE_IDENTITY", kw | {"store_id": other.store_id}),
+        (JournalCorrupt, "STORE_IDENTITY", kw | {"anchor": other.anchor_home}),
+        (JournalCorrupt, "STORE_IDENTITY", kw | {"journal": tmp_path / "nowhere"}),
+        (TransportError, "SPOOL_BINDING", kw | {"spool": tmp_path / "elsewhere"}),
+        (PlannerError, "ACTIVATION_RECORD", kw | {"store_id": "XYZ"}),
+    ]
+    for error, code, args in refusals:
+        with pytest.raises(error, match=code):
+            Activation.declare(record, accept_same_filesystem=code != "STORE_BOUNDARY", **args)
+    for inside in (j.home / "a.json", j.anchor / "a.json", tmp_path / "spool" / "a.json"):
+        with pytest.raises(PlannerError, match=r"ACTIVATION_RECORD:.* is inside"):
+            Activation.declare(inside, accept_same_filesystem=True, **kw)
+    assert tree(tmp_path) == before and not record.exists()
+    assert not (tmp_path / "nowhere").exists() and not (tmp_path / "elsewhere").exists()
+
+
+def test_a_store_taken_back_as_a_whole_is_refused_by_its_activation(tmp_path):
+    """Journal, anchor and spool restored together: the store itself looks consistent."""
+    j, record = _declared(tmp_path)
+    a = _open(tmp_path, record)
+    a.tick([cand("A", "src/a")])
+    for top in ("state", "witness", "spool"):  # one snapshot of everything, at event 1
+        shutil.copytree(tmp_path / top, tmp_path / "snapshot" / top)
+    a.tick([cand("B", "src/b")])
+    assert json.loads(record.read_text())["seq"] == 2
+    assert len(list((tmp_path / "spool" / j.store_id / "WORK").glob("*.json"))) == 2
+
+    def restore():
+        for top in ("state", "witness", "spool"):
+            shutil.rmtree(tmp_path / top)
+            shutil.copytree(tmp_path / "snapshot" / top, tmp_path / top)
+
+    restore()
+    # the coordinator alone cannot see it: the anchor and the spool went back with the journal
+    plain = Coordinator(
+        StoreJournal.attach(j.home, j.anchor_home),
+        SpoolTransport.attach(tmp_path / "spool", j.store_id),
+        identity="plain",
+        verifier_identities=(VER,),
+        status_path=tmp_path / "status" / "status.json",
+        accept_same_filesystem=True,
+    )
+    assert plain.tick([])["state"] == "OK"
+    restore()
+    before = tree(tmp_path)
+    # the activation does, when it is opened ...
+    with pytest.raises(JournalCorrupt, match=r"ACTIVATION_ROLLED_BACK:.* event 2"):
+        _open(tmp_path, record, identity="coord-2")
+    st = _status(tmp_path)
+    assert st["state"] == "HALTED" and st["reason"].startswith("ACTIVATION_ROLLED_BACK")
+    assert st["store"] == j.store_id and st["activation"] == str(record)
+    # ... and when it is already running; nothing is admitted over the lost lineage B
+    (tmp_path / "status" / "status.json").write_text(json.dumps({"state": "OK"}))
+    with pytest.raises(JournalCorrupt, match="ACTIVATION_ROLLED_BACK"):
+        a.tick([cand("B2", "src/b")])
+    assert _status(tmp_path)["state"] == "HALTED"
+    assert tree(tmp_path) == before and json.loads(record.read_text())["seq"] == 2
+    # a store that went on from the snapshot with other events holds another event 2
+    plain2 = Planner(
+        SpoolTransport.attach(tmp_path / "spool", j.store_id),
+        identity="p",
+        verifier_identities=(VER,),
+        journal=StoreJournal.attach(j.home, j.anchor_home),
+    )
+    plain2.dispatch(cand("C", "src/c")[0], **cand("C", "src/c")[1])
+    with pytest.raises(JournalCorrupt, match="ACTIVATION_ROLLED_BACK"):
+        _open(tmp_path, record, identity="coord-3")
+
+
+def test_an_activation_halts_on_a_missing_or_foreign_store_or_spool(tmp_path):
+    j, record = _declared(tmp_path)
+    _open(tmp_path, record).tick([cand("A", "src/a")])
+    other = StoreJournal.create(tmp_path / "o" / "journal", tmp_path / "o" / "anchor")
+    damages = [
+        ("spool", lambda: shutil.rmtree(tmp_path / "spool" / j.store_id), TransportError),
+        ("anchor", lambda: shutil.rmtree(j.anchor_home), JournalCorrupt),
+        (
+            "foreign",
+            lambda: (j.anchor_home / STORE_MARKER).write_bytes(
+                (other.anchor_home / STORE_MARKER).read_bytes()
+            ),
+            JournalCorrupt,
+        ),
+    ]
+    for top in ("state", "witness", "spool"):
+        shutil.copytree(tmp_path / top, tmp_path / "good" / top)
+    for name, damage, error in damages:
+        for top in ("state", "witness", "spool"):
+            shutil.rmtree(tmp_path / top)
+            shutil.copytree(tmp_path / "good" / top, tmp_path / top)
+        (tmp_path / "status" / "status.json").write_text(json.dumps({"state": "OK"}))
+        damage()
+        before = tree(tmp_path)
+        with pytest.raises(error):
+            _open(tmp_path, record, identity=f"coord-{name}")
+        st = _status(tmp_path)
+        assert st["state"] == "HALTED" and st["store"] == j.store_id, name
+        assert tree(tmp_path) == before, name  # nothing re-created, nothing appended
+    assert st["reason"].startswith("STORE_IDENTITY")
+
+
+def test_a_running_activation_follows_its_record(tmp_path):
+    _j, record = _declared(tmp_path)
+    a1 = _open(tmp_path, record, max_live=5)
+    a2 = _open(tmp_path, record, identity="coord-2", max_live=5)
+    a1.tick([cand("A", "src/a")])
+    assert a2.floor == (0, "")  # as opened; the record has moved on
+    assert a2.tick([cand("B", "src/b")])["admitted"] == ["B"]
+    assert json.loads(record.read_text())["seq"] == 2 == a2.floor[0]
+    assert a1.tick([])["state"] == "OK"  # a floor another coordinator raised is still held
+    # the record is taken away or re-pointed under a running activation: HALTED, not OK
+    good = record.read_text()
+    raw = json.loads(good)
+    for changed in (None, json.dumps(raw | {"spool": str(tmp_path / "elsewhere")}), "{"):
+        if changed is None:
+            record.unlink()
+        else:
+            record.write_text(changed)
+        with pytest.raises(JournalCorrupt, match=r"ACTIVATION_RECORD|ACTIVATION_CHANGED"):
+            a1.tick([cand("C", "src/c")])
+        assert _status(tmp_path)["state"] == "HALTED"
+        record.write_text(good)
+    assert a1.tick([cand("C", "src/c")])["admitted"] == ["C"]
+    assert json.loads(record.read_text())["seq"] == 3
+    assert not (tmp_path / "elsewhere").exists()
+
+
+def test_a_halted_activation_never_writes_its_status_into_the_store(tmp_path):
+    """ATLAS-DEVQ-0014: the status path is checked before the refusal can be reported."""
+    j, record = _declared(tmp_path)
+    a = _open(tmp_path, record)
+    a.tick([cand("A", "src/a")])
+    shutil.rmtree(tmp_path / "spool" / j.store_id)  # the store is now refused at open
+    before = tree(tmp_path)
+    inside = (
+        j.root / "000000000002.json",
+        j.root / "000000000001.json",
+        j.anchor_home / STORE_MARKER,
+        tmp_path / "spool" / "newdir" / "status.json",
+    )
+    for path in inside:
+        with pytest.raises(PlannerError, match=r"STATUS_PATH:.* is inside"):
+            Activation.open(record, identity="x", verifier_identities=(VER,), status_path=path)
+    assert tree(tmp_path) == before and not (tmp_path / "spool" / "newdir").exists()
+    with pytest.raises(TransportError, match="SPOOL_BINDING"):
+        _open(tmp_path, record, identity="x")  # outside: refused and reported
+    assert _status(tmp_path)["state"] == "HALTED" and tree(tmp_path) == before
+
+
+def test_an_unreadable_floor_event_or_marker_halts_instead_of_escaping(tmp_path):
+    j, record = _declared(tmp_path)
+    a = _open(tmp_path, record)
+    a.tick([cand("A", "src/a")])
+    status = tmp_path / "status" / "status.json"
+    event = j.root / "000000000001.json"
+    kept = event.read_bytes()
+    event.unlink()
+    event.mkdir()  # not a file: reading it is an OSError, not a missing event
+    status.write_text(json.dumps({"state": "OK"}))
+    with pytest.raises(JournalCorrupt, match=r"IO_ERROR|ACTIVATION_ROLLED_BACK"):
+        a.tick([cand("B", "src/b")])
+    assert _status(tmp_path)["state"] == "HALTED"
+    event.rmdir()
+    event.write_bytes(kept)
+    marker = j.home / STORE_MARKER
+    good = marker.read_bytes()
+    marker.write_text("[" * 200_000)  # json raises RecursionError on this one
+    status.write_text(json.dumps({"state": "OK"}))
+    with pytest.raises(JournalCorrupt, match=r"STORE_IDENTITY:journal marker .* is unusable"):
+        _open(tmp_path, record, identity="coord-2")
+    assert _status(tmp_path)["state"] == "HALTED"
+    status.write_text(json.dumps({"state": "OK"}))
+    with pytest.raises(JournalCorrupt, match=r"STORE_IDENTITY:journal marker .* is unusable"):
+        a.tick([cand("B", "src/b")])  # and under the running activation
+    assert _status(tmp_path)["state"] == "HALTED"
+    marker.write_bytes(good)
+    assert a.tick([])["state"] == "OK"
+    with pytest.raises(PlannerError, match="STATUS_PATH:not a usable path"):
+        Activation.open(
+            record, identity="x", verifier_identities=(VER,), status_path="/a\x00b/status.json"
+        )
+    # a record whose paths cannot be paths is a bad record, not a crash
+    raw = json.loads(record.read_text())
+    record.write_text(json.dumps(raw | {"journal": "/a\u0000b"}))
+    with pytest.raises(PlannerError, match="ACTIVATION_RECORD"):
+        _open(tmp_path, record, identity="coord-3")
+
+
+def test_a_record_repointed_during_a_tick_is_not_given_this_stores_floor(tmp_path):
+    _j, record = _declared(tmp_path)
+    a = _open(tmp_path, record)
+    other = StoreJournal.create(tmp_path / "o" / "journal", tmp_path / "o" / "anchor")
+    SpoolTransport.create(tmp_path / "o" / "spool", other.store_id)
+    raw = json.loads(record.read_text())
+    moved = raw | {
+        "store": other.store_id,
+        "journal": str(other.home.resolve()),
+        "anchor": str(other.anchor_home.resolve()),
+        "spool": str((tmp_path / "o" / "spool").resolve()),
+    }
+    real = a.coordinator.tick
+
+    def tick_then_repoint(candidates=()):
+        out = real(candidates)
+        record.write_text(json.dumps(moved))  # between the tick and the floor update
+        return out
+
+    a.coordinator.tick = tick_then_repoint
+    with pytest.raises(JournalCorrupt, match="ACTIVATION_RECORD:the floor could not be written"):
+        a.tick([cand("A", "src/a")])
+    assert json.loads(record.read_text()) == moved  # still seq 0: nothing of this store in it
+    assert _status(tmp_path)["state"] == "HALTED"
+
+
+def test_a_symlink_loop_halts_an_activation_on_every_supported_python(tmp_path, monkeypatch):
+    """Before Python 3.13 ``Path.resolve`` raises ``RuntimeError`` on a symlink loop."""
+    j, record = _declared(tmp_path)
+    a = _open(tmp_path, record)
+    assert a.tick([])["state"] == "OK"
+    shutil.rmtree(j.anchor_home)
+    os.symlink(j.anchor_home, j.anchor_home)
+    real = Path.resolve
+
+    def resolve_312(self, strict=False):
+        if str(self).startswith(str(j.anchor_home)):
+            raise RuntimeError(f"Symlink loop from {self}")
+        return real(self, strict=strict)
+
+    monkeypatch.setattr(Path, "resolve", resolve_312)
+    with pytest.raises(JournalCorrupt):
+        a.tick([])
+    assert _status(tmp_path)["state"] == "HALTED"
+    (tmp_path / "status" / "status.json").write_text(json.dumps({"state": "OK"}))
+    with pytest.raises((JournalCorrupt, OSError)):
+        _open(tmp_path, record, identity="coord-2")
+    assert _status(tmp_path)["state"] == "HALTED"
+
+
+def test_a_store_directory_looped_after_the_floor_check_halts_open(tmp_path, monkeypatch):
+    """A symlink loop that appears between the floor check and the coordinator (Python 3.12)."""
+    j, record = _declared(tmp_path)
+    a = _open(tmp_path, record)
+    a.tick([cand("A", "src/a")])
+    assert _status(tmp_path)["state"] == "OK"
+    real_floor, real_resolve = Activation._check_floor, Path.resolve
+
+    def floor_then_loop(journal, raw):
+        real_floor(journal, raw)
+        os.rename(j.home, str(j.home) + ".x")
+        os.symlink(j.home, j.home)
+
+    def resolve_312(self, strict=False):
+        if str(self).startswith(str(j.home)) and os.path.islink(j.home):
+            raise RuntimeError(f"Symlink loop from {self}")
+        return real_resolve(self, strict=strict)
+
+    monkeypatch.setattr(Activation, "_check_floor", staticmethod(floor_then_loop))
+    monkeypatch.setattr(Path, "resolve", resolve_312)
+    with pytest.raises((JournalCorrupt, OSError)):
+        _open(tmp_path, record, identity="coord-2")
+    assert _status(tmp_path)["state"] == "HALTED"
