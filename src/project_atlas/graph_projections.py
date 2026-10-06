@@ -42,6 +42,7 @@ from project_atlas.protected_regions import (
 from project_atlas.protected_regions import (
     merge_protected_regions as _canonical_merge_protected_regions,
 )
+from project_atlas.secrets import scan_text
 
 PACKAGE_ID = "AS-GRAPH-005"
 SOURCE_RELATIONSHIP_PACKAGE = "AS-GRAPH-003"
@@ -136,6 +137,11 @@ def _assert_project_id(project_id: str) -> None:
 def _redact_text(value: str) -> str:
     """Never echo secret-shaped content in projection Markdown."""
     text = value.strip()
+    # AS-SEC-SCAN-GRAPH-PROJ-RELID-JSON-ESC-001: json.loads of retained
+    # relationship records can decode ``\u`` ids that scan_text misses on
+    # raw bytes. Do not interpolate them into relationships.md.
+    if scan_text(text):
+        return "redacted-sensitive"
     lowered = text.lower()
     for needle in ("password=", "secret=", "token=", "api_key=", "bearer ", "private-key"):
         if needle in lowered:
@@ -363,13 +369,14 @@ def render_relationships_markdown(
             if isinstance(refs, list):
                 for ref in refs:
                     if isinstance(ref, Mapping):
-                        path = str(ref.get("relative_path", ""))
-                        digest = str(ref.get("sha256", ""))[:16]
+                        path = _redact_text(str(ref.get("relative_path", "")))
+                        digest = _redact_text(str(ref.get("sha256", ""))[:16])
                         if path:
                             ref_bits.append(f"`{path}` (`{digest}…`)")
             joined = ", ".join(ref_bits) if ref_bits else "_none_"
+            rid = _redact_text(record.relationship_id)
             lines.append(
-                f"- `{record.relationship_id}` · `{DERIVED_LABEL}` · artifacts: {joined}"
+                f"- `{rid}` · `{DERIVED_LABEL}` · artifacts: {joined}"
             )
         lines.append("")
 
