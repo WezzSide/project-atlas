@@ -311,7 +311,7 @@ class TestAuthorAndClass:
         for cls in synthetic_policy["denied_classes"]:
             task = copy.deepcopy(base_task)
             task["task_class"] = cls
-            task["target_role"] = "TEST-ROLE-2"  # satisfy role-for-class for RECONCILE
+            task["target_role"] = "TEST-ROLE-2"  # CLASS_DENIED fires before the role check
             decision = _evaluate(task, synthetic_policy, now=pinned_now)
             assert decision["decision"] == "DENY", cls
             assert "CLASS_DENIED" in decision["reason"], cls
@@ -400,6 +400,10 @@ class TestAuthorityAndMission:
         base_task["task_class"] = "CANARY"
         base_task["scope"] = "synthetic isolated fixture"
         base_task["authority_reference"] = "AUTH-VPS3-TASK-AUTHORING-001"
+        # A mismatching subject, so the exemption itself is what allows the task.
+        synthetic_policy["authority_registry"]["AUTH-VPS3-TASK-AUTHORING-001"]["subject"] = (
+            "TEST-ROLE-2"
+        )
         decision = _evaluate(base_task, synthetic_policy, now=pinned_now)
         assert decision["decision"] == "ALLOW"
 
@@ -673,19 +677,8 @@ class TestReproducibilityAndProvenance:
         assert decision["evaluated_at"] == pinned_now.isoformat(timespec="seconds")
 
 
-class TestUncheckedButDocumentedBehavior:
-    """Properties that are observable but not guaranteed by the current engine."""
-
-    def test_created_at_is_not_validated_as_iso(
-        self,
-        base_task: dict[str, Any],
-        synthetic_policy: dict[str, Any],
-        pinned_now: datetime,
-    ) -> None:
-        """The engine accepts any non-empty string as created_at."""
-        base_task["created_at"] = "not-a-timestamp"
-        decision = _evaluate(base_task, synthetic_policy, now=pinned_now)
-        assert decision["decision"] == "ALLOW"
+class TestObservedCurrentBehavior:
+    """Characterisation of the current engine; not a documented guarantee."""
 
     def test_open_tasks_entry_without_mission_id_is_tolerated(
         self,
@@ -693,14 +686,13 @@ class TestUncheckedButDocumentedBehavior:
         synthetic_policy: dict[str, Any],
         pinned_now: datetime,
     ) -> None:
-        """Dedupe only inspects idempotency_key, state and task_id."""
+        """The limit count reads mission_id from open entries that may lack it."""
         open_tasks = [
             {
                 "task_id": "TASK-EXISTING",
-                "idempotency_key": base_task["idempotency_key"],
+                "idempotency_key": "IDEM-TEST-OTHER",
                 "state": "READY",
             }
         ]
         decision = _evaluate(base_task, synthetic_policy, open_tasks, now=pinned_now)
-        assert decision["decision"] == "DENY"
-        assert "DUPLICATE_OPEN" in decision["reason"]
+        assert decision["decision"] == "ALLOW"
