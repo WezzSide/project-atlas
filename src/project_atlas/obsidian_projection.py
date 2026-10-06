@@ -20,6 +20,7 @@ from project_atlas.protected_regions import GENERATED_END as _GENERATED_END
 from project_atlas.protected_regions import GENERATED_START as _GENERATED_START
 from project_atlas.protected_regions import ProtectedRegionError, read_note_text
 from project_atlas.protected_regions import merge_protected_regions as _merge_protected_regions
+from project_atlas.secrets import scan_text
 
 PACKAGE_ID = "AS-CODER-ALPHA-OBSIDIAN-001"
 PACKAGE_ID_R1 = "AS-CODER-ALPHA-OBSIDIAN-R1-PROJECTION-001"
@@ -148,6 +149,12 @@ def _escape_marker_tokens(text: str) -> str:
 def _lens_field(raw: Any, *, default: str = "UNKNOWN") -> str:
     """Render one derived-lens value: missing -> UNKNOWN, never a raw "None"."""
     text = str(raw) if raw not in (None, "") else default
+    # AS-SEC-SCAN-OBS-PROJ-SOURCE-JSON-ESC-001: json.loads of compilation
+    # outcomes / source-manifest / secret-findings can decode ``\u`` source
+    # paths that scan_text misses on raw bytes. Do not echo them into the
+    # living note.
+    if scan_text(text):
+        return default
     return _escape_marker_tokens(text)
 
 
@@ -287,28 +294,28 @@ def _render_living_markdown(
         _GENERATED_START,
         "",
         "## Project identity",
-        str(brief.get("project_identity") or "UNKNOWN"),
+        _lens_field(brief.get("project_identity")),
         "",
         "## Purpose",
-        str(brief.get("purpose") or "UNKNOWN"),
+        _lens_field(brief.get("purpose")),
         "",
         "## Tech stack",
-        str(brief.get("tech_stack") or "UNKNOWN"),
+        _lens_field(brief.get("tech_stack")),
         "",
         "## Architecture summary",
-        str(brief.get("architecture_summary") or "UNKNOWN"),
+        _lens_field(brief.get("architecture_summary")),
         "",
         "## Current state",
-        str(brief.get("current_state") or "UNKNOWN"),
+        _lens_field(brief.get("current_state")),
         "",
         "## Recent meaningful changes",
-        str(brief.get("recent_meaningful_changes") or "UNKNOWN"),
+        _lens_field(brief.get("recent_meaningful_changes")),
         "",
         "## Important decisions",
-        str(brief.get("important_decisions") or "UNKNOWN"),
+        _lens_field(brief.get("important_decisions")),
         "",
         "## Known problems / unknown / conflicting",
-        str(brief.get("unknown_or_conflicting") or "UNKNOWN"),
+        _lens_field(brief.get("unknown_or_conflicting")),
     ]
     lines.extend(_render_roadmap_section(roadmap))
     lines.extend(_render_attention_section(attention))
@@ -320,12 +327,26 @@ def _render_living_markdown(
         ]
     )
     if isinstance(next_work, list) and next_work:
-        lines.extend(f"- {item}" for item in next_work)
+        safe_next = [
+            item
+            for item in next_work
+            if isinstance(item, str) and item.strip() and not scan_text(item)
+        ]
+        if safe_next:
+            lines.extend(f"- {item}" for item in safe_next)
+        else:
+            lines.append("- UNKNOWN")
     else:
         lines.append("- UNKNOWN")
     lines.extend(["", "## Evidence links"])
     if isinstance(evidence, list) and evidence:
-        lines.extend(f"- `{item}`" for item in evidence[:40])
+        safe_evidence = [
+            item
+            for item in evidence[:40]
+            if isinstance(item, str) and item.strip() and not scan_text(item)
+        ]
+        if safe_evidence:
+            lines.extend(f"- `{item}`" for item in safe_evidence)
     else:
         lines.append("- UNKNOWN")
     lines.extend(
