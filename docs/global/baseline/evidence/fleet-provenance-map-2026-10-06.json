@@ -1,0 +1,610 @@
+{
+  "components": [
+    {
+      "drift": {
+        "commits": [
+          "f7d6b864",
+          "ececbf25"
+        ],
+        "main_ahead_by_commits_in_paths": 2,
+        "paths": [
+          "infra/atlas-runner"
+        ]
+      },
+      "evidence": [
+        {
+          "field": "deployed_revision",
+          "label": "OBSERVED",
+          "ref": "active release identifier equals a main commit",
+          "source": "HOST_OBSERVATION_2026-10-06"
+        },
+        {
+          "field": "drift",
+          "label": "OBSERVED",
+          "ref": "git log b2f97ff2..main -- infra/atlas-runner",
+          "source": "REPOSITORY_AT_MAIN"
+        },
+        {
+          "field": "integration",
+          "label": "OBSERVED",
+          "ref": "deploy workflow accepts a 40-hex main revision",
+          "source": "REPOSITORY_AT_MAIN"
+        },
+        {
+          "field": "live_validation",
+          "label": "RECORDED",
+          "ref": "docs/global/baseline/2026-10-02-AUTONOMY-FRONTIER.md section 4",
+          "source": "REPOSITORY_RECORD"
+        },
+        {
+          "field": "health",
+          "label": "OBSERVED",
+          "source": "HOST_OBSERVATION_2026-10-06"
+        }
+      ],
+      "expected_role": "Starts and supervises executor workers for repository workflows",
+      "id": "runner-controller",
+      "instances": [
+        {
+          "activity": "ACTIVE",
+          "deployed_revision": "b2f97ff268f0e995f1f49871944fbcaedc04a514",
+          "deployment": "DEPLOYED",
+          "drift_from_main": "BEHIND",
+          "health": "UNKNOWN",
+          "host": "VPS2",
+          "note": "restarted repeatedly; cause UNKNOWN; whether it completes its work was not observed",
+          "runtime_identity": "DEDICATED"
+        }
+      ],
+      "integration": "INTEGRATED",
+      "live_validation": "RECORDED_SINGLE_HOST",
+      "provenance_confidence": "EXACT_REVISION",
+      "repository": {
+        "deploy_path": ".github/workflows/atlas-runner-deploy.yml",
+        "implementation": "IMPLEMENTED",
+        "paths": [
+          "infra/atlas-runner"
+        ]
+      }
+    },
+    {
+      "evidence": [
+        {
+          "field": "integration",
+          "label": "OBSERVED",
+          "ref": "workflow targets the self-hosted executor label set",
+          "source": "REPOSITORY_AT_MAIN"
+        },
+        {
+          "field": "live_validation",
+          "label": "RECORDED",
+          "ref": "docs/backlog.md ATLAS-DEVQ-0002 entry",
+          "source": "REPOSITORY_RECORD"
+        },
+        {
+          "field": "instances",
+          "label": "UNKNOWN",
+          "source": "HOST_OBSERVATION_2026-10-06"
+        }
+      ],
+      "expected_role": "Runs one sealed executor attempt on a self-hosted executor worker",
+      "id": "agent-execute-workflow",
+      "instances": [
+        {
+          "activity": "UNKNOWN",
+          "deployed_revision": null,
+          "deployment": "NOT_APPLICABLE",
+          "drift_from_main": "NOT_APPLICABLE",
+          "health": "UNKNOWN",
+          "host": "VPS2",
+          "note": "runs from the dispatched repository ref on workers started by the runner controller; no run observed in the window",
+          "runtime_identity": "UNKNOWN"
+        }
+      ],
+      "integration": "INTEGRATED",
+      "live_validation": "RECORDED_SINGLE_HOST",
+      "provenance_confidence": "NOT_APPLICABLE",
+      "repository": {
+        "implementation": "IMPLEMENTED",
+        "paths": [
+          ".github/workflows/atlas-agent-execute.yml"
+        ]
+      }
+    },
+    {
+      "evidence": [
+        {
+          "field": "instances",
+          "label": "OBSERVED",
+          "ref": "runs-on is a GitHub-hosted image",
+          "source": "REPOSITORY_AT_MAIN"
+        }
+      ],
+      "expected_role": "Independent verification of an executor run",
+      "id": "runner-verify-workflow",
+      "instances": [
+        {
+          "activity": "UNKNOWN",
+          "deployed_revision": null,
+          "deployment": "NOT_APPLICABLE",
+          "drift_from_main": "NOT_APPLICABLE",
+          "health": "UNKNOWN",
+          "host": "GITHUB_HOSTED",
+          "note": "runs on a GitHub-hosted runner, not on the fleet",
+          "runtime_identity": "NOT_APPLICABLE"
+        }
+      ],
+      "integration": "INTEGRATED",
+      "live_validation": "UNKNOWN",
+      "provenance_confidence": "NOT_APPLICABLE",
+      "repository": {
+        "implementation": "IMPLEMENTED",
+        "paths": [
+          ".github/workflows/atlas-runner-verify.yml"
+        ]
+      }
+    },
+    {
+      "evidence": [
+        {
+          "field": "integration",
+          "label": "RECORDED",
+          "ref": "docs/backlog.md: no entrypoint for the coordinator; fabric adapter constructed only in tests",
+          "source": "REPOSITORY_RECORD"
+        },
+        {
+          "field": "instances",
+          "label": "OBSERVED",
+          "ref": "no repository checkout at the locations probed",
+          "source": "HOST_OBSERVATION_2026-10-06"
+        },
+        {
+          "field": "deployment",
+          "label": "INFERRED",
+          "ref": "not deployed",
+          "source": "HOST_OBSERVATION_2026-10-06"
+        }
+      ],
+      "expected_role": "Planner, coordination journal, store identity, activation record, spool transport and executor ownership for multi-lineage delivery",
+      "id": "devq-coordinator",
+      "instances": [
+        {
+          "activity": "NOT_APPLICABLE",
+          "deployed_revision": null,
+          "deployment": "NOT_FOUND",
+          "drift_from_main": "UNKNOWN",
+          "health": "NOT_APPLICABLE",
+          "host": "VPS1",
+          "runtime_identity": "UNKNOWN"
+        },
+        {
+          "activity": "NOT_APPLICABLE",
+          "deployed_revision": null,
+          "deployment": "NOT_FOUND",
+          "drift_from_main": "UNKNOWN",
+          "health": "NOT_APPLICABLE",
+          "host": "VPS2",
+          "runtime_identity": "UNKNOWN"
+        },
+        {
+          "activity": "NOT_APPLICABLE",
+          "deployed_revision": null,
+          "deployment": "NOT_FOUND",
+          "drift_from_main": "UNKNOWN",
+          "health": "NOT_APPLICABLE",
+          "host": "VPS3",
+          "runtime_identity": "UNKNOWN"
+        }
+      ],
+      "integration": "NOT_INTEGRATED",
+      "live_validation": "NOT_VALIDATED",
+      "provenance_confidence": "NOT_APPLICABLE",
+      "repository": {
+        "implementation": "IMPLEMENTED",
+        "paths": [
+          "src/project_atlas/orchestration/autonomy/dev_planner.py",
+          "src/project_atlas/orchestration/autonomy/dev_queue.py",
+          "src/project_atlas/orchestration/autonomy/dev_spool_transport.py",
+          "src/project_atlas/orchestration/autonomy/dev_fabric_adapter.py"
+        ]
+      }
+    },
+    {
+      "evidence": [
+        {
+          "field": "implementation",
+          "label": "OBSERVED",
+          "ref": "no file in the repository names this component",
+          "source": "REPOSITORY_AT_MAIN"
+        },
+        {
+          "field": "instances",
+          "label": "OBSERVED",
+          "source": "HOST_OBSERVATION_2026-10-06"
+        },
+        {
+          "field": "deployed_revision",
+          "label": "UNKNOWN",
+          "ref": "no version marker tied to a repository revision was found",
+          "source": "HOST_OBSERVATION_2026-10-06"
+        },
+        {
+          "field": "health",
+          "label": "OBSERVED",
+          "source": "HOST_OBSERVATION_2026-10-06"
+        }
+      ],
+      "expected_role": "Per-host mission loop for the node role",
+      "id": "mission-supervisor",
+      "instances": [
+        {
+          "activity": "ACTIVE",
+          "deployed_revision": null,
+          "deployment": "DEPLOYED",
+          "drift_from_main": "UNKNOWN",
+          "health": "UNKNOWN",
+          "host": "VPS1",
+          "note": "a different build from VPS2 and VPS3; progress not readable with the access used",
+          "runtime_identity": "DEDICATED"
+        },
+        {
+          "activity": "ACTIVE",
+          "deployed_revision": null,
+          "deployment": "DEPLOYED",
+          "drift_from_main": "UNKNOWN",
+          "health": "DEGRADED",
+          "host": "VPS2",
+          "note": "cycles failing repeatedly since 2026-09-30; cause UNKNOWN",
+          "runtime_identity": "SHARED"
+        },
+        {
+          "activity": "ACTIVE",
+          "deployed_revision": null,
+          "deployment": "DEPLOYED",
+          "drift_from_main": "UNKNOWN",
+          "health": "PROGRESSING",
+          "host": "VPS3",
+          "runtime_identity": "SHARED"
+        }
+      ],
+      "integration": "UNKNOWN",
+      "live_validation": "NOT_VALIDATED",
+      "provenance_confidence": "NONE",
+      "repository": {
+        "implementation": "NOT_IN_REPOSITORY",
+        "paths": [],
+        "source_location": "UNKNOWN"
+      }
+    },
+    {
+      "evidence": [
+        {
+          "field": "implementation",
+          "label": "OBSERVED",
+          "ref": "no file in the repository names this component",
+          "source": "REPOSITORY_AT_MAIN"
+        },
+        {
+          "field": "instances",
+          "label": "OBSERVED",
+          "source": "HOST_OBSERVATION_2026-10-06"
+        },
+        {
+          "field": "deployed_revision",
+          "label": "UNKNOWN",
+          "ref": "no version marker tied to a repository revision was found",
+          "source": "HOST_OBSERVATION_2026-10-06"
+        }
+      ],
+      "expected_role": "Forge build and execution worker",
+      "id": "forge-worker",
+      "instances": [
+        {
+          "activity": "ACTIVE",
+          "deployed_revision": null,
+          "deployment": "DEPLOYED",
+          "drift_from_main": "UNKNOWN",
+          "health": "UNKNOWN",
+          "host": "VPS1",
+          "runtime_identity": "DEDICATED"
+        }
+      ],
+      "integration": "UNKNOWN",
+      "live_validation": "NOT_VALIDATED",
+      "provenance_confidence": "NONE",
+      "repository": {
+        "implementation": "NOT_IN_REPOSITORY",
+        "paths": [],
+        "source_location": "UNKNOWN"
+      }
+    },
+    {
+      "evidence": [
+        {
+          "field": "implementation",
+          "label": "OBSERVED",
+          "ref": "no file in the repository names this component",
+          "source": "REPOSITORY_AT_MAIN"
+        },
+        {
+          "field": "instances",
+          "label": "OBSERVED",
+          "source": "HOST_OBSERVATION_2026-10-06"
+        },
+        {
+          "field": "deployed_revision",
+          "label": "UNKNOWN",
+          "ref": "no version marker tied to a repository revision was found",
+          "source": "HOST_OBSERVATION_2026-10-06"
+        }
+      ],
+      "expected_role": "Task executor started on demand by the supervisor",
+      "id": "on-demand-executor",
+      "instances": [
+        {
+          "activity": "INACTIVE",
+          "deployed_revision": null,
+          "deployment": "DEPLOYED",
+          "drift_from_main": "UNKNOWN",
+          "health": "UNKNOWN",
+          "host": "VPS1",
+          "note": "idle in the window",
+          "runtime_identity": "DEDICATED"
+        }
+      ],
+      "integration": "UNKNOWN",
+      "live_validation": "NOT_VALIDATED",
+      "provenance_confidence": "NONE",
+      "repository": {
+        "implementation": "NOT_IN_REPOSITORY",
+        "paths": [],
+        "source_location": "UNKNOWN"
+      }
+    },
+    {
+      "evidence": [
+        {
+          "field": "implementation",
+          "label": "OBSERVED",
+          "ref": "no file in the repository names this component",
+          "source": "REPOSITORY_AT_MAIN"
+        },
+        {
+          "field": "instances",
+          "label": "OBSERVED",
+          "source": "HOST_OBSERVATION_2026-10-06"
+        },
+        {
+          "field": "deployed_revision",
+          "label": "UNKNOWN",
+          "ref": "no version marker tied to a repository revision was found",
+          "source": "HOST_OBSERVATION_2026-10-06"
+        }
+      ],
+      "expected_role": "Execution broker for the forge node",
+      "id": "execution-broker",
+      "instances": [
+        {
+          "activity": "DISABLED",
+          "deployed_revision": null,
+          "deployment": "DEPLOYED",
+          "drift_from_main": "UNKNOWN",
+          "health": "NOT_APPLICABLE",
+          "host": "VPS1",
+          "runtime_identity": "UNKNOWN"
+        }
+      ],
+      "integration": "UNKNOWN",
+      "live_validation": "NOT_VALIDATED",
+      "provenance_confidence": "NONE",
+      "repository": {
+        "implementation": "NOT_IN_REPOSITORY",
+        "paths": [],
+        "source_location": "UNKNOWN"
+      }
+    },
+    {
+      "evidence": [
+        {
+          "field": "implementation",
+          "label": "OBSERVED",
+          "ref": "no file in the repository names this component",
+          "source": "REPOSITORY_AT_MAIN"
+        },
+        {
+          "field": "instances",
+          "label": "OBSERVED",
+          "source": "HOST_OBSERVATION_2026-10-06"
+        },
+        {
+          "field": "deployed_revision",
+          "label": "UNKNOWN",
+          "ref": "no version marker tied to a repository revision was found",
+          "source": "HOST_OBSERVATION_2026-10-06"
+        }
+      ],
+      "expected_role": "Independent verifier service",
+      "id": "verifier-service",
+      "instances": [
+        {
+          "activity": "ACTIVE",
+          "deployed_revision": null,
+          "deployment": "DEPLOYED",
+          "drift_from_main": "UNKNOWN",
+          "health": "UNKNOWN",
+          "host": "VPS2",
+          "note": "active release is older than the newest release present; intended release UNKNOWN",
+          "runtime_identity": "DEDICATED"
+        }
+      ],
+      "integration": "UNKNOWN",
+      "live_validation": "NOT_VALIDATED",
+      "provenance_confidence": "NONE",
+      "repository": {
+        "implementation": "NOT_IN_REPOSITORY",
+        "paths": [],
+        "source_location": "UNKNOWN"
+      }
+    },
+    {
+      "evidence": [
+        {
+          "field": "implementation",
+          "label": "OBSERVED",
+          "ref": "no file in the repository names this component",
+          "source": "REPOSITORY_AT_MAIN"
+        },
+        {
+          "field": "instances",
+          "label": "OBSERVED",
+          "source": "HOST_OBSERVATION_2026-10-06"
+        },
+        {
+          "field": "deployed_revision",
+          "label": "UNKNOWN",
+          "ref": "no version marker tied to a repository revision was found",
+          "source": "HOST_OBSERVATION_2026-10-06"
+        }
+      ],
+      "expected_role": "Control-plane task queue",
+      "id": "queue-service",
+      "instances": [
+        {
+          "activity": "ACTIVE",
+          "deployed_revision": null,
+          "deployment": "DEPLOYED",
+          "drift_from_main": "UNKNOWN",
+          "health": "UNKNOWN",
+          "host": "VPS3",
+          "note": "relation to the repository spool transport UNKNOWN",
+          "runtime_identity": "DEDICATED"
+        }
+      ],
+      "integration": "UNKNOWN",
+      "live_validation": "NOT_VALIDATED",
+      "provenance_confidence": "NONE",
+      "repository": {
+        "implementation": "NOT_IN_REPOSITORY",
+        "paths": [],
+        "source_location": "UNKNOWN"
+      }
+    },
+    {
+      "evidence": [
+        {
+          "field": "implementation",
+          "label": "OBSERVED",
+          "ref": "no file in the repository names this component",
+          "source": "REPOSITORY_AT_MAIN"
+        },
+        {
+          "field": "instances",
+          "label": "OBSERVED",
+          "source": "HOST_OBSERVATION_2026-10-06"
+        },
+        {
+          "field": "deployed_revision",
+          "label": "UNKNOWN",
+          "ref": "no version marker tied to a repository revision was found",
+          "source": "HOST_OBSERVATION_2026-10-06"
+        }
+      ],
+      "expected_role": "Owner-facing gateway on the control plane",
+      "id": "owner-gateway",
+      "instances": [
+        {
+          "activity": "ACTIVE",
+          "deployed_revision": null,
+          "deployment": "DEPLOYED",
+          "drift_from_main": "UNKNOWN",
+          "health": "UNKNOWN",
+          "host": "VPS3",
+          "runtime_identity": "DEDICATED"
+        }
+      ],
+      "integration": "UNKNOWN",
+      "live_validation": "NOT_VALIDATED",
+      "provenance_confidence": "NONE",
+      "repository": {
+        "implementation": "NOT_IN_REPOSITORY",
+        "paths": [],
+        "source_location": "UNKNOWN"
+      }
+    },
+    {
+      "evidence": [
+        {
+          "field": "implementation",
+          "label": "OBSERVED",
+          "ref": "no file in the repository names this component",
+          "source": "REPOSITORY_AT_MAIN"
+        },
+        {
+          "field": "instances",
+          "label": "OBSERVED",
+          "source": "HOST_OBSERVATION_2026-10-06"
+        },
+        {
+          "field": "deployed_revision",
+          "label": "UNKNOWN",
+          "ref": "no version marker tied to a repository revision was found",
+          "source": "HOST_OBSERVATION_2026-10-06"
+        }
+      ],
+      "expected_role": "Control service on the control plane",
+      "id": "control-service",
+      "instances": [
+        {
+          "activity": "DISABLED",
+          "deployed_revision": null,
+          "deployment": "NOT_FOUND",
+          "drift_from_main": "UNKNOWN",
+          "health": "NOT_APPLICABLE",
+          "host": "VPS3",
+          "note": "unit present and disabled; no release present",
+          "runtime_identity": "DEDICATED"
+        }
+      ],
+      "integration": "UNKNOWN",
+      "live_validation": "NOT_VALIDATED",
+      "provenance_confidence": "NONE",
+      "repository": {
+        "implementation": "NOT_IN_REPOSITORY",
+        "paths": [],
+        "source_location": "UNKNOWN"
+      }
+    }
+  ],
+  "evidence_sources": {
+    "HOST_OBSERVATION_2026-10-06": "Read-only host observation of 2026-10-06; the full record is kept off this repository",
+    "REPOSITORY_AT_MAIN": "The repository at the main revision above",
+    "REPOSITORY_RECORD": "A statement in a repository document, cited by path; not re-observed here"
+  },
+  "hosts": {
+    "VPS1": {
+      "role": "forge / execution",
+      "role_id": "ATLAS-FORGE-01"
+    },
+    "VPS2": {
+      "role": "verifier and runner",
+      "role_id": "ATLAS-EU-VERIFY-01"
+    },
+    "VPS3": {
+      "role": "control plane",
+      "role_id": "ATLAS-EU-CONTROL-01"
+    }
+  },
+  "not_asserted": [
+    "ATLAS_VPS_FLEET_AUTONOMOUS",
+    "any PROVEN claim",
+    "causality for any failure",
+    "that any deployed component should be changed"
+  ],
+  "observed_date_utc": "2026-10-06",
+  "repository_identity": {
+    "main": "92e833d0a6918d75b5cc3b202873aeb1f0ac0484",
+    "repository": "WezzSide/project-atlas"
+  },
+  "schema": "atlas-fleet-provenance-map/v1",
+  "status": "Dated public projection. Not canonical fleet state. Grants nothing. Unsigned; no publisher identity."
+}

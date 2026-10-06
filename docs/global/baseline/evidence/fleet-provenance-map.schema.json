@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "atlas-fleet-provenance-map/v1",
+  "title": "Atlas fleet provenance map (public projection)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "status", "observed_date_utc", "repository_identity", "hosts", "evidence_sources", "not_asserted", "components"],
+  "properties": {
+    "schema": {"const": "atlas-fleet-provenance-map/v1"},
+    "status": {"type": "string"},
+    "observed_date_utc": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"},
+    "repository_identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "main"],
+      "properties": {
+        "repository": {"type": "string"},
+        "main": {"type": "string", "pattern": "^[0-9a-f]{40}$"}
+      }
+    },
+    "hosts": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["role_id", "role"],
+        "properties": {"role_id": {"type": "string"}, "role": {"type": "string"}}
+      }
+    },
+    "evidence_sources": {"type": "object", "additionalProperties": {"type": "string"}},
+    "not_asserted": {"type": "array", "items": {"type": "string"}},
+    "components": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/component"}}
+  },
+  "$defs": {
+    "component": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "expected_role", "repository", "integration", "live_validation", "provenance_confidence", "instances", "evidence"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z0-9-]+$"},
+        "expected_role": {"type": "string"},
+        "repository": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["implementation", "paths"],
+          "properties": {
+            "implementation": {"enum": ["IMPLEMENTED", "NOT_IN_REPOSITORY"]},
+            "paths": {"type": "array", "items": {"type": "string"}},
+            "deploy_path": {"type": "string"},
+            "source_location": {"enum": ["UNKNOWN"]}
+          }
+        },
+        "integration": {"enum": ["INTEGRATED", "NOT_INTEGRATED", "UNKNOWN"]},
+        "live_validation": {"enum": ["RECORDED_SINGLE_HOST", "NOT_VALIDATED", "UNKNOWN"]},
+        "provenance_confidence": {"enum": ["EXACT_REVISION", "NONE", "NOT_APPLICABLE"]},
+        "drift": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["main_ahead_by_commits_in_paths", "commits", "paths"],
+          "properties": {
+            "main_ahead_by_commits_in_paths": {"type": "integer", "minimum": 0},
+            "commits": {"type": "array", "items": {"type": "string", "pattern": "^[0-9a-f]{7,40}$"}},
+            "paths": {"type": "array", "items": {"type": "string"}}
+          }
+        },
+        "instances": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/instance"}},
+        "evidence": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/evidence"}}
+      }
+    },
+    "instance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["host", "deployment", "activity", "health", "deployed_revision", "drift_from_main", "runtime_identity"],
+      "properties": {
+        "host": {"enum": ["VPS1", "VPS2", "VPS3", "GITHUB_HOSTED"]},
+        "deployment": {"enum": ["DEPLOYED", "NOT_FOUND", "NOT_APPLICABLE", "UNKNOWN"]},
+        "activity": {"enum": ["ACTIVE", "INACTIVE", "DISABLED", "NOT_APPLICABLE", "UNKNOWN"]},
+        "health": {"enum": ["PROGRESSING", "DEGRADED", "NOT_APPLICABLE", "UNKNOWN"]},
+        "deployed_revision": {"type": ["string", "null"], "pattern": "^[0-9a-f]{40}$"},
+        "drift_from_main": {"enum": ["CURRENT", "BEHIND", "NOT_APPLICABLE", "UNKNOWN"]},
+        "runtime_identity": {"enum": ["DEDICATED", "SHARED", "NOT_APPLICABLE", "UNKNOWN"]},
+        "note": {"type": "string"}
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["field", "source", "label"],
+      "properties": {
+        "field": {"type": "string"},
+        "source": {"type": "string"},
+        "label": {"enum": ["OBSERVED", "INFERRED", "UNKNOWN", "RECORDED"]},
+        "ref": {"type": "string"}
+      }
+    }
+  }
+}
