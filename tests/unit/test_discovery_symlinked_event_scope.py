@@ -33,6 +33,7 @@ import os
 from pathlib import Path
 
 import pytest
+from _logcapture import DISCOVERY_LOGGER, capturing
 
 import project_atlas.discovery as discovery_module
 from project_atlas.discovery import discover
@@ -112,7 +113,7 @@ def test_aliased_scope_is_inventoried_exactly_once_as_sources(
         (root / ".atlas-inbox").symlink_to(root / "hop", target_is_directory=True)
         alias, physical = ".atlas-inbox", real  # the *final* hop is named
 
-    with caplog.at_level("WARNING"):
+    with capturing(caplog, DISCOVERY_LOGGER):
         manifest = discover(root)
 
     assert _events(manifest) == [], "a scope reached through a link is not the reserved scope"
@@ -136,7 +137,7 @@ def test_intermediate_project_link_is_refused_and_content_kept_once(
     (scope / "proj").symlink_to(holder / "x", target_is_directory=True)
     _package(scope, "real-proj", "evt-2")
 
-    with caplog.at_level("WARNING"):
+    with capturing(caplog, DISCOVERY_LOGGER):
         manifest = discover(root)
 
     assert _events(manifest) == [("real-proj", "evt-2", "pending")], "the real package still routes"
@@ -164,7 +165,7 @@ def test_symlinked_event_directory_is_recorded_invalid(
     (scope / "proj").mkdir(parents=True)
     (scope / "proj" / "evt-link").symlink_to(target, target_is_directory=True)
 
-    with caplog.at_level("WARNING"):
+    with capturing(caplog, DISCOVERY_LOGGER):
         manifest = discover(root)
 
     rows = manifest["agent_events"]
@@ -208,7 +209,7 @@ def test_scope_escaping_the_root_is_refused_and_reported(
         alias = ".atlas-inbox/agent-events"
         physical = outside / "agent-events"
 
-    with caplog.at_level("WARNING"):
+    with capturing(caplog, DISCOVERY_LOGGER):
         manifest = discover(root)
 
     assert _events(manifest) == [], "no package identity is fabricated for outside content"
@@ -245,7 +246,7 @@ def test_unusable_scope_link_is_reported_not_silently_dropped(
         alias = root / ".atlas-inbox" / "agent-events"
     alias.symlink_to(target)
 
-    with caplog.at_level("WARNING"):
+    with capturing(caplog, DISCOVERY_LOGGER):
         manifest = discover(root)
 
     assert _events(manifest) == []
@@ -281,7 +282,7 @@ def test_escaping_scope_link_is_refused_before_any_probe_follows_it(
         return real(path)
 
     monkeypatch.setattr(discovery_module, "_reachable_is_dir", recording)
-    with caplog.at_level("WARNING"):
+    with capturing(caplog, DISCOVERY_LOGGER):
         events = discovery_module._discover_agent_events(root)
 
     assert events == []
@@ -301,7 +302,7 @@ def test_real_scope_with_an_alias_beside_it_routes_once(
     _package(scope, "proj", "evt-1")
     (root / "mirror").symlink_to(root / ".atlas-inbox", target_is_directory=True)
 
-    with caplog.at_level("WARNING"):
+    with capturing(caplog, DISCOVERY_LOGGER):
         manifest = discover(root)
 
     assert _events(manifest) == [("proj", "evt-1", "pending")]
