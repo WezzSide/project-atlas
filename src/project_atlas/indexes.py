@@ -11,6 +11,7 @@ from project_atlas.conflict_projections import (
     review_index_companions,
 )
 from project_atlas.ingestion import _promote
+from project_atlas.secrets import scan_text
 
 GENERATED_INDEX_ROOT = "generated/indexes"
 LEGACY_INDEX_ROOT = "indexes"
@@ -34,7 +35,14 @@ def _json(path: Path, default: Any, overlay: dict[Path, bytes] | None = None) ->
 
 
 def _add(index: dict[str, list[str]], key: object, value: str) -> None:
-    index.setdefault(str(key), []).append(value)
+    # AS-SEC-SCAN-INDEXES-PROJECTID-JSON-ESC-001 /
+    # AS-SEC-SCAN-INDEXES-SOURCEPATH-JSON-ESC-001: json.loads of concept
+    # project_id / source current_path can decode ``\u`` escapes that
+    # scan_text misses on raw bytes. Drop secret-shaped index keys/values.
+    text = str(key)
+    if scan_text(text) or scan_text(value):
+        return
+    index.setdefault(text, []).append(value)
 
 
 def _sorted_index(index: dict[str, list[str]]) -> dict[str, list[str]]:
