@@ -22,8 +22,9 @@ submissions (see the README).
 `tests/unit/test_fleet_runtime_contracts.py` pins these digests. That proves the repository
 files still match the recorded bytes, so a changed contract shows up as a new file or a
 deliberate digest change, not a silent edit. It is a repository check. The runtime does not
-compare these digests before use. It records the digest of the contract and goals files it
-read in each cycle receipt (`contract_sha256`, `goals_sha256`).
+compare these digests before use. Each cycle receipt records `contract_sha256` and
+`goals_sha256`, which are the digests of the files on disk when the receipt is written,
+after the executor run. The prompt actually used is bound by `prompt_sha256`.
 
 ## Classification
 
@@ -32,7 +33,7 @@ Each file was read in full and checked against five exclusion classes.
 | Exclusion class | Result for all four |
 |---|---|
 | Secret-bearing configuration | No. They contain no secret, token, key or credential |
-| Machine-local state | No. The content names no host, node, address or local path. Whether nodes hold identical copies is a separate, dated observation (Provenance below) |
+| Machine-local state | No. The content names no address, host path or port. It names node roles, and `GLOBAL-CONTINUOUS-GOALS.json` refers to one node by name (VPS3) as part of the issued text. Whether nodes hold identical copies is a separate, dated observation (Provenance below) |
 | Ephemeral deployment state | No, with one caveat below |
 | Credentials | No |
 | Private operator configuration | No. They contain no address, account, host path or port |

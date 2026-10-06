@@ -39,16 +39,19 @@ revision:
 |---|---|---|---|
 | `GLOBAL-AUTONOMOUS-OPERATING-CONTRACT.md` | Yes, on every loop pass; required (`main`) | Yes, as `<global_contract>` (`prompt_text`) | None. If the read fails, no executor cycle runs on that pass: the supervisor sets its status to `EXECUTOR_FAILURE_BACKOFF` (frontier `SUPERVISOR_ERROR:<type>`) and retries after the tick |
 | `GLOBAL-GOALS.json` | Yes, on every loop pass; required (`main`) | Yes, as `<global_goals>` (`prompt_text`) | None. Same failure behaviour as above |
-| `GLOBAL-CONTINUOUS-GOALS.json` | Only when present (`continuous_goals`) | Yes, as `<global_continuous_goals>` | None. A missing or unparseable file is silently left out of the prompt |
+| `GLOBAL-CONTINUOUS-GOALS.json` | Only when present, and only when an executor prompt is built (`continuous_goals`) | Yes, as `<global_continuous_goals>` | None. A missing or unparseable file is silently left out of the prompt |
 | `AUTONOMY-POLICY.json` | No | No | None |
 
 `AUTONOMY-POLICY.json` is versioned here as contract and vocabulary documentation. No reader
 for it was found in the imported fleet runtime source (`node/`, `control/`) at this revision.
 Its presence in the repository does not by itself establish that it is used or enforced.
+The executor is an external program that this search does not cover. It inherits the
+supervisor's environment, including `ATLAS_AUTONOMY_ETC`, minus `ATLAS_QUEUE_*`.
 
-Each cycle receipt records the sha256 of the contract and goals files as read (the
-`contract_sha256` and `goals_sha256` fields). The supervisor does not compare those
-digests with any expected value before use. The digests pinned in
+Each cycle receipt records `contract_sha256` and `goals_sha256`. These are the digests of the
+files as they are on disk when the receipt is written, after the executor run. The text
+actually used is bound by `prompt_sha256`. The supervisor does not compare any of these
+digests with an expected value before use. The digests pinned in
 `tests/unit/test_fleet_runtime_contracts.py` prove only that the repository files still
 match the recorded bytes. They are not a runtime integrity check.
 
@@ -57,11 +60,18 @@ match the recorded bytes. They are not a runtime integrity check.
 The task-authoring policy is a different document from `contracts/AUTONOMY-POLICY.json`. It
 is operator configuration, was not imported, and is reached by three separate paths:
 
-- **Queue service**: reads `ATLAS_QUEUE_POLICY_FILE`. It evaluates every autonomous
-  submission with `atlas_task_policy.evaluate` and refuses a `DENY` (HTTP 422). Without the
-  file it refuses all autonomous submissions (HTTP 503). This is the enforcement point.
+- **Queue service**: reads `ATLAS_QUEUE_POLICY_FILE`, which must be set at start.
+  - An autonomous submission is one whose envelope carries `author_node`. The service
+    evaluates it with `atlas_task_policy.evaluate` and refuses any result other than `ALLOW`
+    (HTTP 422).
+  - It refuses all autonomous submissions (HTTP 503) if the policy file is missing or the
+    policy engine cannot be imported.
+  - An identity marked `policy_enforced` may submit only autonomous envelopes (HTTP 403
+    otherwise).
+  - This is the authoritative enforcement point.
 - **Queue client (`author`)**: reads `ATLAS_TASK_POLICY_FILE`. It evaluates the task locally
-  before submitting and records the decision. The server evaluates it again.
+  and records the decision. It submits only on a local `ALLOW`, and the server then
+  evaluates the task again.
 - **Supervisor**: reads `$ATLAS_AUTONOMY_ETC/task-authoring-policy.json` when present and
   its `author_role` is this node's role. It then adds an authoring section to the prompt
   (`authoring_section`) and uses the file's digest to detect policy changes
