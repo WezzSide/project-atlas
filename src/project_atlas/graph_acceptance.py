@@ -20,6 +20,7 @@ import yaml
 
 from project_atlas.config import AtlasConfig, GraphifyConfig
 from project_atlas.schema import SchemaValidationError, validate_record
+from project_atlas.secrets import scan_text
 
 SUPPORTED_SCHEMA = "graphify-1.0"
 PACKAGE_ID = "AS-GRAPH-001"
@@ -205,11 +206,20 @@ def _inventory_entries(manifest: dict[str, Any]) -> list[dict[str, Any]]:
     return entries
 
 
+def _safe_project_token(token: str) -> str:
+    """AS-SEC-SCAN-GRAPH-YAML-PROJECTID-001: decoded YAML/JSON project ids
+    must not become graph write-path segments."""
+    cleaned = token.strip()
+    if scan_text(cleaned):
+        raise GraphAcceptanceError("secret-content")
+    return cleaned
+
+
 def _project_id(manifest: dict[str, Any], project_root: Path) -> str:
     for key in ("project_id", "likely_project"):
         value = manifest.get(key)
         if isinstance(value, str) and value.strip():
-            return value.strip()
+            return _safe_project_token(value)
     marker = project_root / ".atlas-project.yaml"
     if marker.is_file():
         try:
@@ -219,10 +229,10 @@ def _project_id(manifest: dict[str, Any], project_root: Path) -> str:
         if isinstance(data, dict):
             project = data.get("project")
             if isinstance(project, dict) and isinstance(project.get("id"), str):
-                return str(project["id"])
+                return _safe_project_token(str(project["id"]))
             if isinstance(data.get("id"), str):
-                return str(data["id"])
-    return project_root.name
+                return _safe_project_token(str(data["id"]))
+    return _safe_project_token(project_root.name)
 
 
 def _graphify_config(config: AtlasConfig | GraphifyConfig | None) -> GraphifyConfig:

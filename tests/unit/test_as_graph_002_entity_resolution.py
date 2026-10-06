@@ -25,6 +25,7 @@ from project_atlas.graph_resolution import (
     write_resolution_outputs,
 )
 from project_atlas.schema import available_schemas, validate_record
+from project_atlas.secrets import scan_text
 from project_atlas.source_identity import lineage_id, validate_project_uuid
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "graphify-present"
@@ -413,3 +414,52 @@ def test_optional_write_validates_under_atlas_validate(tmp_path: Path) -> None:
     report = validate(vault)
     graph_errors = [e for e in report["errors"] if "graph resolution" in e]
     assert graph_errors == []
+
+
+def test_yaml_escaped_project_id_is_not_persisted(tmp_path: Path) -> None:
+    """AS-SEC-SCAN-GRAPH-YAML-PROJECTID-001: YAML \\u project.id must not persist."""
+    from project_atlas.graph_acceptance import GraphAcceptanceError
+    from project_atlas.scaffold import create_scaffold
+
+    token = "AKIAAAAAAAAAAAAAAAAA"
+    project_root = tmp_path / "proj"
+    out = project_root / "graphify-out"
+    out.mkdir(parents=True)
+    marker = project_root / ".atlas-project.yaml"
+    raw_marker = 'schema_version: 1\nproject:\n  id: "\\u0041KIAAAAAAAAAAAAAAAAA"\n'
+    marker.write_text(raw_marker, encoding="utf-8")
+    nodes_path = out / "nodes.jsonl"
+    nodes_path.write_text('{"id":"n1","type":"document"}\n', encoding="utf-8")
+    sha = hashlib.sha256(nodes_path.read_bytes()).hexdigest()
+    manifest = {
+        "schema_version": 1,
+        "sources": [
+            {
+                "source_id": "source-nodes",
+                "path": "graphify-out/nodes.jsonl",
+                "media_type": "application/json",
+                "sha256": sha,
+                "size_bytes": nodes_path.stat().st_size,
+                "classification_state": "unclassified",
+                "authority": {"level": "derived"},
+            }
+        ],
+    }
+    vault = tmp_path / "vault"
+    create_scaffold(vault)
+    assert scan_text(raw_marker) == []
+    assert token not in raw_marker
+    with pytest.raises((GraphAcceptanceError, GraphResolutionError), match="secret-content"):
+        _receipt, resolution = resolve_from_acceptance(
+            project_root=project_root,
+            manifest=manifest,
+            strict=False,
+        )
+        write_resolution_outputs(resolution, vault=vault)
+    leaked = [
+        path.as_posix()
+        for path in vault.rglob("*")
+        if path.is_file() and token in path.read_text(encoding="utf-8", errors="ignore")
+    ]
+    assert leaked == []
+    assert not (vault / "generated" / "graph" / "resolved" / token).exists()
