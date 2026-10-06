@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import threading
 from pathlib import Path
 
@@ -38,7 +39,12 @@ from project_atlas.orchestration.autonomy.dev_planner import (
 )
 from project_atlas.orchestration.autonomy.dev_queue import Category, QueueItem
 from project_atlas.orchestration.autonomy.dev_spool_transport import SpoolTransport
-from project_atlas.orchestration.autonomy.dev_transport import Channel, InMemoryTransport
+from project_atlas.orchestration.autonomy.dev_transport import (
+    Channel,
+    InMemoryTransport,
+    TransportError,
+    TransportUnavailable,
+)
 
 BASE = "a" * 40
 REV1, TREE1 = "b" * 40, "c" * 40
@@ -72,6 +78,7 @@ def store(tmp_path, create=True):
 
 def coordinator(tmp_path, journal=None, identity="coord-1", **kw):
     kw.setdefault("accept_same_filesystem", True)
+    kw.setdefault("accept_unbound_transport", True)  # these tests use an unbound spool
     return Coordinator(
         journal or store(tmp_path, create=False),
         SpoolTransport(tmp_path / "spool"),
@@ -118,7 +125,7 @@ def tree(tmp_path):
 
 def test_a_store_is_created_once_and_then_only_attached(tmp_path):
     j = store(tmp_path)
-    markers = [json.loads((d / STORE_MARKER).read_text()) for d in (j.root, j.anchor)]
+    markers = [json.loads((d / STORE_MARKER).read_text()) for d in (j.home, j.anchor_home)]
     assert [m["role"] for m in markers] == ["journal", "anchor"]
     assert markers[0]["store"] == markers[1]["store"] == j.store_id and len(j.store_id) == 32
     assert store(tmp_path, create=False).store_id == j.store_id
@@ -143,23 +150,24 @@ def test_attach_creates_nothing_and_refuses_a_missing_or_foreign_part(tmp_path):
     j = store(tmp_path)
     other = StoreJournal.create(tmp_path / "other" / "journal", tmp_path / "other" / "anchor")
     with pytest.raises(JournalCorrupt, match="STORE_IDENTITY:anchor directory belongs to store"):
-        StoreJournal.attach(j.root, other.anchor)
+        StoreJournal.attach(j.home, other.anchor_home)
     with pytest.raises(JournalCorrupt, match="has no store marker"):
-        StoreJournal.attach(j.root, tmp_path / "nowhere")
+        StoreJournal.attach(j.home, tmp_path / "nowhere")
     assert not (tmp_path / "nowhere").exists()
     bads = (
         "{",
         "[]",
-        json.dumps({"v": 2, "role": "anchor", "store": j.store_id}),
-        json.dumps({"v": 1, "role": "journal", "store": j.store_id}),
-        json.dumps({"v": 1, "role": "anchor", "store": "xyz"}),
+        json.dumps({"v": 1, "role": "anchor", "store": j.store_id}),  # the earlier layout
+        json.dumps({"v": 3, "role": "anchor", "store": j.store_id}),
+        json.dumps({"v": 2, "role": "journal", "store": j.store_id}),
+        json.dumps({"v": 2, "role": "anchor", "store": "xyz"}),
     )
     for bad in bads:
-        good = (j.anchor / STORE_MARKER).read_text()
-        (j.anchor / STORE_MARKER).write_text(bad)
+        good = (j.anchor_home / STORE_MARKER).read_text()
+        (j.anchor_home / STORE_MARKER).write_text(bad)
         with pytest.raises(JournalCorrupt, match="STORE_IDENTITY"):
             store(tmp_path, create=False)
-        (j.anchor / STORE_MARKER).write_text(good)
+        (j.anchor_home / STORE_MARKER).write_text(good)
     # a plain DirJournal cannot be pointed at a store by accident: the marker is not an event
     with pytest.raises(JournalCorrupt, match="directory is not events"):
         fleet_status(DirJournal(j.root, anchor=j.anchor))
@@ -171,9 +179,7 @@ def test_a_lost_anchor_stops_a_running_planner_and_is_never_recreated(tmp_path):
     p = Planner(t, identity="coord-1", verifier_identities=(VER,), journal=j)
     item, fields = cand("A", "src/a")
     p.dispatch(item, **fields)  # a ONE-event journal: the case a bare DirJournal cannot detect
-    for f in j.anchor.iterdir():
-        f.unlink()
-    j.anchor.rmdir()
+    shutil.rmtree(j.anchor_home)
     before = tree(tmp_path)
     item2, fields2 = cand("B", "src/b")
     for attempt in (
@@ -188,13 +194,13 @@ def test_a_lost_anchor_stops_a_running_planner_and_is_never_recreated(tmp_path):
             JournalCorrupt, match=r"STORE_IDENTITY:anchor directory .* has no store"
         ):
             attempt()
-    assert tree(tmp_path) == before and not j.anchor.exists()  # nothing appended, nothing made
+    assert tree(tmp_path) == before and not j.anchor_home.exists()  # nothing appended or made
     # an empty directory put back in its place is still not this store's anchor
-    j.anchor.mkdir()
+    j.anchor_home.mkdir()
     with pytest.raises(JournalCorrupt, match="STORE_IDENTITY"):
         p.dispatch(item2, **fields2)
     with pytest.raises(PlannerError, match="STORE_EXISTS"):
-        StoreJournal.create(j.root, j.anchor)  # and the journal cannot be "started fresh"
+        StoreJournal.create(j.home, j.anchor_home)  # and the journal cannot be "started fresh"
 
 
 def test_boundary_reports_whether_journal_and_anchor_share_a_filesystem(tmp_path):
@@ -213,10 +219,7 @@ def test_boundary_reports_whether_journal_and_anchor_share_a_filesystem(tmp_path
         # a different st_dev is reported, never promoted to "adequate"
         assert st["live_conflicting_work_boundary"] == "NOT_ESTABLISHED"
     finally:
-        for f in anchor.glob("*"):
-            f.unlink()
-        if anchor.exists():
-            anchor.rmdir()
+        shutil.rmtree(anchor, ignore_errors=True)
 
 
 # ---- what a coordinator refuses to run on ---------------------------------------------------
@@ -228,14 +231,25 @@ def test_a_coordinator_has_no_in_memory_or_unanchored_fallback(tmp_path):
     kw = dict(identity="coord-1", verifier_identities=(VER,), status_path=tmp_path / "s.json")
     for journal in (MemoryJournal(), DirJournal(tmp_path / "plain"), None):
         with pytest.raises(PlannerError, match="COORDINATOR_NEEDS_STORE"):
-            Coordinator(journal, spool, accept_same_filesystem=True, **kw)
+            Coordinator(
+                journal, spool, accept_same_filesystem=True, accept_unbound_transport=True, **kw
+            )
     with pytest.raises(PlannerError, match="COORDINATOR_NEEDS_DURABLE_TRANSPORT"):
-        Coordinator(j, InMemoryTransport(), accept_same_filesystem=True, **kw)
+        Coordinator(
+            j, InMemoryTransport(), accept_same_filesystem=True, accept_unbound_transport=True, **kw
+        )
     with pytest.raises(PlannerError, match="STORE_BOUNDARY:journal and anchor are on the same"):
         Coordinator(j, spool, **kw)  # the reduced boundary must be accepted explicitly
     for bad in (0, -1, True, 1.5):
         with pytest.raises(PlannerError, match="max_live"):
-            Coordinator(j, spool, accept_same_filesystem=True, max_live=bad, **kw)
+            Coordinator(
+                j,
+                spool,
+                accept_same_filesystem=True,
+                accept_unbound_transport=True,
+                max_live=bad,
+                **kw,
+            )
     assert not (tmp_path / "s.json").exists()
 
 
@@ -326,6 +340,7 @@ def test_a_tick_that_died_between_journal_and_transport_is_finished_by_the_next(
         verifier_identities=(VER,),
         status_path=tmp_path / "status" / "status.json",
         accept_same_filesystem=True,
+        accept_unbound_transport=True,
     )
     with pytest.raises(OSError):
         c.tick([cand("A", "src/a")])
@@ -365,6 +380,7 @@ def test_published_work_the_journal_does_not_know_stops_every_coordinator(tmp_pa
         "state",
         "reason",
         "store",
+        "transport_store",
         "continuity_boundary",
         "live_conflicting_work_boundary",
         "repairs",
@@ -473,6 +489,7 @@ def test_coordinators_ticking_together_prepare_each_compatible_lineage_exactly_o
             status_path=tmp_path / "status" / f"status-{i}.json",
             max_live=4,
             accept_same_filesystem=True,
+            accept_unbound_transport=True,
         )
         for i in range(n)
     ]
@@ -561,6 +578,7 @@ def test_another_coordinators_dispatch_is_never_mistaken_for_lost_history(tmp_pa
         status_path=tmp_path / "status" / "s3.json",
         max_live=8,
         accept_same_filesystem=True,
+        accept_unbound_transport=True,
     )
     c1.tick([cand("B", "src/b")])  # after c3's last replay
     t3.hook = lambda: c1.tick([cand("C", "src/c")])
@@ -598,11 +616,11 @@ def test_identity_lost_between_append_and_acknowledgement_is_never_published(tmp
         def append(self, seq, data):
             ok = super().append(seq, data)
             if ok and self.armed:
-                (self.anchor / STORE_MARKER).unlink()
+                (self.anchor_home / STORE_MARKER).unlink()
             return ok
 
     base = store(tmp_path)
-    j = LosesAnchor(base.root, base.anchor, base.store_id)
+    j = LosesAnchor(base.home, base.anchor_home, base.store_id)
     p = Planner(
         SpoolTransport(tmp_path / "spool"), identity="c", verifier_identities=(VER,), journal=j
     )
@@ -612,7 +630,8 @@ def test_identity_lost_between_append_and_acknowledgement_is_never_published(tmp
         p.dispatch(item, **fields)
     # the event was linked before the loss; it is not acknowledged, applied or published
     assert [f.name for f in sorted(j.root.iterdir())] == ["000000000001.json", STORE_MARKER]
-    assert list(j.anchor.iterdir()) == [] and works(tmp_path) == [] and p.lineages == {}
+    assert [f.name for f in j.anchor.iterdir()] == [STORE_MARKER]  # no acknowledgement
+    assert works(tmp_path) == [] and p.lineages == {}
     # each store operation checks identity on its own, not only through a preceding read
     for call in (lambda: j.append(2, b"{}"), lambda: j.acknowledge(1, "0" * 64), lambda: j.read(0)):
         with pytest.raises(JournalCorrupt, match="STORE_IDENTITY"):
@@ -792,6 +811,7 @@ def test_a_continuity_failure_in_the_constructor_also_leaves_a_halted_status(tmp
             verifier_identities=(VER,),
             status_path=tmp_path / "status" / "status.json",
             accept_same_filesystem=True,
+            accept_unbound_transport=True,
         )
     (tmp_path / "adir").mkdir()
     with pytest.raises(PlannerError, match=r"STATUS_PATH:.* is a directory"):
@@ -802,6 +822,7 @@ def test_a_continuity_failure_in_the_constructor_also_leaves_a_halted_status(tmp
             verifier_identities=(VER,),
             status_path=tmp_path / "adir",
             accept_same_filesystem=True,
+            accept_unbound_transport=True,
         )
 
 
@@ -894,7 +915,7 @@ def test_contention_is_reported_as_deferred_and_ends_the_preparation_step(tmp_pa
             return False if self.busy else super().append(seq, data)
 
     base = store(tmp_path)
-    j = Busy(base.root, base.anchor, base.store_id)
+    j = Busy(base.home, base.anchor_home, base.store_id)
     c = coordinator(tmp_path, j, max_live=4)
     j.busy = True
     st = c.tick([cand("A", "src/a", severity=3), cand("B", "src/b")])
@@ -907,7 +928,7 @@ def test_the_status_file_may_not_live_inside_the_store_or_the_transport(tmp_path
     j = store(tmp_path)
     spool = SpoolTransport(tmp_path / "spool")
     for inside in (
-        j.root / STORE_MARKER,
+        j.home / STORE_MARKER,
         j.root / "000000000001.json",
         j.root / "status.json",
         j.anchor / "status.json",
@@ -921,8 +942,9 @@ def test_the_status_file_may_not_live_inside_the_store_or_the_transport(tmp_path
                 verifier_identities=(VER,),
                 status_path=inside,
                 accept_same_filesystem=True,
+                accept_unbound_transport=True,
             )
-    assert json.loads((j.root / STORE_MARKER).read_text())["store"] == j.store_id
+    assert json.loads((j.home / STORE_MARKER).read_text())["store"] == j.store_id
 
 
 def test_a_continuity_failure_during_preparation_halts_instead_of_being_reported_as_refused(
@@ -939,7 +961,7 @@ def test_a_continuity_failure_during_preparation_halts_instead_of_being_reported
             return super().append(seq, data)
 
     base = store(tmp_path)
-    j = LosesHead(base.root, base.anchor, base.store_id)
+    j = LosesHead(base.home, base.anchor_home, base.store_id)
     c = coordinator(tmp_path, j, max_live=8)
     c.tick([cand("A", "src/a")])
     j.armed = True
@@ -1009,9 +1031,7 @@ def test_unreadable_store_directories_at_construction_leave_a_halted_status(tmp_
     j = store(tmp_path)
     coordinator(tmp_path).tick([cand("A", "src/a")])
     attached = store(tmp_path, create=False)
-    for f in j.anchor.iterdir():
-        f.unlink()
-    j.anchor.rmdir()
+    shutil.rmtree(j.anchor_home)
     with pytest.raises(JournalCorrupt, match="STORE_IDENTITY:store directories are not readable"):
         coordinator(tmp_path, attached, identity="coord-2")
     status = json.loads((tmp_path / "status" / "status.json").read_text())
@@ -1057,8 +1077,8 @@ def test_a_repair_record_is_never_written_into_an_anchor_of_another_store(tmp_pa
     coordinator(tmp_path).tick([cand("A", "src/a")])
     digest = (j.anchor / "000000000001.ack").read_text()
     other = StoreJournal.create(tmp_path / "o" / "journal", tmp_path / "o" / "anchor")
-    marker = j.anchor / "STORE.json"
-    marker.write_bytes((other.anchor / "STORE.json").read_bytes())  # the anchor is now foreign
+    marker = j.anchor_home / "STORE.json"
+    marker.write_bytes((other.anchor_home / "STORE.json").read_bytes())  # the anchor is now foreign
     with pytest.raises(JournalCorrupt, match="STORE_IDENTITY"):
         j.record_repair(1, digest, "RESTORED", "coord-1")
     with pytest.raises(JournalCorrupt, match="STORE_IDENTITY"):
@@ -1174,7 +1194,7 @@ def test_a_coordinator_checks_its_observer_before_anything_else(tmp_path):
         coordinator(tmp_path, identity="coord-2", observer=Nameless())
     status = json.loads((tmp_path / "status" / "status.json").read_text())
     assert status["state"] == "OK"  # a configuration refusal writes no status
-    # also when the store is unreadable: the refusal, not an error from writing a status
+    # also when the store is unusable: the refusal, not an error from writing a status
     attached = store(tmp_path, create=False)
     for f in attached.anchor.iterdir():
         f.unlink()
@@ -1270,6 +1290,7 @@ def test_executors_need_a_transport_that_delivers_to_the_addressee(tmp_path):
         verifier_identities=(VER,),
         status_path=tmp_path / "status" / "status.json",
         accept_same_filesystem=True,
+        accept_unbound_transport=True,
     )
     with pytest.raises(PlannerError, match="COORDINATOR_NEEDS_ADDRESSED_TRANSPORT"):
         Coordinator(attached, Unaddressed(tmp_path / "spool"), executors=(E1,), **common)
@@ -1357,3 +1378,268 @@ def test_a_transport_error_in_the_constructor_leaves_a_halted_status(tmp_path, m
         coordinator(tmp_path, identity="coord-2")
     status = json.loads((tmp_path / "status" / "status.json").read_text())
     assert status["state"] == "HALTED" and status["reason"] == "TRANSPORT_ERROR:listing refused"
+
+
+# --- ATLAS-DEVQ-0013: the store id is the directory every store write goes into -------------
+
+
+def _two_stores(tmp_path):
+    a = StoreJournal.create(tmp_path / "a" / "journal", tmp_path / "a" / "anchor")
+    b = StoreJournal.create(tmp_path / "b" / "journal", tmp_path / "b" / "anchor")
+    return a, b
+
+
+def _files(directory):
+    return {
+        str(p.relative_to(directory)): p.read_bytes() for p in directory.rglob("*") if p.is_file()
+    }
+
+
+def test_events_and_acknowledgements_live_under_the_store_id(tmp_path):
+    j = store(tmp_path)
+    assert j.root == j.home / j.store_id and j.anchor == j.anchor_home / j.store_id
+    assert j.root.is_dir() and j.anchor.is_dir()
+    p = Planner(
+        SpoolTransport(tmp_path / "spool"), identity="c", verifier_identities=(VER,), journal=j
+    )
+    item, fields = cand("A", "src/a")
+    p.dispatch(item, **fields)
+    assert sorted(f.name for f in j.home.iterdir()) == sorted([j.store_id, STORE_MARKER])
+    assert sorted(f.name for f in j.anchor_home.iterdir()) == sorted([j.store_id, STORE_MARKER])
+    assert sorted(f.name for f in j.root.iterdir()) == ["000000000001.json", STORE_MARKER]
+    assert sorted(f.name for f in j.anchor.iterdir()) == ["000000000001.ack", STORE_MARKER]
+    assert (j.anchor / STORE_MARKER).read_bytes() == (j.anchor_home / STORE_MARKER).read_bytes()
+    # a store whose data directory is gone is not this store, and attach never makes one
+    shutil.rmtree(j.anchor)
+    with pytest.raises(JournalCorrupt, match=r"STORE_IDENTITY:anchor directory .* has no data"):
+        store(tmp_path, create=False)
+    with pytest.raises(JournalCorrupt, match=r"STORE_IDENTITY:anchor directory .* has no data"):
+        p.dispatch(cand("B", "src/b")[0], **cand("B", "src/b")[1])
+    assert not j.anchor.exists()
+    with pytest.raises(JournalCorrupt, match="store id is not 32 hex"):
+        StoreJournal(j.home, j.anchor_home, "../" + j.store_id)
+    # neither an empty directory with the right name nor a link to another store's data is it
+    j.anchor.mkdir()
+    with pytest.raises(JournalCorrupt, match=r"STORE_IDENTITY:anchor directory .* no store marker"):
+        store(tmp_path, create=False)
+    j.anchor.rmdir()
+    other = StoreJournal.create(tmp_path / "o" / "journal", tmp_path / "o" / "anchor")
+    try:
+        j.anchor.symlink_to(other.anchor, target_is_directory=True)
+    except OSError:  # no symlinks here (Windows without the privilege)
+        return
+    with pytest.raises(JournalCorrupt, match=r"STORE_IDENTITY:anchor directory .* has no data"):
+        store(tmp_path, create=False)
+    assert sorted(f.name for f in other.anchor.iterdir()) == [STORE_MARKER]
+
+
+@pytest.mark.parametrize("swap", ["marker", "directory"])
+def test_a_write_after_the_identity_changed_never_lands_in_the_other_store(tmp_path, swap):
+    """The window between the identity check and the write: the path decides, not the check."""
+    a, b = _two_stores(tmp_path)
+
+    class SwapsAfterCheck(StoreJournal):
+        armed = False
+
+        def check_store(self):
+            super().check_store()
+            if self.armed:  # the check passed; now the anchor stops being this store's
+                type(self).armed = False
+                if swap == "marker":
+                    (self.anchor_home / STORE_MARKER).write_bytes(
+                        (b.anchor_home / STORE_MARKER).read_bytes()
+                    )
+                else:
+                    os.rename(self.anchor_home, tmp_path / "a" / "anchor.away")
+                    shutil.copytree(b.anchor_home, self.anchor_home)
+
+    j = SwapsAfterCheck(a.home, a.anchor_home, a.store_id)
+    p = Planner(
+        SpoolTransport(tmp_path / "spool"), identity="c", verifier_identities=(VER,), journal=j
+    )
+    item, fields = cand("A", "src/a")
+    p.dispatch(item, **fields)
+    foreign_before = _files(b.anchor_home)
+    digest = (j.anchor / "000000000001.ack").read_text()
+    SwapsAfterCheck.armed = True
+    if swap == "marker":
+        j.record_repair(1, digest, "RESTORED", "c")  # written under this store's own id
+        assert (a.anchor_home / a.store_id / "000000000001.repair").is_file()
+    else:
+        with pytest.raises(OSError):
+            j.record_repair(1, digest, "RESTORED", "c")  # no directory of this store there
+    # store B's anchor is as it was, and nothing was written under B's id in A's directories
+    assert _files(b.anchor_home) == foreign_before
+    if swap == "directory":  # the foreign anchor now in A's place holds only what B had
+        assert _files(a.anchor_home) == foreign_before
+    else:
+        assert not list((tmp_path / "a").rglob(f"{b.store_id}/*"))
+    with pytest.raises(JournalCorrupt, match="STORE_IDENTITY"):
+        j.read(0)  # and the next check stops this store
+
+
+def test_a_bound_spool_is_created_once_then_attached_and_never_recreated(tmp_path):
+    a, _b = _two_stores(tmp_path)
+    home = tmp_path / "spool"
+    with pytest.raises(TransportError, match="SPOOL_BINDING"):
+        SpoolTransport.attach(home, a.store_id)  # attach creates nothing
+    assert not home.exists()
+    t = SpoolTransport.create(home, a.store_id)
+    assert t.store_id == a.store_id and t.home == home and t.root == home / a.store_id
+    assert SpoolTransport(home / "plain").store_id is None
+    with pytest.raises(TransportError, match="SPOOL_EXISTS"):
+        SpoolTransport.create(home, a.store_id)
+    for bad in ("", "xyz", a.store_id.upper(), "../" + a.store_id, a.store_id + "0"):
+        for make in (SpoolTransport.create, SpoolTransport.attach):
+            with pytest.raises(TransportError, match="SPOOL_BINDING"):
+                make(home, bad)
+    assert sorted(p.name for p in home.iterdir()) == sorted([a.store_id, "plain"])
+    with pytest.raises(TransportError, match="SPOOL_BINDING"):
+        SpoolTransport.attach(home, None)  # attach never gives an unbound transport
+    racers: list[object] = []
+
+    def race():
+        try:
+            racers.append(SpoolTransport.create(home, "f" * 32))
+        except TransportError as exc:
+            racers.append(str(exc)[:12])
+
+    threads = [threading.Thread(target=race) for _ in range(8)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join()
+    assert sorted(str(r) for r in racers if isinstance(r, str)) == ["SPOOL_EXISTS"] * 7
+    shutil.rmtree(home / ("f" * 32))
+    again = SpoolTransport(home, store_id=a.store_id)  # the constructor attaches, too
+    item, fields = cand("A", "src/a")
+    w = Planner(again, identity="c", verifier_identities=(VER,), journal=a).dispatch(item, **fields)
+    assert [r.seal for r in t.published(Channel.WORK)] == [w.seal]
+    # the store's directories gone: an error on every call, never "no records", never re-made
+    shutil.rmtree(home / a.store_id / "WORK")
+    for call in (
+        lambda: t.publish(w),
+        lambda: t.claim(Channel.WORK, role=Role.IMPLEMENTER, identity=IMPL),
+        lambda: t.withdraw(w),
+        lambda: t.published(Channel.WORK),
+        lambda: t.claimed_records(Channel.WORK, identity=IMPL),
+        lambda: SpoolTransport.attach(home, a.store_id),
+    ):
+        with pytest.raises(TransportError, match="SPOOL_BINDING"):
+            call()
+    assert not (home / a.store_id / "WORK").exists()
+    # a link to another store's directories is not this store's spool
+    shutil.rmtree(home / a.store_id)
+    SpoolTransport.create(home, _b.store_id)
+    try:
+        (home / a.store_id).symlink_to(home / _b.store_id, target_is_directory=True)
+    except OSError:
+        return
+    with pytest.raises(TransportError, match="SPOOL_BINDING"):
+        SpoolTransport.attach(home, a.store_id)
+
+
+def test_two_stores_given_one_spool_directory_never_touch_each_others_records(tmp_path):
+    a, b = _two_stores(tmp_path)
+    home = tmp_path / "spool"
+    ta, tb = SpoolTransport.create(home, a.store_id), SpoolTransport.create(home, b.store_id)
+    item, fields = cand("A", "src/a")
+    w = Planner(ta, identity="c", verifier_identities=(VER,), journal=a).dispatch(item, **fields)
+    assert tb.published(Channel.WORK) == []
+    assert tb.claim(Channel.WORK, role=Role.IMPLEMENTER, identity=IMPL) is None
+    assert tb.claimed_records(Channel.WORK, identity=IMPL) == []
+    assert tb.withdraw(w) is True  # store B takes back "its" copy: there is none
+    assert tb.publish(w) is False
+    got = ta.claim(Channel.WORK, role=Role.IMPLEMENTER, identity=IMPL)
+    assert got is not None and got.seal == w.seal  # store A's record is untouched by all that
+    # all store B wrote is its own tombstone, under its own id
+    assert [p.parent.name for p in (home / b.store_id).rglob(f"{w.seal}.json")] == ["withdrawn"]
+    # each coordinator sees only its own store's work: no JOURNAL_BEHIND_TRANSPORT
+    common = dict(verifier_identities=(VER,), accept_same_filesystem=True)
+    ca = Coordinator(a, ta, identity="ca", status_path=tmp_path / "sa" / "s.json", **common)
+    cb = Coordinator(b, tb, identity="cb", status_path=tmp_path / "sb" / "s.json", **common)
+    assert cb.tick([cand("B", "src/a")])["admitted"] == ["B"]  # same paths, another store
+    sa, sb = ca.tick([]), cb.tick([])
+    assert (sa["state"], sb["state"]) == ("OK", "OK")
+    assert sa["transport_store"] == a.store_id and sb["transport_store"] == b.store_id
+    # contrast: two stores on one UNBOUND spool; the second coordinator stops on the first's work
+    plain = SpoolTransport(tmp_path / "plain")
+    kw = common | {"accept_unbound_transport": True}
+    a2, b2 = (
+        StoreJournal.create(tmp_path / n / "journal", tmp_path / n / "anchor") for n in ("c", "d")
+    )
+    c1 = Coordinator(a2, plain, identity="c1", status_path=tmp_path / "s1" / "s.json", **kw)
+    c2 = Coordinator(b2, plain, identity="c2", status_path=tmp_path / "s2" / "s.json", **kw)
+    assert c1.tick([cand("A", "src/a")])["transport_store"] == "UNBOUND"
+    with pytest.raises(JournalCorrupt, match="JOURNAL_BEHIND_TRANSPORT"):
+        c2.tick([])
+
+
+def test_a_coordinator_publishes_only_into_a_transport_bound_to_its_store(tmp_path):
+    a, b = _two_stores(tmp_path)
+    home = tmp_path / "spool"
+    ta, tb = SpoolTransport.create(home, a.store_id), SpoolTransport.create(home, b.store_id)
+    kw = dict(
+        identity="c",
+        verifier_identities=(VER,),
+        status_path=tmp_path / "status" / "s.json",
+        accept_same_filesystem=True,
+    )
+    for flag in (False, True):  # another store's transport is refused whatever is accepted
+        with pytest.raises(PlannerError, match="STORE_BINDING"):
+            Coordinator(a, tb, accept_unbound_transport=flag, **kw)
+    with pytest.raises(PlannerError, match="STORE_BINDING"):
+        Coordinator(a, SpoolTransport(tmp_path / "plain"), **kw)  # unbound: explicit only
+    assert not (tmp_path / "status").exists() and tb.published(Channel.WORK) == []
+    with pytest.raises(PlannerError, match="STATUS_PATH"):
+        Coordinator(a, ta, **(kw | {"status_path": home / "s.json"}))  # inside the spool home
+    c = Coordinator(a, ta, **kw)
+    assert c.tick([cand("A", "src/a")])["admitted"] == ["A"]
+    # the spool of this store goes missing under the running coordinator: HALTED, not "empty"
+    shutil.rmtree(home / a.store_id)
+    with pytest.raises(TransportError, match="SPOOL_BINDING"):
+        c.tick([cand("B", "src/b")])
+    status = json.loads((tmp_path / "status" / "s.json").read_text())
+    assert status["state"] == "HALTED" and status["reason"].startswith(
+        "TRANSPORT_ERROR:SPOOL_BINDING"
+    )
+    assert not (home / a.store_id).exists()
+    assert sorted(f.name for f in a.root.iterdir()) == ["000000000001.json", STORE_MARKER]
+
+
+def test_a_spool_missing_when_pump_claims_halts_the_tick_and_is_not_quarantined(tmp_path):
+    """The transport being gone is not a bad record: pump raises, the status is HALTED.
+
+    (Directories that go missing inside the tick's last transport call are a known limit.)
+    """
+    a, _b = _two_stores(tmp_path)
+    home = tmp_path / "spool"
+
+    class Vanishes(SpoolTransport):
+        armed = False
+
+        def claim(self, channel, *, role, identity):
+            if self.armed:  # after this tick's continuity check and recovery
+                shutil.rmtree(self.root, ignore_errors=True)
+            return super().claim(channel, role=role, identity=identity)
+
+    SpoolTransport.create(home, a.store_id)
+    t = Vanishes(home, store_id=a.store_id)
+    c = Coordinator(
+        a,
+        t,
+        identity="c",
+        verifier_identities=(VER,),
+        status_path=tmp_path / "status" / "s.json",
+        accept_same_filesystem=True,
+    )
+    assert c.tick([cand("A", "src/a")])["state"] == "OK"
+    t.armed = True
+    with pytest.raises(TransportUnavailable, match="SPOOL_BINDING"):
+        c.tick([])  # a tick that dispatches nothing
+    status = json.loads((tmp_path / "status" / "s.json").read_text())
+    assert status["state"] == "HALTED" and "SPOOL_BINDING" in status["reason"]
+    assert c.planner.quarantined == [] and not home.joinpath(a.store_id).exists()
+    # the planner alone does not swallow it either
+    with pytest.raises(TransportUnavailable):
+        c.planner.pump()
