@@ -17,11 +17,14 @@ This directory is source only. It deploys nothing, and adding it changes no runn
 
 ## Node contracts
 
-The contract documents each node is given are in [`contracts/`](./contracts/), imported
-unchanged and pinned by digest. Their classification and provenance are in
-[`contracts/PROVENANCE.md`](./contracts/PROVENANCE.md). The supervisor reads them from a
-`contracts` directory under `ATLAS_AUTONOMY_ETC`; placing them there is a deployment step
-and is not done by this repository.
+Four contract texts are versioned under [`contracts/`](./contracts/) and pinned by digest;
+this repository does not deploy them. At revision `a66f8ec01d632d747d398f0e9ab68e6016a59504`,
+`atlas_mission_supervisor.py` reads `GLOBAL-AUTONOMOUS-OPERATING-CONTRACT.md` and
+`GLOBAL-GOALS.json` from `${ATLAS_AUTONOMY_ETC}/contracts`, and includes
+`GLOBAL-CONTINUOUS-GOALS.json` when present. The supervisor does not read
+`AUTONOMY-POLICY.json`. Node availability therefore depends on separate operator
+configuration and deployment. Classification and provenance are in
+[`contracts/PROVENANCE.md`](./contracts/PROVENANCE.md).
 
 ## Provenance
 
