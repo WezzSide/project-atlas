@@ -10,7 +10,7 @@ import threading
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from project_atlas.orchestration.sdk.models import STATE_DIR_RELATIVE, SdkRuntimeError
 
@@ -83,6 +83,9 @@ def pid_is_alive(pid: int) -> bool:
     if pid <= 0:
         return False
     if os.name == "nt":
+        fast = _win_pid_is_alive_fast(pid)
+        if fast is not None:
+            return fast
         proc = subprocess.run(
             ["tasklist", "/FI", f"PID eq {pid}"],
             capture_output=True,
@@ -168,11 +171,165 @@ def new_supervisor_instance_id() -> str:
     return uuid.uuid4().hex
 
 
+#: 100-ns ticks from 0001-01-01 (.NET `DateTime` epoch) to 1601-01-01
+#: (Win32 `FILETIME` epoch) -- the exact constant .NET's own
+#: `DateTime.ToFileTimeUtc`/`FromFileTimeUtc` use internally, so a value
+#: produced by the fast ctypes path below and one produced by the
+#: PowerShell fallback (`Get-Process ... .StartTime.ToUniversalTime().Ticks`,
+#: a .NET `DateTime.Ticks`) are numerically identical for the same instant.
+#: That equivalence is deliberate: a lock record written by one path must
+#: still compare equal against a value read back through the other -- e.g.
+#: across an Atlas upgrade that changes which path is taken while a
+#: supervisor from the previous version is still running.
+_FILETIME_TO_DOTNET_TICKS_OFFSET = 504_911_232_000_000_000
+
+#: Win32 handles for the fast path, resolved exactly once at import time --
+#: not per call. `ctypes.POINTER(_FILETIME)` mints a distinct ctypes pointer
+#: *type* each time `_FILETIME` is (re)defined; setting `.argtypes` on the
+#: shared `kernel32.GetProcessTimes` function object from a `_FILETIME`
+#: class that gets locally redefined on every call is a genuine data race
+#: under concurrent callers -- one thread's redefinition can overwrite
+#: `.argtypes` out from under another thread mid-call, raising
+#: `ctypes.ArgumentError` ("expected LP__FILETIME instance instead of
+#: pointer to _FILETIME"). Reproduced directly under
+#: `test_n_thread_concurrent_acquire_only_one_holder` during development.
+#: A single module-level type and a single `argtypes` assignment, done once
+#: before any thread exists, has no such race.
+_win_kernel32: Any = None
+_WinFILETIME: Any = None
+
+if os.name == "nt":
+    try:
+        import ctypes as _ctypes
+        from ctypes import wintypes as _wintypes
+
+        class _WinFILETIME(_ctypes.Structure):  # type: ignore[no-redef]
+            _fields_ = (
+                ("dwLowDateTime", _wintypes.DWORD),
+                ("dwHighDateTime", _wintypes.DWORD),
+            )
+
+        _win_kernel32 = _ctypes.windll.kernel32
+        _win_kernel32.OpenProcess.restype = _wintypes.HANDLE
+        _win_kernel32.OpenProcess.argtypes = (
+            _wintypes.DWORD,
+            _wintypes.BOOL,
+            _wintypes.DWORD,
+        )
+        _win_kernel32.GetProcessTimes.argtypes = (
+            _wintypes.HANDLE,
+            _ctypes.POINTER(_WinFILETIME),
+            _ctypes.POINTER(_WinFILETIME),
+            _ctypes.POINTER(_WinFILETIME),
+            _ctypes.POINTER(_WinFILETIME),
+        )
+        _win_kernel32.GetProcessTimes.restype = _wintypes.BOOL
+        _win_kernel32.CloseHandle.argtypes = (_wintypes.HANDLE,)
+        _win_kernel32.WaitForSingleObject.argtypes = (_wintypes.HANDLE, _wintypes.DWORD)
+        _win_kernel32.WaitForSingleObject.restype = _wintypes.DWORD
+    except (AttributeError, OSError, ImportError):
+        _win_kernel32 = None
+        _WinFILETIME = None
+
+_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+_PROCESS_SYNCHRONIZE = 0x00100000
+_WAIT_OBJECT_0 = 0x0
+_WAIT_TIMEOUT = 0x102
+
+
+def _win_process_start_ticks_fast(pid: int) -> int | None:
+    """Win32 ``GetProcessTimes`` via ``ctypes``. No subprocess, no shell.
+
+    Returns ``None`` on anything short of a confirmed creation time --
+    invalid pid, exited pid, access denied, ``ctypes.windll`` unavailable
+    at import time (non-Windows, or a hardened environment) -- so the
+    caller's existing PowerShell path remains the single source of truth
+    for every case this fast path does not itself positively resolve.
+    This function only ever narrows how a positive answer is obtained; it
+    never changes what counts as one.
+    """
+    if _win_kernel32 is None:
+        return None
+
+    handle = _win_kernel32.OpenProcess(
+        _PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid)
+    )
+    if not handle:
+        # NULL: no such pid, or access denied (e.g. a protected/elevated
+        # process). Either way this is not a confirmed answer -- fall back.
+        return None
+    try:
+        creation = _WinFILETIME()
+        exit_time = _WinFILETIME()
+        kernel_time = _WinFILETIME()
+        user_time = _WinFILETIME()
+        ok = _win_kernel32.GetProcessTimes(
+            handle,
+            _ctypes.byref(creation),
+            _ctypes.byref(exit_time),
+            _ctypes.byref(kernel_time),
+            _ctypes.byref(user_time),
+        )
+        if not ok:
+            return None
+        filetime_ticks = int(creation.dwHighDateTime) << 32 | int(creation.dwLowDateTime)
+        if filetime_ticks <= 0:
+            return None
+        return filetime_ticks + _FILETIME_TO_DOTNET_TICKS_OFFSET
+    finally:
+        _win_kernel32.CloseHandle(handle)
+
+
+def _win_pid_is_alive_fast(pid: int) -> bool | None:
+    """Win32 ``WaitForSingleObject`` via ``ctypes``. No subprocess, no shell.
+
+    Returns ``None`` -- decline, defer to the ``tasklist`` fallback -- for
+    anything this cannot itself positively resolve, most importantly a
+    process this call cannot open a handle to (e.g. access denied on a
+    protected process that is nonetheless alive): ``tasklist`` can usually
+    still see such a process by enumeration even where ``OpenProcess``
+    cannot open it, and asserting ``False`` here for an access-denied
+    process would be a false "not alive". A timed wait of 0ms, not
+    ``GetExitCodeProcess``, is used deliberately: a real process's own exit
+    code can legitimately equal ``STILL_ACTIVE`` (259), which would make
+    that API ambiguous for this exact question.
+    """
+    if _win_kernel32 is None:
+        return None
+    handle = _win_kernel32.OpenProcess(
+        _PROCESS_QUERY_LIMITED_INFORMATION | _PROCESS_SYNCHRONIZE, False, int(pid)
+    )
+    if not handle:
+        return None
+    try:
+        wait_result = _win_kernel32.WaitForSingleObject(handle, 0)
+        if wait_result == _WAIT_TIMEOUT:
+            return True
+        if wait_result == _WAIT_OBJECT_0:
+            return False
+        return None
+    finally:
+        _win_kernel32.CloseHandle(handle)
+
+
 def process_start_identity(pid: int) -> str:
-    """Best-effort process start identity so PID reuse cannot inherit ownership."""
+    """Best-effort process start identity so PID reuse cannot inherit ownership.
+
+    Windows tries an in-process ``GetProcessTimes`` first (microseconds, no
+    child process); ``Get-Process`` in PowerShell (roughly two seconds of
+    ``powershell.exe`` startup per call, measured) is the fallback for
+    whatever the fast path does not positively resolve -- an exited pid, a
+    protected process this call cannot open, or ``ctypes`` itself being
+    unavailable. The fallback's behavior, including every failure mode, is
+    unchanged: this only adds a faster way to reach the same answer for the
+    common case, never a different answer.
+    """
     if pid <= 0:
         return "unknown"
     if os.name == "nt":
+        fast_ticks = _win_process_start_ticks_fast(pid)
+        if fast_ticks is not None:
+            return f"win:{fast_ticks}"
         try:
             ps_cmd = (
                 f"(Get-Process -Id {int(pid)} -ErrorAction Stop)"
