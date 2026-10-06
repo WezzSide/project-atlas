@@ -12,7 +12,7 @@ from typing import Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from project_atlas.orchestration.sdk.host import pid_is_alive
+from project_atlas.orchestration.sdk.host import pid_is_alive, process_start_identity
 from project_atlas.orchestration.sdk.models import STATE_DIR_RELATIVE
 
 STATUS_NAME: Final[str] = "resident-status.json"
@@ -26,6 +26,15 @@ class ResidentStatus(BaseModel):
     schema_version: Literal[2] = 2
     package_id: Literal["AS-ORCH-SELF-WAKE-RESIDENT-DRIVER-001"] = PACKAGE_ID  # type: ignore[assignment]
     GOVERNOR_PID: int = 0
+    #: `host.process_start_identity(GOVERNOR_PID)`, snapshotted at the same
+    #: moment `GOVERNOR_PID` was set. Absent on status files written before
+    #: this field existed (defaults to "", handled the same as "unknown").
+    #: Lets `status_claims_live` disprove a PID-reuse false positive instead
+    #: of trusting `pid_is_alive(GOVERNOR_PID)` alone -- see AS-WIN-RESIDENT-
+    #: LOCK-PID-REUSE. This is deliberately NOT `process_start_time` above,
+    #: which is this process's own `time.time()` self-report and is never
+    #: cross-checked against the OS, so it cannot disprove anything.
+    GOVERNOR_PROCESS_START_IDENTITY: str = ""
     SERVICE_INSTANCE_ID: str = ""
     STARTED_AT: float = 0.0
     process_start_time: float = 0.0
@@ -98,10 +107,24 @@ def persist_status(root: Path, status: ResidentStatus) -> ResidentStatus:
 
 
 def status_claims_live(status: ResidentStatus, *, now: float | None = None) -> bool:
-    """True only if PID exists AND heartbeat is fresh. Stale file = not live."""
+    """True only if PID exists AND heartbeat is fresh. Stale file = not live.
+
+    "PID exists" means: a live process with that pid, AND -- when a recorded
+    identity is available to check it against -- that live process is
+    positively the same one that last wrote this status, not a different
+    process that happened to reuse the pid within the heartbeat window.
+    A recorded identity absent (older status file) or unresolvable right
+    now falls back to the pid-alive-only check this always did; only a
+    positive disagreement counts as reuse. See AS-WIN-RESIDENT-LOCK-PID-REUSE.
+    """
     ts = time.time() if now is None else now
     if status.GOVERNOR_PID <= 0 or not pid_is_alive(status.GOVERNOR_PID):
         return False
+    recorded = status.GOVERNOR_PROCESS_START_IDENTITY
+    if recorded not in {"", "unknown"}:
+        live = process_start_identity(status.GOVERNOR_PID)
+        if live not in {"", "unknown"} and live != recorded:
+            return False
     written = status.status_written_at or status.LAST_SCHEDULER_TICK
     if written <= 0:
         return False
