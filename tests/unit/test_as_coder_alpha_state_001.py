@@ -9,6 +9,7 @@ from project_atlas.ask_atlas_live import ask_atlas_live
 from project_atlas.cli import EXIT_OK, main
 from project_atlas.connect import connect_project
 from project_atlas.project_state import build_state_lens, materialize_state_lenses
+from project_atlas.secrets import scan_text
 from project_atlas.web_api.knowledge import list_knowledge_answers
 
 
@@ -118,3 +119,25 @@ def test_materialize_state_idempotent(tmp_path: Path) -> None:
     assert path.read_text(encoding="utf-8") == (
         json.dumps(first["lenses"][0], indent=2, sort_keys=True) + "\n"
     )
+
+
+def test_json_unicode_escape_lifecycle_is_not_persisted(tmp_path: Path) -> None:
+    """AS-SEC-SCAN-STATE-JSON-ESC-001: decoded JSON-\\u secrets must not persist."""
+    token = "AKIAAAAAAAAAAAAAAAAA"
+    vault = tmp_path / "vault"
+    note = vault / "projects" / "harbor-api" / "project.md"
+    note.parent.mkdir(parents=True, exist_ok=True)
+    markdown = (
+        "# Harbor\n\n## Semantic record\n```json\n"
+        '{"lifecycle": "\\u0041KIAAAAAAAAAAAAAAAAA"}\n'
+        "```\n"
+    )
+    note.write_text(markdown, encoding="utf-8")
+    assert scan_text(markdown) == []
+    assert token not in markdown
+    materialize_state_lenses(vault, project_ids=["harbor-api"])
+    answer = (vault / "generated" / "answers" / "ans-state-harbor-api.json").read_text(
+        encoding="utf-8"
+    )
+    assert token not in answer
+    assert scan_text(answer) == []
