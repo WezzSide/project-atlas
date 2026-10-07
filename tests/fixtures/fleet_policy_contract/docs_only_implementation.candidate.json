@@ -1,0 +1,13 @@
+{
+  "fragment_status": "CANDIDATE_NOT_ADOPTED",
+  "fragment_note": "Candidate policy semantics for contract tests only. Not the operator policy and no evidence that any deployed policy contains this class. Role names are invented.",
+  "write_scope_enforcement": "NOT_IMPLEMENTED",
+  "class_name": "DOCS_ONLY_IMPLEMENTATION",
+  "declared_semantics": "A bounded repository implementation task whose intended mutation is limited to explicitly declared documentation files and which performs no runtime, deployment, credential, service, policy or executable-code mutation.",
+  "class_spec": {
+    "target_roles": [
+      "TEST-CONTROL-ROLE",
+      "TEST-VERIFY-ROLE"
+    ]
+  }
+}
