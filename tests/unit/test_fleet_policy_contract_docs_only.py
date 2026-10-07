@@ -118,7 +118,7 @@ def make_task(target_role: str, **overrides: Any) -> dict[str, Any]:
         "mission_id": "MISSION-TEST-CONTRACT",
         "target_role": target_role,
         "task_class": CLASS_NAME,
-        "outcome": "Add one documentation file describing an invented fixture",
+        "outcome": "Add one documentation file describing an invented example",
         "authority_reference": "AUTH-TEST-ANY",
         "idempotency_key": "IDEM-CONTRACT-0001",
         "success_condition": "The declared documentation file exists",
@@ -152,7 +152,7 @@ def test_class_name_is_exact(fragment: dict[str, Any]) -> None:
 
 def test_declared_semantics_are_exact(fragment: dict[str, Any]) -> None:
     """CANDIDATE_CONTRACT: the semantic description is pinned word for word."""
-    assert fragment["class_spec"]["declared_semantics"] == DECLARED_SEMANTICS
+    assert fragment["declared_semantics"] == DECLARED_SEMANTICS
 
 
 def test_target_roles_are_exactly_control_and_verify(
@@ -163,8 +163,17 @@ def test_target_roles_are_exactly_control_and_verify(
 
 
 def test_class_spec_has_no_other_keys(fragment: dict[str, Any]) -> None:
-    """CANDIDATE_CONTRACT: no flag (such as a synthetic-only flag) rides along."""
-    assert sorted(fragment["class_spec"]) == ["declared_semantics", "target_roles"]
+    """CANDIDATE_CONTRACT: the engine-facing spec is the role list and nothing else.
+
+    No flag (such as a synthetic-only flag) rides along, and the semantic
+    description stays outside the spec handed to the engine.
+    """
+    assert sorted(fragment["class_spec"]) == ["target_roles"]
+
+
+def test_fragment_carries_its_disclaimer(fragment: dict[str, Any]) -> None:
+    """CANDIDATE_CONTRACT: the fixture keeps its not-operator-policy note."""
+    assert "Not the operator policy" in fragment["fragment_note"]
 
 
 def test_write_scope_enforcement_is_declared_not_implemented(
@@ -178,9 +187,7 @@ def test_write_scope_enforcement_is_declared_not_implemented(
 
 
 @pytest.mark.parametrize("role", [CONTROL, VERIFY])
-def test_class_accepted_for_control_and_verify(
-    role: str, policy: dict[str, Any]
-) -> None:
+def test_class_accepted_for_control_and_verify(role: str, policy: dict[str, Any]) -> None:
     """CANDIDATE_CONTRACT: control and verify may be given this class."""
     decision = decide(make_task(role), policy)
     assert decision["decision"] == "ALLOW", decision["reason"]
@@ -218,9 +225,7 @@ def test_unrelated_role_does_not_gain_the_class(policy: dict[str, Any]) -> None:
     "near_miss",
     ["docs_only_implementation", "DOCS_ONLY", "DOCS-ONLY-IMPLEMENTATION"],
 )
-def test_near_miss_class_names_are_unknown(
-    near_miss: str, policy: dict[str, Any]
-) -> None:
+def test_near_miss_class_names_are_unknown(near_miss: str, policy: dict[str, Any]) -> None:
     """CANDIDATE_CONTRACT: only the exact class name is recognised."""
     decision = decide(make_task(CONTROL, task_class=near_miss), policy)
     assert decision["decision"] == "DENY"
@@ -238,9 +243,7 @@ def test_near_miss_class_names_are_unknown(
         "anything at all",
     ],
 )
-def test_engine_does_not_enforce_docs_only_scope(
-    scope: Any, policy: dict[str, Any]
-) -> None:
+def test_engine_does_not_enforce_docs_only_scope(scope: Any, policy: dict[str, Any]) -> None:
     """CURRENT_BEHAVIOR: WRITE_SCOPE_ENFORCEMENT = NOT_IMPLEMENTED.
 
     The engine requires only a non-empty scope. A task of this class whose
@@ -249,11 +252,4 @@ def test_engine_does_not_enforce_docs_only_scope(
     may be read as the engine rejecting an out-of-scope write.
     """
     decision = decide(make_task(CONTROL, scope=scope), policy)
-    assert decision["decision"] == "ALLOW", decision["reason"]
-
-
-def test_engine_ignores_declared_semantics_text(policy: dict[str, Any]) -> None:
-    """CURRENT_BEHAVIOR: the semantic description is not read by the engine."""
-    policy["allowed_classes"][CLASS_NAME]["declared_semantics"] = "changed"
-    decision = decide(make_task(VERIFY), policy)
     assert decision["decision"] == "ALLOW", decision["reason"]
