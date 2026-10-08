@@ -14,6 +14,7 @@ from typing import Any, Literal
 
 from project_atlas.authz import OperatorProfile, default_operator
 from project_atlas.compat_anchor import SNAPSHOT_ID, require_compatibility_anchor
+from project_atlas.secrets import scan_text
 
 PACKAGE_ID = "AS-2.1-WEB-ACTIONS-001"
 TRUTH_BOUNDARY = "WEB ACTION TXN != CANONICAL WRITE / UI!=TRUTH / != AUTHORITY"
@@ -58,11 +59,31 @@ def _ledger_path(vault: Path) -> Path:
     return vault / "generated" / "ops" / "web-actions" / "action-ledger.json"
 
 
+def _payload_has_secrets(value: Any) -> bool:
+    """Scan decoded payload strings. JSON \\u escapes are already resolved."""
+    if isinstance(value, str):
+        return bool(scan_text(value))
+    if isinstance(value, dict):
+        return any(_payload_has_secrets(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_payload_has_secrets(item) for item in value)
+    return False
+
+
 def load_action_ledger(vault: Path) -> dict[str, Any]:
     """Load or initialize the reconstructable action ledger."""
     path = _ledger_path(vault)
     if path.is_file():
         raw: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+        rows = raw.get("transactions")
+        if isinstance(rows, list):
+            # AS-SEC-SCAN-WEB-ACTIONS-LEDGER-JSON-ESC-001: rewrite of an
+            # existing ledger must not persist decoded \\u payload secrets.
+            raw["transactions"] = [
+                row
+                for row in rows
+                if not (isinstance(row, dict) and _payload_has_secrets(row))
+            ]
         return raw
     return {
         "schema_version": 1,
@@ -94,6 +115,9 @@ def submit_web_action(
     body = payload or {}
     if any(k in body for k in ("promote", "authority", "claim_id", "vault_write")):
         raise WebActionError("web-action-authority-fields-forbidden")
+    # AS-SEC-SCAN-WEBACT-JSON-001: json.loads decodes \u before persist.
+    if _payload_has_secrets(body):
+        raise WebActionError("web-action-secret-findings")
     txn = {
         "action_id": aid,
         "action_type": action_type,
