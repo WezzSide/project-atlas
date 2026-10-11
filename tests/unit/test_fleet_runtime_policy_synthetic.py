@@ -48,7 +48,7 @@ def synthetic_policy() -> dict[str, Any]:
             "evidence_requirements",
             "priority",
         ],
-        "optional_fields": ["parent_task_id"],
+        "optional_fields": ["parent_task_id", "execution_subject"],
         "denied_classes": ["DEPLOY", "MERGE", "CREDENTIALS"],
         "allowed_classes": {
             "VERIFY": {
@@ -398,7 +398,7 @@ class TestAuthorityAndMission:
         pinned_now: datetime,
     ) -> None:
         base_task["task_class"] = "CANARY"
-        base_task["scope"] = "synthetic isolated fixture"
+        base_task["execution_subject"] = "SYNTHETIC"
         base_task["authority_reference"] = "AUTH-VPS3-TASK-AUTHORING-001"
         # A mismatching subject, so the exemption itself is what allows the task.
         synthetic_policy["authority_registry"]["AUTH-VPS3-TASK-AUTHORING-001"]["subject"] = (
@@ -482,35 +482,71 @@ class TestSemanticGuards:
         decision = _evaluate(base_task, synthetic_policy, now=pinned_now)
         assert decision["decision"] == "ALLOW"
 
-    def test_synthetic_only_class_requires_synthetic_marker(
+    @pytest.mark.parametrize("subject", [None, "PRODUCTION"], ids=["absent", "production"])
+    def test_synthetic_only_class_requires_declared_synthetic_subject(
         self,
         base_task: dict[str, Any],
         synthetic_policy: dict[str, Any],
         pinned_now: datetime,
+        subject: str | None,
     ) -> None:
+        """EXPECTED_FUTURE_CONTRACT (implemented): a synthetic-only class needs
+        execution_subject SYNTHETIC; absent or PRODUCTION is denied."""
         base_task["task_class"] = "CANARY"
         base_task["authority_reference"] = "AUTH-VPS3-TASK-AUTHORING-001"
-        base_task["outcome"] = "Run the production database check"
-        base_task["scope"] = "production database"
-        base_task["evidence_requirements"] = "query log"
+        if subject is not None:
+            base_task["execution_subject"] = subject
         decision = _evaluate(base_task, synthetic_policy, now=pinned_now)
         assert decision["decision"] == "DENY"
         assert "SYNTHETIC_REQUIRED" in decision["reason"]
 
     @pytest.mark.parametrize("marker", ["synthetic", "isolated", "fixture", "canary"])
-    def test_synthetic_only_class_accepts_synthetic_markers(
+    def test_synthetic_marker_words_alone_do_not_satisfy_synthetic_only(
         self,
         base_task: dict[str, Any],
         synthetic_policy: dict[str, Any],
         pinned_now: datetime,
         marker: str,
     ) -> None:
+        """EXPECTED_FUTURE_CONTRACT (implemented): task text is not consulted. These
+        marker words satisfied synthetic_only under the previous free-text search."""
         base_task["task_class"] = "CANARY"
         base_task["authority_reference"] = "AUTH-VPS3-TASK-AUTHORING-001"
         base_task["outcome"] = f"Run the {marker} check"
         base_task["scope"] = f"{marker} environment"
         decision = _evaluate(base_task, synthetic_policy, now=pinned_now)
-        assert decision["decision"] == "ALLOW", marker
+        assert decision["decision"] == "DENY", marker
+        assert "SYNTHETIC_REQUIRED" in decision["reason"], marker
+
+    def test_synthetic_only_class_accepts_declared_synthetic_subject(
+        self,
+        base_task: dict[str, Any],
+        synthetic_policy: dict[str, Any],
+        pinned_now: datetime,
+    ) -> None:
+        """EXPECTED_FUTURE_CONTRACT (implemented): the declaration decides, whatever the
+        text says. It is the author's declaration, explicit and auditable, not proven."""
+        base_task["task_class"] = "CANARY"
+        base_task["authority_reference"] = "AUTH-VPS3-TASK-AUTHORING-001"
+        base_task["outcome"] = "Run the production database check"
+        base_task["scope"] = "production database"
+        base_task["execution_subject"] = "SYNTHETIC"
+        decision = _evaluate(base_task, synthetic_policy, now=pinned_now)
+        assert decision["decision"] == "ALLOW", decision["reason"]
+
+    @pytest.mark.parametrize("subject", ["synthetic", "TEST", "", 1, ["SYNTHETIC"]])
+    def test_unknown_execution_subject_is_schema_deny(
+        self,
+        base_task: dict[str, Any],
+        synthetic_policy: dict[str, Any],
+        pinned_now: datetime,
+        subject: Any,
+    ) -> None:
+        """EXPECTED_FUTURE_CONTRACT (implemented): only SYNTHETIC or PRODUCTION."""
+        base_task["execution_subject"] = subject
+        decision = _evaluate(base_task, synthetic_policy, now=pinned_now)
+        assert decision["decision"] == "DENY"
+        assert decision["reason"].startswith("SCHEMA:")
 
 
 class TestDedupeAndLimits:
