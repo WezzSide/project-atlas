@@ -5,8 +5,17 @@ Every policy, token, node, mission and task identifier below is invented for the
 tests. The queue service runs only as a subprocess bound to 127.0.0.1 on an
 ephemeral port with a temporary database and is terminated by the fixture; every
 file touched lives under ``tmp_path``. Each test carries exactly one label on the
-first line of its docstring: CURRENT_BEHAVIOR (passes at base) or
-EXPECTED_FUTURE_CONTRACT (strict xfail for the owner-adopted target contract).
+first line of its docstring: CURRENT_BEHAVIOR (held at base and still holds) or
+EXPECTED_FUTURE_CONTRACT (the owner-adopted target contract).
+
+Converted by lane H2 in a separate, labelled commit after the hardening landed. At
+base 5aec1653 the EXPECTED_FUTURE_CONTRACT tests were strict xfail; their markers are
+removed because the contract is now implemented. CURRENT_BEHAVIOR tests that pinned
+behaviour the hardening removed are re-labelled EXPECTED_FUTURE_CONTRACT and assert
+the fail-closed result; each docstring quotes the base behaviour it used to pin.
+Owner-path tests submit with TOK_EXEMPT, an identity whose record carries the
+explicit ``policy_exempt`` grant: an identity without it (TOK_OWN) is now
+policy-checked.
 """
 
 from __future__ import annotations
@@ -53,6 +62,7 @@ TOK_ENF2 = "TEST-TOKEN-ENF2-0005"
 TOK_OWN = "TEST-TOKEN-OWN-0002"
 TOK_WRK = "TEST-TOKEN-WRK-0003"
 TOK_INTAKE = "TEST-TOKEN-INTAKE-0004"
+TOK_EXEMPT = "TEST-TOKEN-EXEMPT-0006"
 
 REQUIRED_POLICY_KEYS = [
     "required_fields",
@@ -83,6 +93,12 @@ def default_tokens() -> dict[str, Any]:
         _digest(TOK_OWN): {"node": "TEST-NODE-OWN", "roles": [], "submit": True},
         _digest(TOK_WRK): {"node": "TEST-NODE-WRK", "roles": ["TEST-ROLE-1"]},
         _digest(TOK_INTAKE): {"node": "TEST-NODE-INTAKE", "roles": [], "mission_intake": True},
+        _digest(TOK_EXEMPT): {
+            "node": "TEST-NODE-EXEMPT",
+            "roles": [],
+            "submit": True,
+            "policy_exempt": True,
+        },
     }
 
 
@@ -460,44 +476,62 @@ def run_author_cli(
     return cp, decisions_dir
 
 
+def assert_policy_refusal(
+    svc: QueueService,
+    before: tuple[int, int],
+    code: int,
+    body: Any,
+    expect: str = "POLICY_INVALID",
+) -> None:
+    """An unusable policy is an explicit 503 with a distinct code, exactly one
+    policy_decision audit row carrying that code, and no task row."""
+    assert code == 503, body
+    assert "fails closed" in body["error"]
+    assert body["decision"]["code"] == expect
+    assert svc.counts() == (before[0], before[1] + 1)
+    row = svc.audit_rows()[-1]
+    assert row["action"] == "policy_decision"
+    detail = json.loads(row["detail"])
+    assert detail["decision"] == "DENY"
+    assert detail["code"] == expect
+
+
 # ---------------------------------------------------------------------------
 # Service-level reproducers 1-27
 # ---------------------------------------------------------------------------
 
 
 def test_r01_missing_policy_enforced_submit_503(svc: QueueService) -> None:
-    """CURRENT_BEHAVIOR
-    R-MISSING: deleted policy file -> 503 with 'fails closed' text, rows +0/+0."""
+    """EXPECTED_FUTURE_CONTRACT
+    R-MISSING (base: 503, rows +0/+0): deleted policy file -> 503 'fails closed',
+    POLICY_UNAVAILABLE, one audit row, no task."""
     svc.policy_path.unlink()
     before = svc.counts()
     code, body = svc.post("/tasks", task_t0(), TOK_ENF)
-    assert code == 503
-    assert "fails closed" in body["error"]
-    assert svc.counts() == before
+    assert_policy_refusal(svc, before, code, body, "POLICY_UNAVAILABLE")
 
 
 def test_r02_badjson_policy_drops_connection(svc: QueueService) -> None:
-    """CURRENT_BEHAVIOR
-    R-BADJSON: invalid JSON policy -> no HTTP response, rows +0/+0, /health 200,
-    stderr JSONDecodeError."""
+    """EXPECTED_FUTURE_CONTRACT
+    R-BADJSON (base: no HTTP response, rows +0/+0, stderr JSONDecodeError): invalid JSON
+    policy -> explicit 503 POLICY_INVALID with an audit row; /health 200."""
     svc.policy_path.write_bytes(b'{"policy_id": ')
     before = svc.counts()
-    svc.drop("POST", "/tasks", TOK_ENF, task_t0())
-    assert svc.counts() == before
+    code, body = svc.post("/tasks", task_t0(), TOK_ENF)
+    assert_policy_refusal(svc, before, code, body)
     code, _ = svc.get("/health")
     assert code == 200
-    assert svc.wait_stderr("JSONDecodeError")
 
 
 @pytest.mark.parametrize("payload", [b"[]", b'"x"', b"7", b"null"])
 def test_r03_nonobject_policy_drops_connection(svc: QueueService, payload: bytes) -> None:
-    """CURRENT_BEHAVIOR
-    R-NONOBJECT: non-object JSON policy -> no HTTP response, TypeError, rows +0/+0."""
+    """EXPECTED_FUTURE_CONTRACT
+    R-NONOBJECT (base: no HTTP response, TypeError): non-object JSON policy -> explicit
+    503 POLICY_INVALID with an audit row."""
     svc.policy_path.write_bytes(payload)
     before = svc.counts()
-    svc.drop("POST", "/tasks", TOK_ENF, task_t0())
-    assert svc.counts() == before
-    assert svc.wait_stderr("TypeError")
+    code, body = svc.post("/tasks", task_t0(), TOK_ENF)
+    assert_policy_refusal(svc, before, code, body)
 
 
 @pytest.mark.skipif(
@@ -505,71 +539,70 @@ def test_r03_nonobject_policy_drops_connection(svc: QueueService, payload: bytes
     reason="reproducer needs an unprivileged uid so a mode-000 policy file is unreadable",
 )
 def test_r04_unreadable_policy_drops_connection(svc: QueueService) -> None:
-    """CURRENT_BEHAVIOR
-    R-UNREADABLE: mode-000 policy file -> no HTTP response, PermissionError, rows +0/+0."""
+    """EXPECTED_FUTURE_CONTRACT
+    R-UNREADABLE (base: no HTTP response, PermissionError): mode-000 policy file ->
+    explicit 503 POLICY_UNAVAILABLE with an audit row."""
     svc.policy_path.chmod(0)
     try:
         before = svc.counts()
-        svc.drop("POST", "/tasks", TOK_ENF, task_t0())
-        assert svc.counts() == before
-        assert svc.wait_stderr("PermissionError")
+        code, body = svc.post("/tasks", task_t0(), TOK_ENF)
+        assert_policy_refusal(svc, before, code, body, "POLICY_UNAVAILABLE")
     finally:
         svc.policy_path.chmod(0o600)
 
 
 @pytest.mark.parametrize("key", REQUIRED_POLICY_KEYS)
 def test_r05_missing_policy_key_drops_connection(svc: QueueService, key: str) -> None:
-    """CURRENT_BEHAVIOR
-    R-MISSINGKEY: P0 minus one top-level key -> no HTTP response, KeyError '<key>', rows +0/+0."""
+    """EXPECTED_FUTURE_CONTRACT
+    R-MISSINGKEY (base: no HTTP response, KeyError '<key>'): P0 minus one top-level key ->
+    explicit 503 POLICY_INVALID naming the key, with an audit row."""
     svc.write_policy(without(policy_p0(), key))
     before = svc.counts()
-    svc.drop("POST", "/tasks", TOK_ENF, task_t0())
-    assert svc.counts() == before
-    assert svc.wait_stderr(f"KeyError: '{key}'")
+    code, body = svc.post("/tasks", task_t0(), TOK_ENF)
+    assert_policy_refusal(svc, before, code, body)
+    assert key in body["decision"]["reason"]
 
 
 def test_r06_lazy_limits_schema_version_denied_first(svc: QueueService) -> None:
-    """CURRENT_BEHAVIOR
-    R-LAZY: P0 minus limits + schema_version 2 -> 422 'schema_version must be 1',
-    one policy_decision row."""
+    """EXPECTED_FUTURE_CONTRACT
+    R-LAZY (base: 422 'schema_version must be 1' before the missing limits were noticed):
+    the policy is validated before any task check -> 503 POLICY_INVALID."""
     svc.write_policy(without(policy_p0(), "limits"))
+    before = svc.counts()
     code, body = svc.post("/tasks", task_t0(schema_version=2), TOK_ENF)
-    assert code == 422
-    assert "schema_version must be 1" in body["decision"]["reason"]
-    rows = svc.audit_rows()
-    assert len(rows) == 1
-    assert rows[0]["action"] == "policy_decision"
-    assert svc.counts()[0] == 0
+    assert_policy_refusal(svc, before, code, body)
+    assert "limits" in body["decision"]["reason"]
 
 
 @pytest.mark.parametrize("field", ["policy_id", "policy_version"])
 def test_r07_missing_provenance_field_allows_with_null(svc: QueueService, field: str) -> None:
-    """CURRENT_BEHAVIOR
-    R-PROVENANCE-NULL: P0 minus policy_id/policy_version -> 201 ALLOW with that field null."""
+    """EXPECTED_FUTURE_CONTRACT
+    R-PROVENANCE-NULL (base: 201 ALLOW with that field null): P0 minus
+    policy_id/policy_version -> 503 POLICY_INVALID."""
     svc.write_policy(without(policy_p0(), field))
+    before = svc.counts()
     code, body = svc.post("/tasks", task_t0(), TOK_ENF)
-    assert code == 201
-    assert body["policy_decision"]["decision"] == "ALLOW"
-    assert body["policy_decision"][field] is None
+    assert_policy_refusal(svc, before, code, body)
+    assert field in body["decision"]["reason"]
 
 
 def test_r08_target_roles_string_substring_widening(svc: QueueService) -> None:
-    """CURRENT_BEHAVIOR
-    R-SUBSTRING-WIDEN: target_roles as bare string + subject-less authority ->
-    role 'ROLE' gets 201 ALLOW."""
+    """EXPECTED_FUTURE_CONTRACT
+    R-SUBSTRING-WIDEN (base: role 'ROLE' got 201 ALLOW): target_roles as bare string ->
+    503 POLICY_INVALID; a wrong type never widens."""
     policy = policy_p0()
     policy["allowed_classes"]["VERIFY"]["target_roles"] = "TEST-ROLE-1"
     policy["authority_registry"]["AUTH-TEST-001"] = {"status": "current"}
     svc.write_policy(policy)
+    before = svc.counts()
     code, body = svc.post("/tasks", task_t0(target_role="ROLE"), TOK_ENF)
-    assert code == 201
-    assert body["policy_decision"]["decision"] == "ALLOW"
+    assert_policy_refusal(svc, before, code, body)
 
 
 def test_r09_badregex_order_dependent(svc: QueueService) -> None:
-    """CURRENT_BEHAVIOR
-    R-BADREGEX: (a) clean task drops on PatternError; (b) earlier match -> 422 HD-OK;
-    (c) earlier mission check -> 422."""
+    """EXPECTED_FUTURE_CONTRACT
+    R-BADREGEX (base: order-dependent drop / 422 HD-OK / 422 MISSION_UNKNOWN): a
+    non-compiling pattern makes every submission 503 POLICY_INVALID, whatever the task."""
     svc.write_policy(
         policy_p0(
             hard_deny_patterns=[
@@ -578,67 +611,64 @@ def test_r09_badregex_order_dependent(svc: QueueService) -> None:
             ]
         )
     )
-    before = svc.counts()
-    svc.drop("POST", "/tasks", TOK_ENF, task_t0())
-    assert svc.counts() == before
-    code, body = svc.post("/tasks", task_t0(outcome="print the password"), TOK_ENF)
-    assert code == 422
-    assert "HARD_DENY: HD-OK matched" in body["decision"]["reason"]
-    code, body = svc.post("/tasks", task_t0(mission_id="NOPE"), TOK_ENF)
-    assert code == 422
-    assert "MISSION_UNKNOWN" in body["decision"]["reason"]
-    assert svc.wait_stderr("PatternError") or "re.error" in svc.stderr()
+    for task in (task_t0(), task_t0(outcome="print the password"), task_t0(mission_id="NOPE")):
+        before = svc.counts()
+        code, body = svc.post("/tasks", task, TOK_ENF)
+        assert_policy_refusal(svc, before, code, body)
 
 
 def test_r10_badregex_verdict_patterns_class_dependent(svc: QueueService) -> None:
-    """CURRENT_BEHAVIOR
-    R-BADREGEX-CLASS: bad verdict_dictation pattern crashes VERIFY but not CANARY (201 ALLOW)."""
+    """EXPECTED_FUTURE_CONTRACT
+    R-BADREGEX-CLASS (base: VERIFY dropped, CANARY 201 ALLOW): a bad verdict_dictation
+    pattern is 503 POLICY_INVALID for every class."""
     svc.write_policy(policy_p0(verdict_dictation_patterns=["[bad"]))
-    svc.drop("POST", "/tasks", TOK_ENF, task_t0())
-    code, body = svc.post(
-        "/tasks", task_t0(task_class="CANARY", scope="synthetic fixture"), TOK_ENF
-    )
-    assert code == 201
-    assert body["policy_decision"]["decision"] == "ALLOW"
+    for task in (task_t0(), task_t0(task_class="CANARY", scope="synthetic fixture")):
+        before = svc.counts()
+        code, body = svc.post("/tasks", task, TOK_ENF)
+        assert_policy_refusal(svc, before, code, body)
 
 
 def test_r11_hard_deny_entry_without_id(svc: QueueService) -> None:
-    """CURRENT_BEHAVIOR
-    R-DENY-ID-MISSING: id-less hard_deny entry passes a clean task (201) but drops a match
-    with KeyError 'id'."""
+    """EXPECTED_FUTURE_CONTRACT
+    R-DENY-ID-MISSING (base: clean task 201, matching task dropped with KeyError 'id'):
+    an id-less hard_deny entry is 503 POLICY_INVALID for every task."""
     svc.write_policy(policy_p0(hard_deny_patterns=[{"re": "password"}]))
-    code, _ = svc.post("/tasks", task_t0(), TOK_ENF)
-    assert code == 201
-    before = svc.counts()
-    svc.drop("POST", "/tasks", TOK_ENF, task_t0(outcome="rotate the password"))
-    assert svc.counts() == before
-    assert svc.wait_stderr("KeyError: 'id'")
+    for task in (task_t0(), task_t0(outcome="rotate the password")):
+        before = svc.counts()
+        code, body = svc.post("/tasks", task, TOK_ENF)
+        assert_policy_refusal(svc, before, code, body)
 
 
 def test_r12_owner_path_never_reads_policy(svc: QueueService) -> None:
-    """CURRENT_BEHAVIOR
-    R-OWNER-PATH: owner-form envelope as OWN -> 201, policy_decision null, one submit row
-    (autonomous false), invalid policy never read."""
+    """EXPECTED_FUTURE_CONTRACT
+    R-OWNER-PATH (base: OWN without any flag got 201 unchecked): an identity without the
+    explicit grant is policy-checked (here: 503 on the invalid policy, no task); only the
+    explicitly exempt identity takes the owner path, which does not read the policy."""
     svc.policy_path.write_bytes(b'{"policy_id": ')
+    before = svc.counts()
     code, body = svc.post("/tasks", owner_body(), TOK_OWN)
+    assert_policy_refusal(svc, before, code, body)
+    code, body = svc.post("/tasks", owner_body(), TOK_EXEMPT)
     assert code == 201
     assert body["policy_decision"] is None
     row = svc.task_row("O-1")
     assert row is not None
     assert row["policy_decision"] is None
-    rows = svc.audit_rows()
-    assert len(rows) == 1
-    assert rows[0]["action"] == "submit"
-    assert json.loads(rows[0]["detail"])["autonomous"] is False
+    detail = json.loads(svc.audit_rows()[-1]["detail"])
+    assert svc.audit_rows()[-1]["action"] == "submit"
+    assert detail["autonomous"] is False
+    assert detail["policy_enforcement"] == "EXEMPT"
 
 
 def test_r13_enforced_identity_without_author_node_403(svc: QueueService) -> None:
-    """CURRENT_BEHAVIOR
-    R-ENFORCED-NO-AUTHOR: item-12 body as ENF -> 403, rows +0/+0."""
+    """EXPECTED_FUTURE_CONTRACT
+    R-ENFORCED-NO-AUTHOR (base: 403, rows +0/+0): item-12 body as ENF is evaluated by the
+    policy -> 422 SCHEMA DENY with one audit row, no task."""
     before = svc.counts()
-    code, _ = svc.post("/tasks", owner_body(), TOK_ENF)
-    assert code == 403
-    assert svc.counts() == before
+    code, body = svc.post("/tasks", owner_body(), TOK_ENF)
+    assert code == 422
+    assert body["decision"]["code"] == "SCHEMA"
+    assert svc.counts() == (before[0], before[1] + 1)
 
 
 def test_r14_author_node_not_bound_to_identity(svc: QueueService) -> None:
@@ -663,83 +693,94 @@ def test_r14_author_node_not_bound_to_identity(svc: QueueService) -> None:
 
 
 def test_r15_task_id_traversal_enforced_accepts_owner_rejects(svc: QueueService) -> None:
-    """CURRENT_BEHAVIOR
-    R-TASKID-PATH: traversal task_id -> 201 as ENF; same id as OWN -> 422 'bad task_id'."""
+    """EXPECTED_FUTURE_CONTRACT
+    R-TASKID-PATH (base: traversal id 201 as ENF): traversal task_id -> 422 on the
+    policy path and 422 'bad task_id' on the exempt path; no task row."""
     traversal_id = "../state/qp-traversal-proof"
-    code, _ = svc.post("/tasks", task_t0(task_id=traversal_id), TOK_ENF)
-    assert code == 201
-    assert svc.task_row(traversal_id) is not None
-    code, body = svc.post("/tasks", owner_body(traversal_id), TOK_OWN)
+    code, body = svc.post("/tasks", task_t0(task_id=traversal_id), TOK_ENF)
+    assert code == 422
+    assert body["decision"]["code"] == "SCHEMA"
+    assert svc.task_row(traversal_id) is None
+    code, body = svc.post("/tasks", owner_body(traversal_id), TOK_EXEMPT)
     assert code == 422
     assert "bad task_id" in body["error"]
+    assert svc.counts()[0] == 0
 
 
 def test_r16_created_at_not_scanned_by_hard_deny(svc: QueueService) -> None:
-    """CURRENT_BEHAVIOR
-    R-UNSCANNED: hard-deny words in created_at -> 201; same words in outcome -> 422 HARD_DENY."""
-    code, _ = svc.post(
+    """EXPECTED_FUTURE_CONTRACT
+    R-UNSCANNED (base: hard-deny words in created_at got 201): created_at must be RFC 3339
+    -> 422 SCHEMA; the same words in outcome -> 422 HARD_DENY."""
+    code, body = svc.post(
         "/tasks",
         task_t0(created_at="deploy to production and print the password"),
         TOK_ENF,
     )
-    assert code == 201
+    assert code == 422
+    assert body["decision"]["code"] == "SCHEMA"
     code, body = svc.post("/tasks", task_t0(outcome="deploy to production"), TOK_ENF)
     assert code == 422
     assert "HARD_DENY" in body["decision"]["reason"]
+    assert svc.counts()[0] == 0
 
 
 @pytest.mark.parametrize("created_at", ["banana", "2026-10-06T12:00:00", " x "])
 def test_r17_created_at_any_string_accepted(svc: QueueService, created_at: str) -> None:
-    """CURRENT_BEHAVIOR
-    R-CREATED-AT: arbitrary non-empty created_at strings -> 201 ALLOW."""
+    """EXPECTED_FUTURE_CONTRACT
+    R-CREATED-AT (base: 201 ALLOW): non-RFC-3339 created_at strings -> 422 SCHEMA."""
     code, body = svc.post("/tasks", task_t0(created_at=created_at), TOK_ENF)
-    assert code == 201
-    assert body["policy_decision"]["decision"] == "ALLOW"
+    assert code == 422
+    assert body["decision"]["code"] == "SCHEMA"
+    assert "created_at" in body["decision"]["reason"]
+    assert svc.counts()[0] == 0
 
 
 def test_r18_allow_decision_without_task_row(svc: QueueService) -> None:
-    """CURRENT_BEHAVIOR
-    R-ALLOW-NO-TASK-1: dict parent_task_id -> no response, audit +1 (policy_decision ALLOW),
-    tasks +0."""
+    """EXPECTED_FUTURE_CONTRACT
+    R-ALLOW-NO-TASK-1 (base: no response, an ALLOW audit row with no task): dict
+    parent_task_id -> 422 SCHEMA DENY, one DENY audit row, no ALLOW row, no task."""
     before = svc.counts()
-    svc.drop("POST", "/tasks", TOK_ENF, task_t0(parent_task_id={"free": ["form"]}))
-    after_tasks, after_audit = svc.counts()
-    assert after_tasks == before[0]
-    assert after_audit == before[1] + 1
-    row = svc.audit_rows()[-1]
-    assert row["action"] == "policy_decision"
-    assert json.loads(row["detail"])["decision"] == "ALLOW"
+    code, body = svc.post("/tasks", task_t0(parent_task_id={"free": ["form"]}), TOK_ENF)
+    assert code == 422
+    assert body["decision"]["code"] == "SCHEMA"
+    assert svc.counts() == (before[0], before[1] + 1)
+    assert allow_audit_rows(svc) == []
 
 
 def test_r19_allow_decision_then_409_on_terminal_same_key(svc: QueueService) -> None:
-    """CURRENT_BEHAVIOR
-    R-ALLOW-NO-TASK-2: idempotency_key in FAILED state -> 409 after an ALLOW audit row; tasks +0."""
+    """EXPECTED_FUTURE_CONTRACT
+    R-ALLOW-NO-TASK-2 (base: 409 after an ALLOW audit row): idempotency_key in FAILED
+    state -> 409 with a submit_rejected row and no new ALLOW row; tasks +0."""
     first = task_t0(task_id="TASK-KFAILED-1", idempotency_key="K-FAILED")
     code, _ = svc.post("/tasks", first, TOK_ENF)
     assert code == 201
     svc.exec_sql("UPDATE tasks SET state='FAILED' WHERE task_id=?", (first["task_id"],))
     before = svc.counts()
+    allow_before = allow_audit_rows(svc)
     code, _ = svc.post(
         "/tasks",
         task_t0(task_id="TASK-KFAILED-2", idempotency_key="K-FAILED"),
         TOK_ENF,
     )
     assert code == 409
-    after_tasks, after_audit = svc.counts()
-    assert after_tasks == before[0]
-    assert after_audit == before[1] + 1
+    assert svc.counts() == (before[0], before[1] + 1)
+    assert allow_audit_rows(svc) == allow_before
     row = svc.audit_rows()[-1]
-    assert row["action"] == "policy_decision"
-    assert json.loads(row["detail"])["decision"] == "ALLOW"
+    assert row["action"] == "submit_rejected"
 
 
 def test_r20_deny_audit_lost_on_nonstring_task_id(svc: QueueService) -> None:
-    """CURRENT_BEHAVIOR
-    R-DENY-LOST: task_id as list -> no response, rows +0/+0, stderr sqlite3.ProgrammingError."""
+    """EXPECTED_FUTURE_CONTRACT
+    R-DENY-LOST (base: no response, rows +0/+0, ProgrammingError): task_id as list ->
+    422 DENY recorded in one audit row with a NULL task_id."""
     before = svc.counts()
-    svc.drop("POST", "/tasks", TOK_ENF, task_t0(task_id=["x"]))
-    assert svc.counts() == before
-    assert svc.wait_stderr("ProgrammingError")
+    code, body = svc.post("/tasks", task_t0(task_id=["x"]), TOK_ENF)
+    assert code == 422
+    assert body["decision"]["decision"] == "DENY"
+    assert svc.counts() == (before[0], before[1] + 1)
+    row = svc.audit_rows()[-1]
+    assert row["task_id"] is None
+    assert json.loads(row["detail"])["decision"] == "DENY"
 
 
 def test_r21_byte_identical_resubmit_denied_by_dedupe(svc: QueueService) -> None:
@@ -855,19 +896,23 @@ def test_r26_tokens_file_missing_and_nonobject(svc: QueueService) -> None:
 
 
 def test_r27_libdir_not_honoured_by_service(make_service: Any, tmp_path: Path) -> None:
-    """CURRENT_BEHAVIOR
-    R-LIBDIR: service without the engine beside it ignores ATLAS_LIB_DIR: ENF -> 503,
-    OWN -> 201, quiet stderr."""
+    """EXPECTED_FUTURE_CONTRACT
+    R-LIBDIR (base: ENF 503 without audit, OWN 201): service without the engine beside it
+    ignores ATLAS_LIB_DIR: ENF and OWN (no grant) -> audited 503; only the explicitly
+    exempt identity -> 201; quiet stderr."""
     engine_home = tmp_path / "engine-only"
     engine_home.mkdir()
     shutil.copy(ENGINE_SRC, engine_home / ENGINE_SRC.name)
     svc = make_service(engine=False, extra_env={"ATLAS_LIB_DIR": str(engine_home)})
     time.sleep(0.2)
     assert svc.stderr().strip() == ""
-    code, body = svc.post("/tasks", task_t0(), TOK_ENF)
-    assert code == 503
-    assert "policy engine unavailable" in body["error"]
-    code, body = svc.post("/tasks", owner_body(), TOK_OWN)
+    for token in (TOK_ENF, TOK_OWN):
+        code, body = svc.post("/tasks", task_t0(), token)
+        assert code == 503
+        assert "policy engine unavailable" in body["error"]
+        assert json.loads(svc.audit_rows()[-1]["detail"])["code"] == "POLICY_ENGINE_UNAVAILABLE"
+    assert svc.counts()[0] == 0
+    code, body = svc.post("/tasks", owner_body(), TOK_EXEMPT)
     assert code == 201
     assert body["policy_decision"] is None
 
@@ -878,24 +923,15 @@ def test_r27_libdir_not_honoured_by_service(make_service: Any, tmp_path: Path) -
 
 
 def test_r28_synthetic_only_satisfied_by_free_text_word(loaded_policy: dict[str, Any]) -> None:
-    """CURRENT_BEHAVIOR
-    R-SYNTHETIC-WORD: CANARY with 'not synthetic' free text -> ALLOW;
-    without marker words -> SYNTHETIC_REQUIRED."""
-    allow_task = task_t0(
-        task_class="CANARY",
-        outcome="Restart the live production service; this is not synthetic",
-        scope="production host",
-    )
-    decision = policy_engine.evaluate(allow_task, loaded_policy, [], NOW)
-    assert decision["decision"] == "ALLOW"
-    deny_task = task_t0(
-        task_class="CANARY",
-        outcome="Restart the live service",
-        scope="production host",
-    )
-    decision = policy_engine.evaluate(deny_task, loaded_policy, [], NOW)
-    assert decision["decision"] == "DENY"
-    assert "SYNTHETIC_REQUIRED" in decision["reason"]
+    """EXPECTED_FUTURE_CONTRACT
+    R-SYNTHETIC-WORD (base: 'not synthetic' free text -> ALLOW): task text is not
+    consulted; without execution_subject SYNTHETIC both tasks -> SYNTHETIC_REQUIRED."""
+    for outcome in ("Restart the live production service; this is not synthetic",
+                    "Restart the live service"):
+        task = task_t0(task_class="CANARY", outcome=outcome, scope="production host")
+        decision = policy_engine.evaluate(task, loaded_policy, [], NOW)
+        assert decision["decision"] == "DENY"
+        assert "SYNTHETIC_REQUIRED" in decision["reason"]
 
 
 def test_r29_naive_now_makes_valid_until_unparseable(loaded_policy: dict[str, Any]) -> None:
@@ -926,14 +962,15 @@ def test_r30_open_tasks_shape_tolerated_or_crashes(loaded_policy: dict[str, Any]
 
 
 def test_r31_cli_author_server_drop_exit1(svc: QueueService, tmp_path: Path) -> None:
-    """CURRENT_BEHAVIOR
-    R-CLI-DROP: server policy invalid JSON -> author exits 1, RemoteDisconnected traceback,
-    zero decision files."""
+    """EXPECTED_FUTURE_CONTRACT
+    R-CLI-DROP (base: exit 1, RemoteDisconnected, zero decision files): server policy
+    invalid JSON -> explicit 503, author exits 3 with one recorded decision."""
     svc.policy_path.write_bytes(b'{"policy_id": ')
     cp, decisions_dir = run_author_cli(tmp_path, port=svc.port, task=task_t0())
-    assert cp.returncode == 1
-    assert "RemoteDisconnected" in cp.stderr
-    assert list(decisions_dir.glob("*.json")) == []
+    assert cp.returncode == 3, cp.stderr
+    out = json.loads(cp.stdout)
+    assert out["reason"].startswith("server rejected: policy engine unavailable")
+    assert len(list(decisions_dir.glob("*.json"))) == 1
 
 
 def test_r32_cli_author_server_503_recorded(svc: QueueService, tmp_path: Path) -> None:
@@ -1070,23 +1107,24 @@ def test_r37_cli_author_decision_record_best_effort(
 def test_r38_supervisor_queue_pull_task_id_traversal(
     svc: QueueService, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """CURRENT_BEHAVIOR
-    R-SUP-TRAVERSAL: claimed task ids containing '..' write inbox files into <VAR>/state/,
-    overwrite state.json, and next_task sees nothing."""
+    """EXPECTED_FUTURE_CONTRACT
+    R-SUP-TRAVERSAL (base: claimed '..' ids wrote inbox files into <VAR>/state/ and
+    overwrote state.json): such ids are refused at queue admission, so the supervisor has
+    nothing to claim and <VAR>/state/ is untouched. The supervisor itself is unchanged."""
     first = task_t0(
         task_id="../state/qp-traversal-proof", idempotency_key="IDEM-TRAV-1", priority=100
     )
     second = task_t0(task_id="../state/state", idempotency_key="IDEM-TRAV-2", priority=100)
     for task in (first, second):
         code, body = svc.post("/tasks", task, TOK_ENF)
-        assert code == 201, body
+        assert code == 422, body
+    assert svc.counts()[0] == 0
     etc = tmp_path / "etc"
     var = tmp_path / "var"
     (var / "state").mkdir(parents=True)
     etc.mkdir()
-    (var / "state" / "state.json").write_text(
-        json.dumps({"sentinel": "TEST-SENTINEL", "status": "OBSERVE_ONLY"})
-    )
+    sentinel = json.dumps({"sentinel": "TEST-SENTINEL", "status": "OBSERVE_ONLY"})
+    (var / "state" / "state.json").write_text(sentinel)
     wrk_token_path = tmp_path / "wrk.token"
     wrk_token_path.write_text(TOK_WRK)
     monkeypatch.setenv("ATLAS_AUTONOMY_ETC", str(etc))
@@ -1104,21 +1142,13 @@ def test_r38_supervisor_queue_pull_task_id_traversal(
         sys.path.remove(str(NODE_DIR))
     supervisor.queue_pull("TEST-ROLE-1")
     supervisor.queue_pull("TEST-ROLE-1")
-    proof = var / "state" / "qp-traversal-proof.json"
-    assert proof.exists()
-    assert json.loads(proof.read_text())["task_id"] == "../state/qp-traversal-proof"
-    assert (var / "state" / "qp-traversal-proof.lease.json").exists()
-    state_now = json.loads((var / "state" / "state.json").read_text())
-    assert state_now.get("task_id") == "../state/state"
-    assert state_now.get("sentinel") != "TEST-SENTINEL"
-    assert (var / "state" / "state.lease.json").exists()
-    assert supervisor.next_task("TEST-ROLE-1") is None
-    assert svc.task_row("../state/qp-traversal-proof")["state"] == "CLAIMED"
-    assert svc.task_row("../state/state")["state"] == "CLAIMED"
+    assert sorted(x.name for x in (var / "state").iterdir()) == ["state.json"]
+    assert (var / "state" / "state.json").read_text() == sentinel
 
 
 # ---------------------------------------------------------------------------
-# Owner-adopted future contract (strict xfail at base)
+# Owner-adopted future contract (strict xfail at base 5aec1653; implemented by H2,
+# markers removed). The owner submit path is the explicitly exempt identity.
 #
 # Canonical task-id contract (owner decision 2026-10-06): a task id is canonical only
 # if its first character is [A-Za-z0-9] and every remaining character is
@@ -1153,9 +1183,9 @@ def require_canonical_control(
     The same envelope with an explicitly canonical task id must first be accepted on the
     same request path (201 and a task row); only then may the case id be submitted. A
     dropped connection escapes as a transport error and a rejected control raises
-    RuntimeError, never AssertionError, so under xfail(raises=AssertionError) a broken
-    submit path fails/errors the test instead of reporting XFAIL without the id being
-    evaluated, and an unrelated blanket refusal cannot satisfy the refusal assertions.
+    RuntimeError, so a broken submit path errors the test instead of passing without the
+    id being evaluated, and an unrelated blanket refusal cannot satisfy the refusal
+    assertions.
     """
     code, _ = svc.post("/tasks", body, token)
     if code != 201 or svc.task_row(control_id) is None:
@@ -1215,10 +1245,6 @@ _UNSAFE_ID_FORMS = [
 _UNSAFE_ID_FORMS_OWNER_XFAIL = [f for f in _UNSAFE_ID_FORMS if "/" not in f[2]]
 _UNSAFE_ID_FORMS_OWNER_REJECTED = [f for f in _UNSAFE_ID_FORMS if "/" in f[2]]
 
-_XFAIL_ID_REASON = (
-    "EXPECTED_FUTURE_CONTRACT: item 1 unsafe task ids fail closed on every submit path"
-)
-
 # One explicitly canonical control id per case, unique per test (canonical alphabet, no
 # ".."); submitted on the same request path before the case id (see
 # require_canonical_control). The control envelope carries its own fresh idempotency
@@ -1238,7 +1264,6 @@ _CONTROL_IDS_OWNER = {
     _UNSAFE_ID_FORMS,
     ids=[f"{id_class}:{form}" for id_class, form, _ in _UNSAFE_ID_FORMS],
 )
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=_XFAIL_ID_REASON)
 def test_fc1_enforced_path_rejects_unsafe_task_ids(
     svc: QueueService, id_class: str, form: str, bad_id: str
 ) -> None:
@@ -1264,7 +1289,6 @@ def test_fc1_enforced_path_rejects_unsafe_task_ids(
     _UNSAFE_ID_FORMS_OWNER_XFAIL,
     ids=[f"{id_class}:{form}" for id_class, form, _ in _UNSAFE_ID_FORMS_OWNER_XFAIL],
 )
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=_XFAIL_ID_REASON)
 def test_fc1_owner_path_rejects_unsafe_task_ids(
     svc: QueueService, id_class: str, form: str, bad_id: str
 ) -> None:
@@ -1273,11 +1297,11 @@ def test_fc1_owner_path_rejects_unsafe_task_ids(
     before any state write and before any ALLOW decision is recorded."""
     control_id = _CONTROL_IDS_OWNER[(id_class, form)]
     require_canonical_control(
-        svc, owner_body(control_id, target_role="TEST-ROLE-1"), TOK_OWN, control_id
+        svc, owner_body(control_id, target_role="TEST-ROLE-1"), TOK_EXEMPT, control_id
     )
     tasks_before, _ = svc.counts()
     allow_before = allow_audit_rows(svc)
-    code, _ = svc.post("/tasks", owner_body(bad_id, target_role="TEST-ROLE-1"), TOK_OWN)
+    code, _ = svc.post("/tasks", owner_body(bad_id, target_role="TEST-ROLE-1"), TOK_EXEMPT)
     assert code not in (200, 201), (
         f"unsafe task id {bad_id!r} ({id_class}:{form}) must not be accepted"
     )
@@ -1296,10 +1320,9 @@ def test_fc1_owner_path_rejects_separator_task_ids_today(
     svc: QueueService, id_class: str, form: str, bad_id: str
 ) -> None:
     """CURRENT_BEHAVIOR
-    The owner submit path already rejects any task id containing '/' with 422
-    'bad task_id' before any state write; pinned as passing so these contract-item-1
-    forms are not double-counted as xfails."""
-    code, body = svc.post("/tasks", owner_body(bad_id, target_role="TEST-ROLE-1"), TOK_OWN)
+    The owner submit path (now: the explicitly exempt identity) rejects any task id
+    containing '/' with 422 'bad task_id' before any state write, as it did at base."""
+    code, body = svc.post("/tasks", owner_body(bad_id, target_role="TEST-ROLE-1"), TOK_EXEMPT)
     assert code == 422
     assert "bad task_id" in body["error"]
     assert svc.counts() == (0, 0), (
@@ -1324,7 +1347,9 @@ def test_fc1_canonical_task_ids_stay_accepted(
         assert code == 201
         assert body["policy_decision"]["decision"] == "ALLOW"
     else:
-        code, body = svc.post("/tasks", owner_body(task_id, target_role="TEST-ROLE-1"), TOK_OWN)
+        code, body = svc.post(
+            "/tasks", owner_body(task_id, target_role="TEST-ROLE-1"), TOK_EXEMPT
+        )
         assert code == 201
         assert body["policy_decision"] is None
     assert svc.task_row(task_id) is not None
@@ -1366,7 +1391,6 @@ _CONTROL_IDS_GENERATED = {
     _GENERATED_UNSAFE_IDS,
     ids=[label for label, _ in _GENERATED_UNSAFE_IDS],
 )
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=_XFAIL_ID_REASON)
 def test_fc1_generated_non_alphabet_task_ids_fail_closed(
     svc: QueueService, submit_path: str, gen_label: str, bad_id: str
 ) -> None:
@@ -1382,11 +1406,11 @@ def test_fc1_generated_non_alphabet_task_ids_fail_closed(
         code, _ = svc.post("/tasks", task_t0(task_id=bad_id), TOK_ENF)
     else:
         require_canonical_control(
-            svc, owner_body(control_id, target_role="TEST-ROLE-1"), TOK_OWN, control_id
+            svc, owner_body(control_id, target_role="TEST-ROLE-1"), TOK_EXEMPT, control_id
         )
         tasks_before, _ = svc.counts()
         allow_before = allow_audit_rows(svc)
-        code, _ = svc.post("/tasks", owner_body(bad_id, target_role="TEST-ROLE-1"), TOK_OWN)
+        code, _ = svc.post("/tasks", owner_body(bad_id, target_role="TEST-ROLE-1"), TOK_EXEMPT)
     assert code not in (200, 201), (
         f"unsafe task id {bad_id!r} ({gen_label}) must not be accepted"
     )
@@ -1396,17 +1420,14 @@ def test_fc1_generated_non_alphabet_task_ids_fail_closed(
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="EXPECTED_FUTURE_CONTRACT: item 2 submit path decided by the identity record",
-)
 def test_fc2_submit_path_decided_by_identity_record(svc: QueueService) -> None:
     """EXPECTED_FUTURE_CONTRACT
     Item 2: an identity whose record carries no explicit exemption is policy-enforced;
     omitting author_node must not bypass policy."""
     code, _ = svc.post("/tasks", owner_body("O-FC2-1"), TOK_OWN)
     tasks, _ = svc.counts()
+    code_exempt, _ = svc.post("/tasks", owner_body("O-FC2-2"), TOK_EXEMPT)
+    assert code_exempt == 201, "control: the explicit grant still selects the owner path"
     assert code not in (200, 201), "policy-evading envelope must not be accepted"
     assert tasks == 0, "no task row may be written"
 
@@ -1422,11 +1443,6 @@ _FC3_CASES = [
 
 
 @pytest.mark.parametrize("case", _FC3_CASES)
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="EXPECTED_FUTURE_CONTRACT: item 3 invalid policy fails closed with audit evidence",
-)
 def test_fc3_policy_failure_explicit_fail_closed(svc: QueueService, case: str) -> None:
     """EXPECTED_FUTURE_CONTRACT
     Item 3: invalid or incomplete policy -> explicit fail-closed result with durable audit
@@ -1463,11 +1479,6 @@ def test_fc3_policy_failure_explicit_fail_closed(svc: QueueService, case: str) -
 
 
 @pytest.mark.parametrize("created_at", ["banana", "2026-10-06T12:00:00", " x "])
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="EXPECTED_FUTURE_CONTRACT: item 4 created_at must be timezone-aware RFC 3339",
-)
 def test_fc4_created_at_must_be_timezone_aware_rfc3339(
     svc: QueueService, created_at: str
 ) -> None:
@@ -1487,11 +1498,6 @@ def test_fc4_created_at_must_be_timezone_aware_rfc3339(
         "Restart the live production service in a synthetic change-window drill",
     ],
     ids=["negated", "non-negated"],
-)
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="EXPECTED_FUTURE_CONTRACT: item 5 free text alone must not satisfy synthetic-only",
 )
 def test_fc5_synthetic_free_text_alone_not_allow(
     loaded_policy: dict[str, Any], outcome: str
