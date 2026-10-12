@@ -1,0 +1,39 @@
+{
+  "program_mode": "continuous_authorized_program",
+  "directive": "ATLAS-IMPROVEMENT-PLANE-PROGRESS-SENSITIVITY-004",
+  "checkpoint_id": "AS-IMPR-PLANE-004-CHECKPOINT-001",
+  "captured_at": "2026-09-10T10:45:00+02:00",
+  "lane": {
+    "worktree": "/home/gebruiker/Projects/project-atlas-worktrees/improvement-plane-progress-sensitivity-004",
+    "branch": "feat/as-impr-plane-progress-sensitivity-004",
+    "base_head": "d4e084c769bfbddd4b6a390e133bcd39011d2b3b",
+    "base_tree": "087dc06e5678ca935e308543ab9eb640acff2a17"
+  },
+  "frozen_candidate": {
+    "pr": 792,
+    "head": "d4e084c769bfbddd4b6a390e133bcd39011d2b3b",
+    "tree": "087dc06e5678ca935e308543ab9eb640acff2a17",
+    "mutated": false
+  },
+  "completed_tasks": [
+    {
+      "id": "repair-e09-e10-progress-signals",
+      "status": "done",
+      "evidence": [
+        "docs/AS-IMPR-PLANE-004-PROGRESS-SENSITIVITY.md",
+        "docs/evidence/AS-IMPR-PLANE-004-DOC-RECEIPT.md",
+        "docs/evidence/as-impr-plane-progress-sensitivity-004/baseline-vs-candidate-comparison.json"
+      ]
+    }
+  ],
+  "queue": [
+    {
+      "id": "publish-successor-review-candidate",
+      "status": "in_progress",
+      "scope": "successor lane only",
+      "notes": "Create focused commit, push branch, and open successor PR."
+    }
+  ],
+  "blockers": [],
+  "next_eligible_action": "publish-successor-review-candidate"
+}
