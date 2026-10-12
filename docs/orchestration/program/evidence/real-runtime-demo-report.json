@@ -1,0 +1,37 @@
+{
+  "cycles_run": 3,
+  "estimated_cost_note": "client-side estimate reported by the runtime; not billed spend",
+  "estimated_cost_usd": 1.2861708000000003,
+  "execution_authorized": false,
+  "launches_this_run": 2,
+  "merge_authorized": false,
+  "notifications": [
+    {
+      "detail": {
+        "tasks": [
+          "step-a",
+          "step-b"
+        ]
+      },
+      "kind": "PROGRAM_COMPLETE",
+      "message": "every task in the approved program reached an accepted state"
+    }
+  ],
+  "program_complete": true,
+  "program_id": "atlas-real-runtime-demo",
+  "stop_reason": "PROGRAM_COMPLETE",
+  "tasks_dispatched": [
+    {
+      "cycle": 1,
+      "mode": "NEW",
+      "task_id": "step-a"
+    },
+    {
+      "cycle": 2,
+      "mode": "NEW",
+      "task_id": "step-b"
+    }
+  ],
+  "total_launches": 2,
+  "truth_boundary": "PROGRAM_APPROVAL != MERGE_AUTHORIZATION / WORKER_REPORTED_COMPLETION != ACCEPTANCE / ACCEPTANCE != INDEPENDENT_VERIFICATION / TASK_COMPLETE != PROGRAM_COMPLETE / ADAPTER_EXIT_ZERO != ACCEPTANCE_PASSED / ESTIMATED_COST != BILLED_SPEND"
+}

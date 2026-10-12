@@ -1,0 +1,240 @@
+{
+  "concurrent_acceptance": {
+    "claim": "Claude Code + Codex concurrent program acceptance: two runtimes progressing through separate approved task queues under one supervisor, two workers in flight at once, four tasks, one invocation, no operator prompt between them",
+    "does_not_claim": [
+      "any runtime other than claude-code 2.1.267 and codex-cli 0.153.4",
+      "long or difficult tasks -- these were one-line file writes",
+      "more than two concurrent workers",
+      "billed spend; the cost figure is a client-side estimate where it exists at all, and Codex reports none"
+    ],
+    "evidence": "docs/orchestration/program/evidence/SYSTEMWIDE-ACCEPTANCE.md"
+  },
+  "generated_by": "project_atlas.orchestration.program.runtimes",
+  "implemented_fixture_only": [
+    {
+      "adapter": "local-command",
+      "capabilities": {
+        "accepts_assigned_session": true,
+        "reports_cost": false,
+        "supports_cost_limit": false,
+        "supports_result_schema": false,
+        "supports_resume": false,
+        "supports_session_probe": true
+      },
+      "executable": null,
+      "installed": true,
+      "is_fixture": true,
+      "notes": [
+        "FIXTURE. Proves supervisor behaviour deterministically and without a model call. FIXTURE_RUN != REAL_RUNTIME_COMPATIBILITY"
+      ],
+      "runtime_enforced": [
+        "nothing; it runs a fixed argv"
+      ],
+      "runtime_evidence": [],
+      "support_tier": "IMPLEMENTED_FIXTURE_ONLY",
+      "unsupported": [
+        "attach to a running interactive session",
+        "adopt a process this supervisor did not start",
+        "guarantee a worker stays inside its declared mutation paths",
+        "anything a model does"
+      ],
+      "version": "FIXTURE"
+    }
+  ],
+  "merge_authorized": false,
+  "no_generic_adapter": "There is deliberately no generic subprocess adapter. Launching a process is not the same as understanding a runtime's output, its terminal states, its permission model or its resume contract -- and an adapter that does the first while claiming the rest is a support claim nobody has checked.",
+  "runtime_tested": [
+    {
+      "adapter": "claude-code",
+      "capabilities": {
+        "accepts_assigned_session": true,
+        "reports_cost": true,
+        "supports_cost_limit": true,
+        "supports_result_schema": true,
+        "supports_resume": true,
+        "supports_session_probe": true
+      },
+      "executable": "claude",
+      "installed": true,
+      "is_fixture": false,
+      "notes": [
+        "session identity can be assigned before launch (--session-id), so an interrupted attempt stays addressable",
+        "resume by session id works from any directory from 2.1.223",
+        "--permission-prompts requires 2.1.259; below that an unattended run would wait for an approval nobody can give",
+        "prefers ANTHROPIC_API_KEY over a logged-in subscription when both are present"
+      ],
+      "runtime_enforced": [
+        "--permission-mode",
+        "--allowedTools / --disallowedTools / --tools",
+        "--permission-prompts none",
+        "--restricted (file tools confined to the working directories)",
+        "--max-budget-usd (against the runtime's own estimate)"
+      ],
+      "runtime_evidence": [
+        "docs/orchestration/program/evidence/REAL-RUNTIME-DEMO.md",
+        "docs/orchestration/program/evidence/SYSTEMWIDE-ACCEPTANCE.md"
+      ],
+      "support_tier": "IMPLEMENTED_AND_RUNTIME_TESTED",
+      "unsupported": [
+        "attach to a running interactive session",
+        "adopt a process this supervisor did not start",
+        "guarantee a worker stays inside its declared mutation paths",
+        "filesystem confinement without --restricted",
+        "a cost figure that is an actual charge rather than an estimate"
+      ],
+      "version": "2.1.267"
+    },
+    {
+      "adapter": "codex",
+      "capabilities": {
+        "accepts_assigned_session": false,
+        "reports_cost": false,
+        "supports_cost_limit": false,
+        "supports_result_schema": true,
+        "supports_resume": true,
+        "supports_session_probe": true
+      },
+      "executable": "codex",
+      "installed": true,
+      "is_fixture": false,
+      "notes": [
+        "mints its own thread id and announces it in the first thread.started event; the adapter streams that event file to disk so the identity survives a supervisor crash",
+        "resume is `codex exec resume <thread-id>`",
+        "reports token usage only, so this package reports cost as unknown rather than estimating one",
+        "exits 0 on a task it could not perform: observed refusing a write under --sandbox read-only with a completed turn"
+      ],
+      "runtime_enforced": [
+        "--sandbox read-only | workspace-write | danger-full-access (a real filesystem boundary, verified by observation)",
+        "--add-dir (additional writable roots)",
+        "--cd (working root)"
+      ],
+      "runtime_evidence": [
+        "docs/orchestration/program/evidence/REAL-RUNTIME-DEMO-CODEX.md",
+        "docs/orchestration/program/evidence/SYSTEMWIDE-ACCEPTANCE.md"
+      ],
+      "support_tier": "IMPLEMENTED_AND_RUNTIME_TESTED",
+      "unsupported": [
+        "attach to a running interactive session",
+        "adopt a process this supervisor did not start",
+        "guarantee a worker stays inside its declared mutation paths",
+        "assigning a session id before launch",
+        "reporting cost in any currency",
+        "a per-launch spend cap",
+        "a single structured result object (events are JSONL)"
+      ],
+      "version": "0.153.4"
+    }
+  ],
+  "tiers": {
+    "IMPLEMENTED_AND_RUNTIME_TESTED": "an adapter exists AND has been exercised end to end against the real runtime; the evidence is named",
+    "IMPLEMENTED_FIXTURE_ONLY": "an adapter exists and passes its tests; no real-runtime run backs it",
+    "INVENTORIED_UNAVAILABLE": "inventoried, deliberately not adapted; the blocker is named"
+  },
+  "unavailable": [
+    {
+      "adapter_implemented": false,
+      "blocker": "the account is at its usage limit: 'You've hit your usage limit ... Your usage limits will reset when your monthly cycle ends'. Raising a spend limit or switching to another account to get round it is not authorized, and would not be the right thing to do anyway",
+      "executable": "cursor-agent",
+      "installed": true,
+      "name": "Cursor Agent",
+      "practical_demand": "high: Atlas's existing orchestration.sdk lane is Cursor-based (backend.py, cli_execution_port.py). Those ports are pinned to that lane's own canonical PR and repository, so they do not satisfy this package's adapter contract, but the demand for a Cursor adapter here is real",
+      "support_tier": "INVENTORIED_UNAVAILABLE",
+      "unverified": [
+        "the shape of --output-format json",
+        "how a terminal state is signalled",
+        "the error taxonomy, and how a refusal differs from a failure",
+        "whether --resume preserves the working directory"
+      ],
+      "verified_capabilities": [
+        "-p/--print for non-interactive use",
+        "--output-format text|json|stream-json",
+        "--resume [chatId] and --continue",
+        "create-chat returns a chat id before any run",
+        "--mode plan|ask for read-only operation",
+        "--force/--yolo, --auto-review, --sandbox enabled|disabled",
+        "--workspace, --add-dir, -w/--worktree",
+        "--trust is REQUIRED for a non-interactive run in an untrusted directory; without it the run exits 1 and says so"
+      ],
+      "version": "2026.09.08-6caf4ff"
+    },
+    {
+      "adapter_implemented": false,
+      "blocker": "authentication cannot be validated: the GitHub token is present but the account is rate limited (HTTP 403, 'API rate limit exceeded for user ID ...'), which also breaks `gh auth status`. Waiting for the limit to reset is the fix; working round it is not",
+      "executable": "copilot",
+      "installed": true,
+      "name": "GitHub Copilot CLI",
+      "practical_demand": "moderate: Copilot is in use on this host, but nothing in Atlas orchestrates it today",
+      "support_tier": "INVENTORIED_UNAVAILABLE",
+      "unverified": [
+        "the JSONL event vocabulary",
+        "how a terminal state is signalled",
+        "whether the prompt can be delivered off argv",
+        "the error taxonomy"
+      ],
+      "verified_capabilities": [
+        "-p/--prompt <text> for non-interactive use",
+        "--output-format json emits JSONL, one object per line",
+        "--session-id <id> BOTH resumes a session AND sets the UUID for a new one, so an identity can be assigned before launch",
+        "-r/--resume[=id] and --continue",
+        "--allow-all-tools is required for non-interactive mode",
+        "--allow-tool / --deny-tool for per-tool permissions",
+        "--add-dir, --allow-all-paths, --log-dir, --no-color",
+        "--acp starts an Agent Client Protocol server"
+      ],
+      "version": "1.0.83."
+    },
+    {
+      "adapter_implemented": false,
+      "blocker": null,
+      "executable": "gemini",
+      "installed": true,
+      "name": "Gemini CLI",
+      "practical_demand": "none observed: no Atlas code, document or work package references it. Adapting it would be building for a user nobody has",
+      "support_tier": "INVENTORIED_UNAVAILABLE",
+      "unverified": [
+        "everything beyond its presence"
+      ],
+      "verified_capabilities": [
+        "installed and on PATH"
+      ],
+      "version": "0.58.0"
+    },
+    {
+      "adapter_implemented": false,
+      "blocker": null,
+      "executable": "aider",
+      "installed": true,
+      "name": "Aider",
+      "practical_demand": "none observed",
+      "support_tier": "INVENTORIED_UNAVAILABLE",
+      "unverified": [
+        "everything beyond its presence"
+      ],
+      "verified_capabilities": [
+        "installed and on PATH"
+      ],
+      "version": "0.86.2"
+    },
+    {
+      "adapter_implemented": false,
+      "blocker": null,
+      "executable": "amp",
+      "installed": true,
+      "name": "Amp",
+      "practical_demand": "none observed",
+      "support_tier": "INVENTORIED_UNAVAILABLE",
+      "unverified": [
+        "everything beyond its presence"
+      ],
+      "verified_capabilities": [
+        "installed and on PATH"
+      ],
+      "version": "0.0.1788580839-ga71d30"
+    }
+  ],
+  "universally_unsupported": [
+    "attach to a running interactive session",
+    "adopt a process this supervisor did not start",
+    "guarantee a worker stays inside its declared mutation paths"
+  ]
+}

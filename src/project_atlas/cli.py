@@ -3408,6 +3408,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     register_atlas3_parsers(subparsers)
 
+    # AS-ORCH-PROGRAM-SUPERVISOR-001 additive commands, owner-authorized by
+    # ATLAS-SUPERVISOR-OPERATIONAL-INTEGRATION-002. `program` and `agent` are
+    # not Atlas 3 owned names and this registration does not touch the Atlas 3
+    # seam above; both surfaces attach to the same `subparsers` independently.
+    from project_atlas.orchestration.program.cli import (
+        register_agent_parser,
+        register_program_parser,
+    )
+
+    register_program_parser(subparsers)
+    register_agent_parser(subparsers)
+
     return parser
 
 
@@ -6151,6 +6163,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error(  # pragma: no cover
             f"unknown orchestrator command: {args.orchestrator_command}"
         )
+
+    if args.command in {"program", "agent"}:
+        # One lifecycle interface, not a second one: these delegate straight
+        # into the same functions `python -m project_atlas.orchestration
+        # .program.cli` calls, so `atlas program ...` and the module entry
+        # point cannot drift apart.
+        from project_atlas.orchestration.program.cli import dispatch_cli, emit
+
+        payload, exit_code = dispatch_cli(args)
+        emit(payload)
+        return exit_code
 
     from project_atlas.atlas3.cli import dispatch_atlas3
 

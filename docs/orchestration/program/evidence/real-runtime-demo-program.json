@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "program": {
+    "program_id": "atlas-real-runtime-demo",
+    "objective": "Demonstrate the supervisor running two dependent tasks through the real Claude Code runtime with no user prompt between them.",
+    "approved_by": "wesley",
+    "approval_reference": "docs/orchestration/program/REAL-RUNTIME-DEMO.md",
+    "workspace_root": "workspace",
+    "base_pin": "317d9086c03bfaaceab5f55ce4eed2c74a3399ee",
+    "limits": {
+      "max_task_launches": 4,
+      "max_attempts_per_task": 2,
+      "max_task_seconds": 300,
+      "max_program_seconds": 1800,
+      "max_cycles": 12,
+      "max_idle_cycles": 2,
+      "idle_sleep_seconds": 0.0
+    },
+    "tasks": [
+      {
+        "task_id": "step-a",
+        "title": "Create the marker file",
+        "instruction": "Create a file named exactly hello.txt in the current working directory whose entire content is the single line: ATLAS-STEP-A-DONE\nDo not create or modify any other file. When the file exists, stop.",
+        "profile_ref": "implementer",
+        "mutation_paths": ["hello.txt"],
+        "surface_id": "marker-a",
+        "surface_semantic": "MARKER_A",
+        "capabilities_required": ["IMPLEMENT"],
+        "acceptance": [
+          {
+            "check_id": "hello-content",
+            "kind": "FILE_MATCHES",
+            "description": "hello.txt contains ATLAS-STEP-A-DONE",
+            "path": "hello.txt",
+            "pattern": "ATLAS-STEP-A-DONE"
+          }
+        ]
+      },
+      {
+        "task_id": "step-b",
+        "title": "Derive the second file from the first",
+        "instruction": "Read the file hello.txt in the current working directory. Create a file named exactly world.txt whose entire content is the single line: DERIVED-FROM:<contents of hello.txt, trimmed>\nFor example if hello.txt contains ATLAS-STEP-A-DONE then world.txt must contain DERIVED-FROM:ATLAS-STEP-A-DONE\nDo not create or modify any other file. When the file exists, stop.",
+        "profile_ref": "implementer",
+        "depends_on": ["step-a"],
+        "mutation_paths": ["world.txt"],
+        "surface_id": "marker-b",
+        "surface_semantic": "MARKER_B",
+        "capabilities_required": ["IMPLEMENT"],
+        "acceptance": [
+          {
+            "check_id": "world-derived",
+            "kind": "FILE_MATCHES",
+            "description": "world.txt records that it was derived from step-a's output",
+            "path": "world.txt",
+            "pattern": "DERIVED-FROM:ATLAS-STEP-A-DONE"
+          }
+        ]
+      }
+    ]
+  },
+  "profile_defaults": {
+    "adapter": "claude-code",
+    "credential": "SUBSCRIPTION_OAUTH",
+    "adapter_min_version": "2.1.259"
+  },
+  "profiles": {
+    "implementer": {
+      "agent_id": "claude-code-implementer",
+      "description": "Real Claude Code worker, edit-capable, no network tools.",
+      "capabilities": ["IMPLEMENT"],
+      "model": "sonnet",
+      "permission_mode": "acceptEdits",
+      "tools": ["Read", "Write", "Edit", "Glob", "Grep"],
+      "allowed_mutation_prefixes": ["hello.txt", "world.txt"],
+      "limits": {"max_seconds": 300, "max_attempts": 2},
+      "env_allowlist": []
+    }
+  }
+}

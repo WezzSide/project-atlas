@@ -1,0 +1,1664 @@
+
+=== 0. a disposable workspace ===
+
+=== 1. what can this machine actually run? ===
+INFO project_atlas.config: loaded configuration [path=/home/gebruiker/Projects/project-atlas-worktrees/program-supervisor/pyproject.toml]
+{
+  "concurrent_acceptance": {
+    "claim": "Claude Code + Codex concurrent program acceptance: two runtimes progressing through separate approved task queues under one supervisor, two workers in flight at once, four tasks, one invocation, no operator prompt between them",
+    "does_not_claim": [
+      "any runtime other than claude-code 2.1.267 and codex-cli 0.153.4",
+      "long or difficult tasks -- these were one-line file writes",
+      "more than two concurrent workers",
+      "billed spend; the cost figure is a client-side estimate where it exists at all, and Codex reports none"
+    ],
+    "evidence": "docs/orchestration/program/evidence/SYSTEMWIDE-ACCEPTANCE.md"
+  },
+  "generated_by": "project_atlas.orchestration.program.runtimes",
+  "implemented_fixture_only": [
+    {
+      "adapter": "local-command",
+      "capabilities": {
+        "accepts_assigned_session": true,
+        "reports_cost": false,
+        "supports_cost_limit": false,
+        "supports_result_schema": false,
+        "supports_resume": false,
+        "supports_session_probe": true
+      },
+      "executable": null,
+      "installed": true,
+      "is_fixture": true,
+      "notes": [
+        "FIXTURE. Proves supervisor behaviour deterministically and without a model call. FIXTURE_RUN != REAL_RUNTIME_COMPATIBILITY"
+      ],
+      "runtime_enforced": [
+        "nothing; it runs a fixed argv"
+      ],
+      "runtime_evidence": [],
+      "support_tier": "IMPLEMENTED_FIXTURE_ONLY",
+      "unsupported": [
+        "attach to a running interactive session",
+        "adopt a process this supervisor did not start",
+        "guarantee a worker stays inside its declared mutation paths",
+        "anything a model does"
+      ],
+      "version": "FIXTURE"
+    }
+  ],
+  "merge_authorized": false,
+  "no_generic_adapter": "There is deliberately no generic subprocess adapter. Launching a process is not the same as understanding a runtime's output, its terminal states, its permission model or its resume contract -- and an adapter that does the first while claiming the rest is a support claim nobody has checked.",
+  "runtime_tested": [
+    {
+      "adapter": "claude-code",
+      "capabilities": {
+        "accepts_assigned_session": true,
+        "reports_cost": true,
+        "supports_cost_limit": true,
+        "supports_result_schema": true,
+        "supports_resume": true,
+        "supports_session_probe": true
+      },
+      "executable": "claude",
+      "installed": true,
+      "is_fixture": false,
+      "notes": [
+        "session identity can be assigned before launch (--session-id), so an interrupted attempt stays addressable",
+        "resume by session id works from any directory from 2.1.223",
+        "--permission-prompts requires 2.1.259; below that an unattended run would wait for an approval nobody can give",
+        "prefers ANTHROPIC_API_KEY over a logged-in subscription when both are present"
+      ],
+      "runtime_enforced": [
+        "--permission-mode",
+        "--allowedTools / --disallowedTools / --tools",
+        "--permission-prompts none",
+        "--restricted (file tools confined to the working directories)",
+        "--max-budget-usd (against the runtime's own estimate)"
+      ],
+      "runtime_evidence": [
+        "docs/orchestration/program/evidence/REAL-RUNTIME-DEMO.md",
+        "docs/orchestration/program/evidence/SYSTEMWIDE-ACCEPTANCE.md"
+      ],
+      "support_tier": "IMPLEMENTED_AND_RUNTIME_TESTED",
+      "unsupported": [
+        "attach to a running interactive session",
+        "adopt a process this supervisor did not start",
+        "guarantee a worker stays inside its declared mutation paths",
+        "filesystem confinement without --restricted",
+        "a cost figure that is an actual charge rather than an estimate"
+      ],
+      "version": "2.1.267"
+    },
+    {
+      "adapter": "codex",
+      "capabilities": {
+        "accepts_assigned_session": false,
+        "reports_cost": false,
+        "supports_cost_limit": false,
+        "supports_result_schema": true,
+        "supports_resume": true,
+        "supports_session_probe": true
+      },
+      "executable": "codex",
+      "installed": true,
+      "is_fixture": false,
+      "notes": [
+        "mints its own thread id and announces it in the first thread.started event; the adapter streams that event file to disk so the identity survives a supervisor crash",
+        "resume is `codex exec resume <thread-id>`",
+        "reports token usage only, so this package reports cost as unknown rather than estimating one",
+        "exits 0 on a task it could not perform: observed refusing a write under --sandbox read-only with a completed turn"
+      ],
+      "runtime_enforced": [
+        "--sandbox read-only | workspace-write | danger-full-access (a real filesystem boundary, verified by observation)",
+        "--add-dir (additional writable roots)",
+        "--cd (working root)"
+      ],
+      "runtime_evidence": [
+        "docs/orchestration/program/evidence/REAL-RUNTIME-DEMO-CODEX.md",
+        "docs/orchestration/program/evidence/SYSTEMWIDE-ACCEPTANCE.md"
+      ],
+      "support_tier": "IMPLEMENTED_AND_RUNTIME_TESTED",
+      "unsupported": [
+        "attach to a running interactive session",
+        "adopt a process this supervisor did not start",
+        "guarantee a worker stays inside its declared mutation paths",
+        "assigning a session id before launch",
+        "reporting cost in any currency",
+        "a per-launch spend cap",
+        "a single structured result object (events are JSONL)"
+      ],
+      "version": "0.153.4"
+    }
+  ],
+  "tiers": {
+    "IMPLEMENTED_AND_RUNTIME_TESTED": "an adapter exists AND has been exercised end to end against the real runtime; the evidence is named",
+    "IMPLEMENTED_FIXTURE_ONLY": "an adapter exists and passes its tests; no real-runtime run backs it",
+    "INVENTORIED_UNAVAILABLE": "inventoried, deliberately not adapted; the blocker is named"
+  },
+  "unavailable": [
+    {
+      "adapter_implemented": false,
+      "blocker": "the account is at its usage limit: 'You've hit your usage limit ... Your usage limits will reset when your monthly cycle ends'. Raising a spend limit or switching to another account to get round it is not authorized, and would not be the right thing to do anyway",
+      "executable": "cursor-agent",
+      "installed": true,
+      "name": "Cursor Agent",
+      "practical_demand": "high: Atlas's existing orchestration.sdk lane is Cursor-based (backend.py, cli_execution_port.py). Those ports are pinned to that lane's own canonical PR and repository, so they do not satisfy this package's adapter contract, but the demand for a Cursor adapter here is real",
+      "support_tier": "INVENTORIED_UNAVAILABLE",
+      "unverified": [
+        "the shape of --output-format json",
+        "how a terminal state is signalled",
+        "the error taxonomy, and how a refusal differs from a failure",
+        "whether --resume preserves the working directory"
+      ],
+      "verified_capabilities": [
+        "-p/--print for non-interactive use",
+        "--output-format text|json|stream-json",
+        "--resume [chatId] and --continue",
+        "create-chat returns a chat id before any run",
+        "--mode plan|ask for read-only operation",
+        "--force/--yolo, --auto-review, --sandbox enabled|disabled",
+        "--workspace, --add-dir, -w/--worktree",
+        "--trust is REQUIRED for a non-interactive run in an untrusted directory; without it the run exits 1 and says so"
+      ],
+      "version": "2026.09.08-6caf4ff"
+    },
+    {
+      "adapter_implemented": false,
+      "blocker": "authentication cannot be validated: the GitHub token is present but the account is rate limited (HTTP 403, 'API rate limit exceeded for user ID ...'), which also breaks `gh auth status`. Waiting for the limit to reset is the fix; working round it is not",
+      "executable": "copilot",
+      "installed": true,
+      "name": "GitHub Copilot CLI",
+      "practical_demand": "moderate: Copilot is in use on this host, but nothing in Atlas orchestrates it today",
+      "support_tier": "INVENTORIED_UNAVAILABLE",
+      "unverified": [
+        "the JSONL event vocabulary",
+        "how a terminal state is signalled",
+        "whether the prompt can be delivered off argv",
+        "the error taxonomy"
+      ],
+      "verified_capabilities": [
+        "-p/--prompt <text> for non-interactive use",
+        "--output-format json emits JSONL, one object per line",
+        "--session-id <id> BOTH resumes a session AND sets the UUID for a new one, so an identity can be assigned before launch",
+        "-r/--resume[=id] and --continue",
+        "--allow-all-tools is required for non-interactive mode",
+        "--allow-tool / --deny-tool for per-tool permissions",
+        "--add-dir, --allow-all-paths, --log-dir, --no-color",
+        "--acp starts an Agent Client Protocol server"
+      ],
+      "version": "1.0.83."
+    },
+    {
+      "adapter_implemented": false,
+      "blocker": null,
+      "executable": "gemini",
+      "installed": true,
+      "name": "Gemini CLI",
+      "practical_demand": "none observed: no Atlas code, document or work package references it. Adapting it would be building for a user nobody has",
+      "support_tier": "INVENTORIED_UNAVAILABLE",
+      "unverified": [
+        "everything beyond its presence"
+      ],
+      "verified_capabilities": [
+        "installed and on PATH"
+      ],
+      "version": "0.58.0"
+    },
+    {
+      "adapter_implemented": false,
+      "blocker": null,
+      "executable": "aider",
+      "installed": true,
+      "name": "Aider",
+      "practical_demand": "none observed",
+      "support_tier": "INVENTORIED_UNAVAILABLE",
+      "unverified": [
+        "everything beyond its presence"
+      ],
+      "verified_capabilities": [
+        "installed and on PATH"
+      ],
+      "version": "0.86.2"
+    },
+    {
+      "adapter_implemented": false,
+      "blocker": null,
+      "executable": "amp",
+      "installed": true,
+      "name": "Amp",
+      "practical_demand": "none observed",
+      "support_tier": "INVENTORIED_UNAVAILABLE",
+      "unverified": [
+        "everything beyond its presence"
+      ],
+      "verified_capabilities": [
+        "installed and on PATH"
+      ],
+      "version": "0.0.1788580839-ga71d30"
+    }
+  ],
+  "universally_unsupported": [
+    "attach to a running interactive session",
+    "adopt a process this supervisor did not start",
+    "guarantee a worker stays inside its declared mutation paths"
+  ]
+}
+
+=== 2. write the approved program ===
+
+=== 3. validate before anything runs ===
+INFO project_atlas.config: loaded configuration [path=/home/gebruiker/Projects/project-atlas-worktrees/program-supervisor/pyproject.toml]
+{
+  "approval_reference": "docs/orchestration/program/OPERATOR-JOURNEY.md",
+  "approved_by": "wesley",
+  "base_pin": "6ca515dea5a9a85e52d733bfa3de66af5ac5987c",
+  "execution_authorized": false,
+  "limits": {
+    "idle_sleep_seconds": 0.0,
+    "max_attempts_per_task": 2,
+    "max_concurrent_workers": 2,
+    "max_cycles": 20,
+    "max_estimated_cost_usd": null,
+    "max_idle_cycles": 3,
+    "max_program_seconds": 2400,
+    "max_task_launches": 8,
+    "max_task_seconds": 420
+  },
+  "merge_authorized": false,
+  "program_id": "operator-journey",
+  "program_sha256": "7f02724c408f88a4d3c8f4e1eee8614f37912d2400bcb4c73cd7bc3e127405b7",
+  "tasks": [
+    {
+      "acceptance_checks": [
+        "claude-first-content"
+      ],
+      "adapter": "claude-code",
+      "agent_id": "placeholder-claude",
+      "depends_on": [],
+      "effective_profile_sha256": "a565ea6600d1619f49abd95f229561b3cc7422fc291e0de93f1c8f392d4e999c",
+      "external_precondition": null,
+      "owner_gate": null,
+      "permission_mode": "acceptEdits",
+      "profile_id": "claude-role",
+      "requires_independent_verification": false,
+      "task_id": "claude-first",
+      "title": "claude-role writes claude-1.txt",
+      "verifier_profile_ref": null
+    },
+    {
+      "acceptance_checks": [
+        "claude-second-content"
+      ],
+      "adapter": "claude-code",
+      "agent_id": "placeholder-claude",
+      "depends_on": [
+        "claude-first"
+      ],
+      "effective_profile_sha256": "a565ea6600d1619f49abd95f229561b3cc7422fc291e0de93f1c8f392d4e999c",
+      "external_precondition": null,
+      "owner_gate": null,
+      "permission_mode": "acceptEdits",
+      "profile_id": "claude-role",
+      "requires_independent_verification": false,
+      "task_id": "claude-second",
+      "title": "claude-role writes claude-2.txt",
+      "verifier_profile_ref": null
+    },
+    {
+      "acceptance_checks": [
+        "codex-first-content"
+      ],
+      "adapter": "codex",
+      "agent_id": "placeholder-codex",
+      "depends_on": [],
+      "effective_profile_sha256": "93a7ef16976f265eeadab27920151c3f9fc823d679a281568df5a41611d9dd7d",
+      "external_precondition": null,
+      "owner_gate": null,
+      "permission_mode": "acceptEdits",
+      "profile_id": "codex-role",
+      "requires_independent_verification": false,
+      "task_id": "codex-first",
+      "title": "codex-role writes codex-1.txt",
+      "verifier_profile_ref": null
+    },
+    {
+      "acceptance_checks": [
+        "codex-second-content"
+      ],
+      "adapter": "codex",
+      "agent_id": "placeholder-codex",
+      "depends_on": [
+        "codex-first"
+      ],
+      "effective_profile_sha256": "93a7ef16976f265eeadab27920151c3f9fc823d679a281568df5a41611d9dd7d",
+      "external_precondition": null,
+      "owner_gate": null,
+      "permission_mode": "acceptEdits",
+      "profile_id": "codex-role",
+      "requires_independent_verification": false,
+      "task_id": "codex-second",
+      "title": "codex-role writes codex-2.txt",
+      "verifier_profile_ref": null
+    }
+  ],
+  "valid": true,
+  "warnings": [],
+  "workspace": "/home/gebruiker/.cache/atlas-program-tests/journey3/workspace"
+}
+
+=== 4. which account will each profile use? ===
+INFO project_atlas.config: loaded configuration [path=/home/gebruiker/Projects/project-atlas-worktrees/program-supervisor/pyproject.toml]
+{
+  "merge_authorized": false,
+  "policy": [
+    "the child environment is BUILT from the profile's allow-list plus PATH, HOME, LANG, LC_ALL, TZ, TMPDIR; it is never inherited wholesale",
+    "no account is switched automatically, ever",
+    "an intentionally supplied credential is never discarded: a profile that allow-lists one gets it, and a profile whose declared mechanism contradicts its allow-list is refused rather than silently resolved",
+    "no spending limit is raised by this package; max_estimated_cost_usd is forwarded to a runtime that has such a flag and is compared against that runtime's own client-side estimate"
+  ],
+  "profiles": [
+    {
+      "adapter": "claude-code",
+      "agent_id": "placeholder-claude",
+      "always_forwarded": [
+        "PATH",
+        "HOME",
+        "LANG",
+        "LC_ALL",
+        "TZ",
+        "TMPDIR"
+      ],
+      "credential_names_forwarded_to_the_worker": [],
+      "credential_names_present_but_withheld": [],
+      "credential_names_present_in_environment": [],
+      "declared_mechanism": "SUBSCRIPTION_OAUTH",
+      "effective_selection": "the operator's logged-in session for this runtime",
+      "profile_id": "claude-role",
+      "runtime_precedence": "ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN) takes precedence over a logged-in claude.ai subscription. Under --bare, OAuth and the keychain are never read at all and an API key or apiKeyHelper is required",
+      "values_note": "no credential value is read, returned, logged or persisted by this report -- names and presence only",
+      "values_read": false,
+      "warnings": []
+    },
+    {
+      "adapter": "codex",
+      "agent_id": "placeholder-codex",
+      "always_forwarded": [
+        "PATH",
+        "HOME",
+        "LANG",
+        "LC_ALL",
+        "TZ",
+        "TMPDIR"
+      ],
+      "credential_names_forwarded_to_the_worker": [],
+      "credential_names_present_but_withheld": [],
+      "credential_names_present_in_environment": [],
+      "declared_mechanism": "SUBSCRIPTION_OAUTH",
+      "effective_selection": "the operator's logged-in session for this runtime",
+      "profile_id": "codex-role",
+      "runtime_precedence": "codex uses its own stored login under CODEX_HOME (default ~/.codex). This package does not forward an Anthropic key to it and refuses a profile that declares one",
+      "values_note": "no credential value is read, returned, logged or persisted by this report -- names and presence only",
+      "values_read": false,
+      "warnings": []
+    }
+  ],
+  "program_id": "operator-journey",
+  "warnings": []
+}
+
+=== 5. enrol the two workers ===
+INFO project_atlas.config: loaded configuration [path=/home/gebruiker/Projects/project-atlas-worktrees/program-supervisor/pyproject.toml]
+{
+  "enrolled": {
+    "adapter": "claude-code",
+    "agent_id": "claude-worker",
+    "assigned_at": null,
+    "assigned_by": null,
+    "assigned_program": null,
+    "description": "real Claude Code worker",
+    "enrolled_at": "2026-09-10T10:57:32.358Z",
+    "enrolled_by": "wesley",
+    "merge_authorized": false,
+    "profile_narrowing": {},
+    "role": "claude-role",
+    "runtime_substitution_authorized": false,
+    "runtime_substitution_authorized_by": null,
+    "status": "ACTIVE",
+    "workspace_root": "/home/gebruiker/.cache/atlas-program-tests/journey3/workspace"
+  },
+  "note": "ENROLLMENT != AUTHORIZATION. This records that the agent exists, which runtime it is, where it works and what it may narrow. It grants nothing"
+}
+INFO project_atlas.config: loaded configuration [path=/home/gebruiker/Projects/project-atlas-worktrees/program-supervisor/pyproject.toml]
+{
+  "enrolled": {
+    "adapter": "codex",
+    "agent_id": "codex-worker",
+    "assigned_at": null,
+    "assigned_by": null,
+    "assigned_program": null,
+    "description": "real Codex worker",
+    "enrolled_at": "2026-09-10T10:57:32.928Z",
+    "enrolled_by": "wesley",
+    "merge_authorized": false,
+    "profile_narrowing": {},
+    "role": "codex-role",
+    "runtime_substitution_authorized": false,
+    "runtime_substitution_authorized_by": null,
+    "status": "ACTIVE",
+    "workspace_root": "/home/gebruiker/.cache/atlas-program-tests/journey3/workspace"
+  },
+  "note": "ENROLLMENT != AUTHORIZATION. This records that the agent exists, which runtime it is, where it works and what it may narrow. It grants nothing"
+}
+INFO project_atlas.config: loaded configuration [path=/home/gebruiker/Projects/project-atlas-worktrees/program-supervisor/pyproject.toml]
+{
+  "agents": [
+    {
+      "adapter": "claude-code",
+      "agent_id": "claude-worker",
+      "assigned_at": null,
+      "assigned_by": null,
+      "assigned_program": null,
+      "description": "real Claude Code worker",
+      "enrolled_at": "2026-09-10T10:57:32.358Z",
+      "enrolled_by": "wesley",
+      "merge_authorized": false,
+      "profile_narrowing": {},
+      "role": "claude-role",
+      "runtime_substitution_authorized": false,
+      "runtime_substitution_authorized_by": null,
+      "status": "ACTIVE",
+      "workspace_root": "/home/gebruiker/.cache/atlas-program-tests/journey3/workspace"
+    },
+    {
+      "adapter": "codex",
+      "agent_id": "codex-worker",
+      "assigned_at": null,
+      "assigned_by": null,
+      "assigned_program": null,
+      "description": "real Codex worker",
+      "enrolled_at": "2026-09-10T10:57:32.928Z",
+      "enrolled_by": "wesley",
+      "merge_authorized": false,
+      "profile_narrowing": {},
+      "role": "codex-role",
+      "runtime_substitution_authorized": false,
+      "runtime_substitution_authorized_by": null,
+      "status": "ACTIVE",
+      "workspace_root": "/home/gebruiker/.cache/atlas-program-tests/journey3/workspace"
+    }
+  ],
+  "registry": "/home/gebruiker/.cache/atlas-program-tests/journey3/registry"
+}
+
+=== 6. assign the approved program to each ===
+INFO project_atlas.config: loaded configuration [path=/home/gebruiker/Projects/project-atlas-worktrees/program-supervisor/pyproject.toml]
+{
+  "agent_id": "claude-worker",
+  "assigned_program": "/home/gebruiker/.cache/atlas-program-tests/journey3/program.json",
+  "effective_permission_mode": "acceptEdits",
+  "effective_profile_sha256": "1798de51ffd6074f489b37aabc2e10e1ca174e9c7d0408c72c1543f10e5c4c75",
+  "merge_authorized": false,
+  "note": "the binding was resolved before being recorded, so an assignment that could not run is refused now rather than when a worker would have started",
+  "program_id": "operator-journey",
+  "program_sha256": "7f02724c408f88a4d3c8f4e1eee8614f37912d2400bcb4c73cd7bc3e127405b7",
+  "role": "claude-role"
+}
+INFO project_atlas.config: loaded configuration [path=/home/gebruiker/Projects/project-atlas-worktrees/program-supervisor/pyproject.toml]
+{
+  "agent_id": "codex-worker",
+  "assigned_program": "/home/gebruiker/.cache/atlas-program-tests/journey3/program.json",
+  "effective_permission_mode": "acceptEdits",
+  "effective_profile_sha256": "35e3d1f3b9c73982a80dfa3135edcfd7e57996e59de7b6f01b372fa58419e532",
+  "merge_authorized": false,
+  "note": "the binding was resolved before being recorded, so an assignment that could not run is refused now rather than when a worker would have started",
+  "program_id": "operator-journey",
+  "program_sha256": "7f02724c408f88a4d3c8f4e1eee8614f37912d2400bcb4c73cd7bc3e127405b7",
+  "role": "codex-role"
+}
+
+=== 7. the four identities, side by side ===
+INFO project_atlas.config: loaded configuration [path=/home/gebruiker/Projects/project-atlas-worktrees/program-supervisor/pyproject.toml]
+{
+  "agent_identity": {
+    "adapter": "claude-code",
+    "agent_id": "claude-worker",
+    "effective_profile_id": "claude-role",
+    "enrolled_at": "2026-09-10T10:57:32.358Z",
+    "enrolled_by": "wesley",
+    "lifetime": "durable; outlives every run, session and supervisor",
+    "permissions_from": "the program's 'claude-role' profile, narrowed by this enrollment; never widened by it",
+    "role": "claude-role",
+    "status": "ACTIVE",
+    "workspace_root": "/home/gebruiker/.cache/atlas-program-tests/journey3/workspace"
+  },
+  "assignment": {
+    "assigned_at": "2026-09-10T10:57:34.068Z",
+    "assigned_by": "wesley",
+    "assigned_program": "/home/gebruiker/.cache/atlas-program-tests/journey3/program.json"
+  },
+  "merge_authorized": false,
+  "program_status": {
+    "detail": "this program has never been started",
+    "merge_authorized": false,
+    "program_id": "operator-journey",
+    "started": false
+  },
+  "runtime_session_identity": {
+    "lifetime": "one attempt",
+    "note": "recorded per attempt as runtime_session_id; assigned by the supervisor only when the adapter accepts an assigned session, otherwise minted and reported by the runtime. Carries no permission of its own"
+  },
+  "supervisor_process": {
+    "lifetime": "one process",
+    "note": "the singleton lock, its instance id and pid. A supervisor exiting ends none of the three above"
+  },
+  "task_ownership": {
+    "lifetime": "one task, while work is in flight",
+    "note": "an AgentLease and its durable projection row. Survives the supervisor process; released or transitioned when the task ends, never when a process dies"
+  }
+}
+
+=== 8. pause BEFORE starting, to show dispatch is withheld ===
+INFO project_atlas.config: loaded configuration [path=/home/gebruiker/Projects/project-atlas-worktrees/program-supervisor/pyproject.toml]
+{
+  "effect": "no further worker is started. Any worker already running is allowed to finish, so nothing becomes UNCERTAIN because of this",
+  "merge_authorized": false,
+  "paused": true,
+  "paused_by": "wesley",
+  "program_id": "operator-journey",
+  "reversible": true,
+  "still_running": [],
+  "still_running_note": "0 worker(s) were already in flight when this pause was requested and are NOT interrupted. Use cancel if you need them stopped, and expect UNCERTAIN outcomes if you do"
+}
+INFO project_atlas.config: loaded configuration [path=/home/gebruiker/Projects/project-atlas-worktrees/program-supervisor/pyproject.toml]
+{
+  "cycles_run": 1,
+  "enrolled_agents_bound": [
+    "claude-worker",
+    "codex-worker"
+  ],
+  "estimated_cost_note": "client-side estimate reported by the runtime; not billed spend",
+  "estimated_cost_usd": 0.0,
+  "execution_authorized": false,
+  "launches_this_run": 0,
+  "max_concurrent_workers_observed": 0,
+  "merge_authorized": false,
+  "notifications": [],
+  "program_complete": false,
+  "program_id": "operator-journey",
+  "stop_reason": "PAUSED",
+  "tasks_dispatched": [],
+  "total_launches": 0,
+  "truth_boundary": "PROGRAM_APPROVAL != MERGE_AUTHORIZATION / WORKER_REPORTED_COMPLETION != ACCEPTANCE / ACCEPTANCE != INDEPENDENT_VERIFICATION / TASK_COMPLETE != PROGRAM_COMPLETE / ADAPTER_EXIT_ZERO != ACCEPTANCE_PASSED / ESTIMATED_COST != BILLED_SPEND"
+}
+
+=== 9. resume and run to completion, both runtimes, no prompt between tasks ===
+INFO project_atlas.config: loaded configuration [path=/home/gebruiker/Projects/project-atlas-worktrees/program-supervisor/pyproject.toml]
+{
+  "effect": "the supervisor selects eligible work again on its next cycle. A running service picks this up without being restarted",
+  "merge_authorized": false,
+  "paused": false,
+  "program_id": "operator-journey",
+  "resumed_by": "wesley"
+}
+INFO project_atlas.config: loaded configuration [path=/home/gebruiker/Projects/project-atlas-worktrees/program-supervisor/pyproject.toml]
+{
+  "cycles_run": 5,
+  "enrolled_agents_bound": [
+    "claude-worker",
+    "codex-worker"
+  ],
+  "estimated_cost_note": "client-side estimate reported by the runtime; not billed spend",
+  "estimated_cost_usd": 1.2331081999999998,
+  "execution_authorized": false,
+  "launches_this_run": 4,
+  "max_concurrent_workers_observed": 2,
+  "merge_authorized": false,
+  "notifications": [
+    {
+      "detail": {
+        "tasks": [
+          "claude-first",
+          "claude-second",
+          "codex-first",
+          "codex-second"
+        ]
+      },
+      "kind": "PROGRAM_COMPLETE",
+      "message": "every task in the approved program reached an accepted state"
+    }
+  ],
+  "program_complete": true,
+  "program_id": "operator-journey",
+  "stop_reason": "PROGRAM_COMPLETE",
+  "tasks_dispatched": [
+    {
+      "cycle": 1,
+      "mode": "NEW",
+      "task_id": "claude-first"
+    },
+    {
+      "cycle": 1,
+      "mode": "NEW",
+      "task_id": "codex-first"
+    },
+    {
+      "cycle": 2,
+      "mode": "NEW",
+      "task_id": "claude-second"
+    },
+    {
+      "cycle": 3,
+      "mode": "NEW",
+      "task_id": "codex-second"
+    }
+  ],
+  "total_launches": 4,
+  "truth_boundary": "PROGRAM_APPROVAL != MERGE_AUTHORIZATION / WORKER_REPORTED_COMPLETION != ACCEPTANCE / ACCEPTANCE != INDEPENDENT_VERIFICATION / TASK_COMPLETE != PROGRAM_COMPLETE / ADAPTER_EXIT_ZERO != ACCEPTANCE_PASSED / ESTIMATED_COST != BILLED_SPEND"
+}
+
+=== 10. the durable operator view ===
+INFO project_atlas.config: loaded configuration [path=/home/gebruiker/Projects/project-atlas-worktrees/program-supervisor/pyproject.toml]
+{
+  "actions": {
+    "note": "every supported action is a REQUEST routed through the same governance a command-line operator goes through. None of them grants anything",
+    "supported": [
+      "pause",
+      "resume",
+      "cancel",
+      "reconcile"
+    ],
+    "unsupported": {
+      "adopt_running_process": "a session enters a program only through an explicit handoff of a STORED session; no live process is ever adopted",
+      "edit_task": "the approved program is immutable while it runs; editing it is detected as PROGRAM_DIGEST_DRIFT and refused",
+      "grant_owner_gate": "no interface can grant an owner gate. It is granted outside this system or not at all",
+      "merge": "this package never merges",
+      "raise_limits": "limits come from the approved program file. Changing them is a new approval, not a control action"
+    }
+  },
+  "agents": [],
+  "contract_id": "atlas.program.control",
+  "contract_version": 2,
+  "execution_authorized": false,
+  "generated_at": "2026-09-10T10:58:19.633Z",
+  "limits": {
+    "declared": {
+      "idle_sleep_seconds": 0.0,
+      "max_attempts_per_task": 2,
+      "max_concurrent_workers": 2,
+      "max_cycles": 20,
+      "max_estimated_cost_usd": null,
+      "max_idle_cycles": 3,
+      "max_program_seconds": 2400,
+      "max_task_launches": 8,
+      "max_task_seconds": 420
+    },
+    "estimated_cost_note": "client-side estimate reported by the runtime; not billed spend, and 0.0 can mean the runtime reports no cost at all",
+    "estimated_cost_usd": 1.2331081999999998,
+    "launches_remaining": 4,
+    "launches_used": 4
+  },
+  "merge_authorized": false,
+  "needs_reconciliation": [],
+  "ownership": [],
+  "package_id": "AS-ORCH-PROGRAM-SUPERVISOR-001",
+  "program": {
+    "approval_reference": "docs/orchestration/program/OPERATOR-JOURNEY.md",
+    "approved_by": "wesley",
+    "base_pin": "6ca515dea5a9a85e52d733bfa3de66af5ac5987c",
+    "cancel_requested": false,
+    "complete": true,
+    "last_stop_reason": "PROGRAM_COMPLETE",
+    "objective": "Two enrolled workers on two real runtimes, run under supervision.",
+    "paused": false,
+    "paused_by": null,
+    "program_id": "operator-journey",
+    "program_sha256": "7f02724c408f88a4d3c8f4e1eee8614f37912d2400bcb4c73cd7bc3e127405b7",
+    "workspace": "/home/gebruiker/.cache/atlas-program-tests/journey3/workspace"
+  },
+  "read_only": true,
+  "recent_events": [
+    {
+      "adapter": "claude-code",
+      "agent_id": "claude-worker",
+      "at": "2026-09-10T10:57:56.162Z",
+      "attempt_id": "operator-journey.claude-second.run.1.c121ac1f",
+      "event": "DISPATCH_INTENT",
+      "idempotency_key": "88ddd0d0d01ea268d1f472be2c1dd7b5a586b9f168778e685cdb5fc7493f085c",
+      "mode": "NEW",
+      "profile_id": "claude-role",
+      "runtime_session_id": "712b4693-5507-407d-9a80-234f1e161362",
+      "task_id": "claude-second"
+    },
+    {
+      "at": "2026-09-10T10:57:56.164Z",
+      "event": "TASK_TRANSITION",
+      "from": "LEASED",
+      "reason": "worker starting",
+      "task_id": "claude-second",
+      "to": "ACTIVE"
+    },
+    {
+      "at": "2026-09-10T10:58:03.690Z",
+      "attempt_id": "operator-journey.codex-first.run.1.8a273294",
+      "confidence": "CONFIRMED",
+      "event": "ADAPTER_RETURNED",
+      "exit_status": 0,
+      "failure_class": null,
+      "task_id": "codex-first",
+      "terminal_state": "turn.completed"
+    },
+    {
+      "at": "2026-09-10T10:58:03.700Z",
+      "attempt_id": "operator-journey.codex-first.run.1.8a273294",
+      "event": "ACCEPTANCE_EVALUATED",
+      "failed_checks": [],
+      "passed": true,
+      "task_id": "codex-first"
+    },
+    {
+      "at": "2026-09-10T10:58:03.701Z",
+      "event": "TASK_TRANSITION",
+      "from": "ACTIVE",
+      "reason": "worker finished; acceptance evaluated by the supervisor",
+      "task_id": "codex-first",
+      "to": "VERIFYING"
+    },
+    {
+      "at": "2026-09-10T10:58:03.704Z",
+      "event": "TASK_TRANSITION",
+      "from": "VERIFYING",
+      "reason": "every acceptance condition observed to hold",
+      "task_id": "codex-first",
+      "to": "CERTIFIED"
+    },
+    {
+      "at": "2026-09-10T10:58:03.708Z",
+      "event": "LEASE_RELEASED",
+      "lease_id": "operator-journey-codex-first-2",
+      "task_id": "codex-first"
+    },
+    {
+      "at": "2026-09-10T10:58:03.711Z",
+      "attempt_id": "operator-journey.codex-first.run.1.8a273294",
+      "event": "TASK_ACCEPTED",
+      "task_id": "codex-first"
+    },
+    {
+      "at": "2026-09-10T10:58:03.725Z",
+      "event": "TASK_TRANSITION",
+      "from": "READY",
+      "reason": "ownership granted",
+      "task_id": "codex-second",
+      "to": "LEASED"
+    },
+    {
+      "agent_id": "codex-worker",
+      "at": "2026-09-10T10:58:03.726Z",
+      "authorized_paths": [
+        "codex-2.txt"
+      ],
+      "event": "LEASE_GRANTED",
+      "lease_id": "operator-journey-codex-second-4",
+      "task_id": "codex-second"
+    },
+    {
+      "adapter": "codex",
+      "agent_id": "codex-worker",
+      "at": "2026-09-10T10:58:03.730Z",
+      "attempt_id": "operator-journey.codex-second.run.1.9f2f3812",
+      "event": "DISPATCH_INTENT",
+      "idempotency_key": "06eca7997eb0b8ddc37b77b33220159b34e651ccd3a399f3b1097617ba3064d1",
+      "mode": "NEW",
+      "profile_id": "codex-role",
+      "runtime_session_id": null,
+      "task_id": "codex-second"
+    },
+    {
+      "at": "2026-09-10T10:58:03.731Z",
+      "event": "TASK_TRANSITION",
+      "from": "LEASED",
+      "reason": "worker starting",
+      "task_id": "codex-second",
+      "to": "ACTIVE"
+    },
+    {
+      "at": "2026-09-10T10:58:11.941Z",
+      "attempt_id": "operator-journey.claude-second.run.1.c121ac1f",
+      "confidence": "CONFIRMED",
+      "event": "ADAPTER_RETURNED",
+      "exit_status": 0,
+      "failure_class": null,
+      "task_id": "claude-second",
+      "terminal_state": "completed"
+    },
+    {
+      "at": "2026-09-10T10:58:11.949Z",
+      "attempt_id": "operator-journey.claude-second.run.1.c121ac1f",
+      "event": "ACCEPTANCE_EVALUATED",
+      "failed_checks": [],
+      "passed": true,
+      "task_id": "claude-second"
+    },
+    {
+      "at": "2026-09-10T10:58:11.950Z",
+      "event": "TASK_TRANSITION",
+      "from": "ACTIVE",
+      "reason": "worker finished; acceptance evaluated by the supervisor",
+      "task_id": "claude-second",
+      "to": "VERIFYING"
+    },
+    {
+      "at": "2026-09-10T10:58:11.952Z",
+      "event": "TASK_TRANSITION",
+      "from": "VERIFYING",
+      "reason": "every acceptance condition observed to hold",
+      "task_id": "claude-second",
+      "to": "CERTIFIED"
+    },
+    {
+      "at": "2026-09-10T10:58:11.956Z",
+      "event": "LEASE_RELEASED",
+      "lease_id": "operator-journey-claude-second-3",
+      "task_id": "claude-second"
+    },
+    {
+      "at": "2026-09-10T10:58:11.959Z",
+      "attempt_id": "operator-journey.claude-second.run.1.c121ac1f",
+      "event": "TASK_ACCEPTED",
+      "task_id": "claude-second"
+    },
+    {
+      "at": "2026-09-10T10:58:19.004Z",
+      "attempt_id": "operator-journey.codex-second.run.1.9f2f3812",
+      "confidence": "CONFIRMED",
+      "event": "ADAPTER_RETURNED",
+      "exit_status": 0,
+      "failure_class": null,
+      "task_id": "codex-second",
+      "terminal_state": "turn.completed"
+    },
+    {
+      "at": "2026-09-10T10:58:19.019Z",
+      "attempt_id": "operator-journey.codex-second.run.1.9f2f3812",
+      "event": "ACCEPTANCE_EVALUATED",
+      "failed_checks": [],
+      "passed": true,
+      "task_id": "codex-second"
+    },
+    {
+      "at": "2026-09-10T10:58:19.021Z",
+      "event": "TASK_TRANSITION",
+      "from": "ACTIVE",
+      "reason": "worker finished; acceptance evaluated by the supervisor",
+      "task_id": "codex-second",
+      "to": "VERIFYING"
+    },
+    {
+      "at": "2026-09-10T10:58:19.024Z",
+      "event": "TASK_TRANSITION",
+      "from": "VERIFYING",
+      "reason": "every acceptance condition observed to hold",
+      "task_id": "codex-second",
+      "to": "CERTIFIED"
+    },
+    {
+      "at": "2026-09-10T10:58:19.027Z",
+      "event": "LEASE_RELEASED",
+      "lease_id": "operator-journey-codex-second-4",
+      "task_id": "codex-second"
+    },
+    {
+      "at": "2026-09-10T10:58:19.031Z",
+      "attempt_id": "operator-journey.codex-second.run.1.9f2f3812",
+      "event": "TASK_ACCEPTED",
+      "task_id": "codex-second"
+    },
+    {
+      "at": "2026-09-10T10:58:19.038Z",
+      "event": "NOTIFY_PROGRAM_COMPLETE",
+      "message": "every task in the approved program reached an accepted state",
+      "tasks": [
+        "claude-first",
+        "claude-second",
+        "codex-first",
+        "codex-second"
+      ]
+    }
+  ],
+  "required_operator_actions": [],
+  "status": {
+    "awaiting_independent_verification": [],
+    "blocked": [],
+    "cancel_requested": false,
+    "current_task": null,
+    "done": [
+      "claude-first",
+      "claude-second",
+      "codex-first",
+      "codex-second"
+    ],
+    "estimated_cost_note": "client-side estimate reported by the runtime; not billed spend",
+    "estimated_cost_usd": 1.2331081999999998,
+    "execution_authorized": false,
+    "last_stop_reason": "PROGRAM_COMPLETE",
+    "last_verified_progress_at": "2026-09-10T10:58:18.999Z",
+    "merge_authorized": false,
+    "needs_reconciliation": [],
+    "owner_decision_required": [],
+    "program_complete": true,
+    "program_id": "operator-journey",
+    "ready": [],
+    "remaining_limits": {
+      "idle_cycles_used": 1,
+      "launches": 4,
+      "max_cycles": 20,
+      "max_idle_cycles": 3,
+      "max_program_seconds": 2400,
+      "max_task_launches": 8
+    },
+    "running": [],
+    "started": true,
+    "supervisor_alive": false,
+    "supervisor_pid": 598773,
+    "waiting_on_external_event": []
+  },
+  "supervisor": {
+    "note": "the supervisor is a separate process. Closing a viewer does not stop it, and nothing in this contract can",
+    "service": null,
+    "service_alive": false
+  },
+  "tasks": [
+    {
+      "acceptance": [
+        {
+          "check_id": "claude-first-content",
+          "description": "claude-1.txt contains CLAUDE-FIRST-OK",
+          "kind": "FILE_MATCHES"
+        }
+      ],
+      "adapter": "claude-code",
+      "agent_id": "placeholder-claude",
+      "attempts": 1,
+      "awaiting_independent_verification": false,
+      "depends_on": [],
+      "is_done": true,
+      "is_running": false,
+      "last_attempt": {
+        "acceptance_passed": true,
+        "attempt_id": "operator-journey.claude-first.run.1.3de39a8e",
+        "confidence": "CONFIRMED",
+        "ended_at": "2026-09-10T10:57:56.119Z",
+        "phase": "TERMINAL",
+        "policy_denials": 0,
+        "runtime_session_id": "e37a7496-b2bc-4a3f-b5e3-e618d0796e31",
+        "started_at": "2026-09-10T10:57:37.592Z"
+      },
+      "last_failure_class": null,
+      "last_meaningful_progress": {
+        "acceptance_passed": true,
+        "at": "2026-09-10T10:57:56.119Z",
+        "attempt_id": "operator-journey.claude-first.run.1.3de39a8e",
+        "note": "an attempt ending is not progress; acceptance_passed and a changed workspace fingerprint are what make it progress",
+        "workspace_fingerprint": "7af55c900ea06aefa1464bcc6bc06fcaa2a72086938122c1c35189c4e2a919b2"
+      },
+      "launches": 1,
+      "owner_gate": null,
+      "retry": {
+        "attempt_budget": 2,
+        "attempts_used": 1,
+        "eligible": true,
+        "last_failure_class": null,
+        "reason": "no failure recorded"
+      },
+      "state": "CERTIFIED",
+      "task_id": "claude-first",
+      "title": "claude-role writes claude-1.txt",
+      "verified_by_agent_id": null,
+      "waiting_condition": null,
+      "waiting_on": null
+    },
+    {
+      "acceptance": [
+        {
+          "check_id": "claude-second-content",
+          "description": "claude-2.txt contains CLAUDE-SECOND-OK",
+          "kind": "FILE_MATCHES"
+        }
+      ],
+      "adapter": "claude-code",
+      "agent_id": "placeholder-claude",
+      "attempts": 1,
+      "awaiting_independent_verification": false,
+      "depends_on": [
+        "claude-first"
+      ],
+      "is_done": true,
+      "is_running": false,
+      "last_attempt": {
+        "acceptance_passed": true,
+        "attempt_id": "operator-journey.claude-second.run.1.c121ac1f",
+        "confidence": "CONFIRMED",
+        "ended_at": "2026-09-10T10:58:11.937Z",
+        "phase": "TERMINAL",
+        "policy_denials": 0,
+        "runtime_session_id": "712b4693-5507-407d-9a80-234f1e161362",
+        "started_at": "2026-09-10T10:57:56.160Z"
+      },
+      "last_failure_class": null,
+      "last_meaningful_progress": {
+        "acceptance_passed": true,
+        "at": "2026-09-10T10:58:11.937Z",
+        "attempt_id": "operator-journey.claude-second.run.1.c121ac1f",
+        "note": "an attempt ending is not progress; acceptance_passed and a changed workspace fingerprint are what make it progress",
+        "workspace_fingerprint": "f26c4fd8615221a3b277229d0f5915f5c7e7e405d939a651e837d75c6c03bf47"
+      },
+      "launches": 1,
+      "owner_gate": null,
+      "retry": {
+        "attempt_budget": 2,
+        "attempts_used": 1,
+        "eligible": true,
+        "last_failure_class": null,
+        "reason": "no failure recorded"
+      },
+      "state": "CERTIFIED",
+      "task_id": "claude-second",
+      "title": "claude-role writes claude-2.txt",
+      "verified_by_agent_id": null,
+      "waiting_condition": null,
+      "waiting_on": null
+    },
+    {
+      "acceptance": [
+        {
+          "check_id": "codex-first-content",
+          "description": "codex-1.txt contains CODEX-FIRST-OK",
+          "kind": "FILE_MATCHES"
+        }
+      ],
+      "adapter": "codex",
+      "agent_id": "placeholder-codex",
+      "attempts": 1,
+      "awaiting_independent_verification": false,
+      "depends_on": [],
+      "is_done": true,
+      "is_running": false,
+      "last_attempt": {
+        "acceptance_passed": true,
+        "attempt_id": "operator-journey.codex-first.run.1.8a273294",
+        "confidence": "CONFIRMED",
+        "ended_at": "2026-09-10T10:58:03.686Z",
+        "phase": "TERMINAL",
+        "policy_denials": 0,
+        "runtime_session_id": "01a08af7-4c77-72e0-8a22-9cf833f00ff6",
+        "started_at": "2026-09-10T10:57:37.655Z"
+      },
+      "last_failure_class": null,
+      "last_meaningful_progress": {
+        "acceptance_passed": true,
+        "at": "2026-09-10T10:58:03.686Z",
+        "attempt_id": "operator-journey.codex-first.run.1.8a273294",
+        "note": "an attempt ending is not progress; acceptance_passed and a changed workspace fingerprint are what make it progress",
+        "workspace_fingerprint": "7af55c900ea06aefa1464bcc6bc06fcaa2a72086938122c1c35189c4e2a919b2"
+      },
+      "launches": 1,
+      "owner_gate": null,
+      "retry": {
+        "attempt_budget": 2,
+        "attempts_used": 1,
+        "eligible": true,
+        "last_failure_class": null,
+        "reason": "no failure recorded"
+      },
+      "state": "CERTIFIED",
+      "task_id": "codex-first",
+      "title": "codex-role writes codex-1.txt",
+      "verified_by_agent_id": null,
+      "waiting_condition": null,
+      "waiting_on": null
+    },
+    {
+      "acceptance": [
+        {
+          "check_id": "codex-second-content",
+          "description": "codex-2.txt contains CODEX-SECOND-OK",
+          "kind": "FILE_MATCHES"
+        }
+      ],
+      "adapter": "codex",
+      "agent_id": "placeholder-codex",
+      "attempts": 1,
+      "awaiting_independent_verification": false,
+      "depends_on": [
+        "codex-first"
+      ],
+      "is_done": true,
+      "is_running": false,
+      "last_attempt": {
+        "acceptance_passed": true,
+        "attempt_id": "operator-journey.codex-second.run.1.9f2f3812",
+        "confidence": "CONFIRMED",
+        "ended_at": "2026-09-10T10:58:18.999Z",
+        "phase": "TERMINAL",
+        "policy_denials": 0,
+        "runtime_session_id": "01a08af7-b22c-7681-8732-f854fe0a45df",
+        "started_at": "2026-09-10T10:58:03.728Z"
+      },
+      "last_failure_class": null,
+      "last_meaningful_progress": {
+        "acceptance_passed": true,
+        "at": "2026-09-10T10:58:18.999Z",
+        "attempt_id": "operator-journey.codex-second.run.1.9f2f3812",
+        "note": "an attempt ending is not progress; acceptance_passed and a changed workspace fingerprint are what make it progress",
+        "workspace_fingerprint": "ec813c85750a5b4e0f5d419c72ad7b184ede565fe945a84aeedffd1176a2f00b"
+      },
+      "launches": 1,
+      "owner_gate": null,
+      "retry": {
+        "attempt_budget": 2,
+        "attempts_used": 1,
+        "eligible": true,
+        "last_failure_class": null,
+        "reason": "no failure recorded"
+      },
+      "state": "CERTIFIED",
+      "task_id": "codex-second",
+      "title": "codex-role writes codex-2.txt",
+      "verified_by_agent_id": null,
+      "waiting_condition": null,
+      "waiting_on": null
+    }
+  ],
+  "truth_boundary": "PROGRAM_APPROVAL != MERGE_AUTHORIZATION / WORKER_REPORTED_COMPLETION != ACCEPTANCE / ACCEPTANCE != INDEPENDENT_VERIFICATION / TASK_COMPLETE != PROGRAM_COMPLETE / ADAPTER_EXIT_ZERO != ACCEPTANCE_PASSED / ESTIMATED_COST != BILLED_SPEND"
+}
+
+=== 11. compact status ===
+INFO project_atlas.config: loaded configuration [path=/home/gebruiker/Projects/project-atlas-worktrees/program-supervisor/pyproject.toml]
+{
+  "awaiting_independent_verification": [],
+  "blocked": [],
+  "cancel_requested": false,
+  "current_task": null,
+  "done": [
+    "claude-first",
+    "claude-second",
+    "codex-first",
+    "codex-second"
+  ],
+  "estimated_cost_note": "client-side estimate reported by the runtime; not billed spend",
+  "estimated_cost_usd": 1.2331081999999998,
+  "execution_authorized": false,
+  "last_stop_reason": "PROGRAM_COMPLETE",
+  "last_verified_progress_at": "2026-09-10T10:58:18.999Z",
+  "merge_authorized": false,
+  "needs_reconciliation": [],
+  "owner_decision_required": [],
+  "program_complete": true,
+  "program_id": "operator-journey",
+  "ready": [],
+  "remaining_limits": {
+    "idle_cycles_used": 1,
+    "launches": 4,
+    "max_cycles": 20,
+    "max_idle_cycles": 3,
+    "max_program_seconds": 2400,
+    "max_task_launches": 8
+  },
+  "running": [],
+  "started": true,
+  "supervisor_alive": false,
+  "supervisor_pid": 598773,
+  "waiting_on_external_event": []
+}
+
+=== 12. restart is not replay: starting again launches nothing ===
+INFO project_atlas.config: loaded configuration [path=/home/gebruiker/Projects/project-atlas-worktrees/program-supervisor/pyproject.toml]
+{
+  "cycles_run": 1,
+  "enrolled_agents_bound": [
+    "claude-worker",
+    "codex-worker"
+  ],
+  "estimated_cost_note": "client-side estimate reported by the runtime; not billed spend",
+  "estimated_cost_usd": 1.2331081999999998,
+  "execution_authorized": false,
+  "launches_this_run": 0,
+  "max_concurrent_workers_observed": 0,
+  "merge_authorized": false,
+  "notifications": [
+    {
+      "detail": {
+        "tasks": [
+          "claude-first",
+          "claude-second",
+          "codex-first",
+          "codex-second"
+        ]
+      },
+      "kind": "PROGRAM_COMPLETE",
+      "message": "every task in the approved program reached an accepted state"
+    }
+  ],
+  "program_complete": true,
+  "program_id": "operator-journey",
+  "stop_reason": "PROGRAM_COMPLETE",
+  "tasks_dispatched": [],
+  "total_launches": 4,
+  "truth_boundary": "PROGRAM_APPROVAL != MERGE_AUTHORIZATION / WORKER_REPORTED_COMPLETION != ACCEPTANCE / ACCEPTANCE != INDEPENDENT_VERIFICATION / TASK_COMPLETE != PROGRAM_COMPLETE / ADAPTER_EXIT_ZERO != ACCEPTANCE_PASSED / ESTIMATED_COST != BILLED_SPEND"
+}
+
+=== 13. revoke authority, then prove the next dispatch is refused ===
+INFO project_atlas.config: loaded configuration [path=/home/gebruiker/Projects/project-atlas-worktrees/program-supervisor/pyproject.toml]
+{
+  "agent_id": "claude-worker",
+  "note": "dispatch is withheld; task ownership is deliberately not touched, because dropping a lease on a surface somebody may still be writing is worse than pausing dispatch",
+  "status": "SUSPENDED"
+}
+INFO project_atlas.config: loaded configuration [path=/home/gebruiker/Projects/project-atlas-worktrees/program-supervisor/pyproject.toml]
+{
+  "agents": [
+    {
+      "adapter": "claude-code",
+      "agent_id": "claude-worker",
+      "assigned_at": "2026-09-10T10:57:34.068Z",
+      "assigned_by": "wesley",
+      "assigned_program": "/home/gebruiker/.cache/atlas-program-tests/journey3/program.json",
+      "description": "real Claude Code worker",
+      "enrolled_at": "2026-09-10T10:57:32.358Z",
+      "enrolled_by": "wesley",
+      "merge_authorized": false,
+      "profile_narrowing": {},
+      "role": "claude-role",
+      "runtime_substitution_authorized": false,
+      "runtime_substitution_authorized_by": null,
+      "status": "SUSPENDED",
+      "workspace_root": "/home/gebruiker/.cache/atlas-program-tests/journey3/workspace"
+    },
+    {
+      "adapter": "codex",
+      "agent_id": "codex-worker",
+      "assigned_at": "2026-09-10T10:57:34.648Z",
+      "assigned_by": "wesley",
+      "assigned_program": "/home/gebruiker/.cache/atlas-program-tests/journey3/program.json",
+      "description": "real Codex worker",
+      "enrolled_at": "2026-09-10T10:57:32.928Z",
+      "enrolled_by": "wesley",
+      "merge_authorized": false,
+      "profile_narrowing": {},
+      "role": "codex-role",
+      "runtime_substitution_authorized": false,
+      "runtime_substitution_authorized_by": null,
+      "status": "ACTIVE",
+      "workspace_root": "/home/gebruiker/.cache/atlas-program-tests/journey3/workspace"
+    }
+  ],
+  "registry": "/home/gebruiker/.cache/atlas-program-tests/journey3/registry"
+}
+{
+  "code": "AGENT_NOT_ACTIVE",
+  "error": "agent claude-worker is SUSPENDED and cannot be assigned work",
+  "merge_authorized": false
+}
+INFO project_atlas.config: loaded configuration [path=/home/gebruiker/Projects/project-atlas-worktrees/program-supervisor/pyproject.toml]
+{
+  "code": "AGENT_NOT_ACTIVE",
+  "error": "agent claude-worker is SUSPENDED",
+  "merge_authorized": false
+}
+--- did anything get written? ---
+ls: cannot access '/home/gebruiker/.cache/atlas-program-tests/journey3/workspace/never-written.txt': No such file or directory
+never-written.txt: absent, as required
+
+=== 14. the durable event log ===
+INFO project_atlas.config: loaded configuration [path=/home/gebruiker/Projects/project-atlas-worktrees/program-supervisor/pyproject.toml]
+{
+  "events": [
+    {
+      "adapter": "claude-code",
+      "agent_id": "claude-worker",
+      "at": "2026-09-10T10:57:37.594Z",
+      "attempt_id": "operator-journey.claude-first.run.1.3de39a8e",
+      "event": "DISPATCH_INTENT",
+      "idempotency_key": "a1aa5fb83075ac6d2d71b65698c2404ba2906477ef48a9f6b4c94d1bc1a5af58",
+      "mode": "NEW",
+      "profile_id": "claude-role",
+      "runtime_session_id": "e37a7496-b2bc-4a3f-b5e3-e618d0796e31",
+      "task_id": "claude-first"
+    },
+    {
+      "at": "2026-09-10T10:57:37.596Z",
+      "event": "TASK_TRANSITION",
+      "from": "LEASED",
+      "reason": "worker starting",
+      "task_id": "claude-first",
+      "to": "ACTIVE"
+    },
+    {
+      "at": "2026-09-10T10:57:37.652Z",
+      "event": "TASK_TRANSITION",
+      "from": "READY",
+      "reason": "ownership granted",
+      "task_id": "codex-first",
+      "to": "LEASED"
+    },
+    {
+      "agent_id": "codex-worker",
+      "at": "2026-09-10T10:57:37.654Z",
+      "authorized_paths": [
+        "codex-1.txt"
+      ],
+      "event": "LEASE_GRANTED",
+      "lease_id": "operator-journey-codex-first-2",
+      "task_id": "codex-first"
+    },
+    {
+      "adapter": "codex",
+      "agent_id": "codex-worker",
+      "at": "2026-09-10T10:57:37.657Z",
+      "attempt_id": "operator-journey.codex-first.run.1.8a273294",
+      "event": "DISPATCH_INTENT",
+      "idempotency_key": "c26388ac0f38b17d4ef3fc8886d62a4ee746cfcda3b8bbf4546317fc6c8ae9e1",
+      "mode": "NEW",
+      "profile_id": "codex-role",
+      "runtime_session_id": null,
+      "task_id": "codex-first"
+    },
+    {
+      "at": "2026-09-10T10:57:37.660Z",
+      "event": "TASK_TRANSITION",
+      "from": "LEASED",
+      "reason": "worker starting",
+      "task_id": "codex-first",
+      "to": "ACTIVE"
+    },
+    {
+      "at": "2026-09-10T10:57:56.123Z",
+      "attempt_id": "operator-journey.claude-first.run.1.3de39a8e",
+      "confidence": "CONFIRMED",
+      "event": "ADAPTER_RETURNED",
+      "exit_status": 0,
+      "failure_class": null,
+      "task_id": "claude-first",
+      "terminal_state": "completed"
+    },
+    {
+      "at": "2026-09-10T10:57:56.133Z",
+      "attempt_id": "operator-journey.claude-first.run.1.3de39a8e",
+      "event": "ACCEPTANCE_EVALUATED",
+      "failed_checks": [],
+      "passed": true,
+      "task_id": "claude-first"
+    },
+    {
+      "at": "2026-09-10T10:57:56.134Z",
+      "event": "TASK_TRANSITION",
+      "from": "ACTIVE",
+      "reason": "worker finished; acceptance evaluated by the supervisor",
+      "task_id": "claude-first",
+      "to": "VERIFYING"
+    },
+    {
+      "at": "2026-09-10T10:57:56.135Z",
+      "event": "TASK_TRANSITION",
+      "from": "VERIFYING",
+      "reason": "every acceptance condition observed to hold",
+      "task_id": "claude-first",
+      "to": "CERTIFIED"
+    },
+    {
+      "at": "2026-09-10T10:57:56.140Z",
+      "event": "LEASE_RELEASED",
+      "lease_id": "operator-journey-claude-first-1",
+      "task_id": "claude-first"
+    },
+    {
+      "at": "2026-09-10T10:57:56.144Z",
+      "attempt_id": "operator-journey.claude-first.run.1.3de39a8e",
+      "event": "TASK_ACCEPTED",
+      "task_id": "claude-first"
+    },
+    {
+      "at": "2026-09-10T10:57:56.157Z",
+      "event": "TASK_TRANSITION",
+      "from": "READY",
+      "reason": "ownership granted",
+      "task_id": "claude-second",
+      "to": "LEASED"
+    },
+    {
+      "agent_id": "claude-worker",
+      "at": "2026-09-10T10:57:56.159Z",
+      "authorized_paths": [
+        "claude-2.txt"
+      ],
+      "event": "LEASE_GRANTED",
+      "lease_id": "operator-journey-claude-second-3",
+      "task_id": "claude-second"
+    },
+    {
+      "adapter": "claude-code",
+      "agent_id": "claude-worker",
+      "at": "2026-09-10T10:57:56.162Z",
+      "attempt_id": "operator-journey.claude-second.run.1.c121ac1f",
+      "event": "DISPATCH_INTENT",
+      "idempotency_key": "88ddd0d0d01ea268d1f472be2c1dd7b5a586b9f168778e685cdb5fc7493f085c",
+      "mode": "NEW",
+      "profile_id": "claude-role",
+      "runtime_session_id": "712b4693-5507-407d-9a80-234f1e161362",
+      "task_id": "claude-second"
+    },
+    {
+      "at": "2026-09-10T10:57:56.164Z",
+      "event": "TASK_TRANSITION",
+      "from": "LEASED",
+      "reason": "worker starting",
+      "task_id": "claude-second",
+      "to": "ACTIVE"
+    },
+    {
+      "at": "2026-09-10T10:58:03.690Z",
+      "attempt_id": "operator-journey.codex-first.run.1.8a273294",
+      "confidence": "CONFIRMED",
+      "event": "ADAPTER_RETURNED",
+      "exit_status": 0,
+      "failure_class": null,
+      "task_id": "codex-first",
+      "terminal_state": "turn.completed"
+    },
+    {
+      "at": "2026-09-10T10:58:03.700Z",
+      "attempt_id": "operator-journey.codex-first.run.1.8a273294",
+      "event": "ACCEPTANCE_EVALUATED",
+      "failed_checks": [],
+      "passed": true,
+      "task_id": "codex-first"
+    },
+    {
+      "at": "2026-09-10T10:58:03.701Z",
+      "event": "TASK_TRANSITION",
+      "from": "ACTIVE",
+      "reason": "worker finished; acceptance evaluated by the supervisor",
+      "task_id": "codex-first",
+      "to": "VERIFYING"
+    },
+    {
+      "at": "2026-09-10T10:58:03.704Z",
+      "event": "TASK_TRANSITION",
+      "from": "VERIFYING",
+      "reason": "every acceptance condition observed to hold",
+      "task_id": "codex-first",
+      "to": "CERTIFIED"
+    },
+    {
+      "at": "2026-09-10T10:58:03.708Z",
+      "event": "LEASE_RELEASED",
+      "lease_id": "operator-journey-codex-first-2",
+      "task_id": "codex-first"
+    },
+    {
+      "at": "2026-09-10T10:58:03.711Z",
+      "attempt_id": "operator-journey.codex-first.run.1.8a273294",
+      "event": "TASK_ACCEPTED",
+      "task_id": "codex-first"
+    },
+    {
+      "at": "2026-09-10T10:58:03.725Z",
+      "event": "TASK_TRANSITION",
+      "from": "READY",
+      "reason": "ownership granted",
+      "task_id": "codex-second",
+      "to": "LEASED"
+    },
+    {
+      "agent_id": "codex-worker",
+      "at": "2026-09-10T10:58:03.726Z",
+      "authorized_paths": [
+        "codex-2.txt"
+      ],
+      "event": "LEASE_GRANTED",
+      "lease_id": "operator-journey-codex-second-4",
+      "task_id": "codex-second"
+    },
+    {
+      "adapter": "codex",
+      "agent_id": "codex-worker",
+      "at": "2026-09-10T10:58:03.730Z",
+      "attempt_id": "operator-journey.codex-second.run.1.9f2f3812",
+      "event": "DISPATCH_INTENT",
+      "idempotency_key": "06eca7997eb0b8ddc37b77b33220159b34e651ccd3a399f3b1097617ba3064d1",
+      "mode": "NEW",
+      "profile_id": "codex-role",
+      "runtime_session_id": null,
+      "task_id": "codex-second"
+    },
+    {
+      "at": "2026-09-10T10:58:03.731Z",
+      "event": "TASK_TRANSITION",
+      "from": "LEASED",
+      "reason": "worker starting",
+      "task_id": "codex-second",
+      "to": "ACTIVE"
+    },
+    {
+      "at": "2026-09-10T10:58:11.941Z",
+      "attempt_id": "operator-journey.claude-second.run.1.c121ac1f",
+      "confidence": "CONFIRMED",
+      "event": "ADAPTER_RETURNED",
+      "exit_status": 0,
+      "failure_class": null,
+      "task_id": "claude-second",
+      "terminal_state": "completed"
+    },
+    {
+      "at": "2026-09-10T10:58:11.949Z",
+      "attempt_id": "operator-journey.claude-second.run.1.c121ac1f",
+      "event": "ACCEPTANCE_EVALUATED",
+      "failed_checks": [],
+      "passed": true,
+      "task_id": "claude-second"
+    },
+    {
+      "at": "2026-09-10T10:58:11.950Z",
+      "event": "TASK_TRANSITION",
+      "from": "ACTIVE",
+      "reason": "worker finished; acceptance evaluated by the supervisor",
+      "task_id": "claude-second",
+      "to": "VERIFYING"
+    },
+    {
+      "at": "2026-09-10T10:58:11.952Z",
+      "event": "TASK_TRANSITION",
+      "from": "VERIFYING",
+      "reason": "every acceptance condition observed to hold",
+      "task_id": "claude-second",
+      "to": "CERTIFIED"
+    },
+    {
+      "at": "2026-09-10T10:58:11.956Z",
+      "event": "LEASE_RELEASED",
+      "lease_id": "operator-journey-claude-second-3",
+      "task_id": "claude-second"
+    },
+    {
+      "at": "2026-09-10T10:58:11.959Z",
+      "attempt_id": "operator-journey.claude-second.run.1.c121ac1f",
+      "event": "TASK_ACCEPTED",
+      "task_id": "claude-second"
+    },
+    {
+      "at": "2026-09-10T10:58:19.004Z",
+      "attempt_id": "operator-journey.codex-second.run.1.9f2f3812",
+      "confidence": "CONFIRMED",
+      "event": "ADAPTER_RETURNED",
+      "exit_status": 0,
+      "failure_class": null,
+      "task_id": "codex-second",
+      "terminal_state": "turn.completed"
+    },
+    {
+      "at": "2026-09-10T10:58:19.019Z",
+      "attempt_id": "operator-journey.codex-second.run.1.9f2f3812",
+      "event": "ACCEPTANCE_EVALUATED",
+      "failed_checks": [],
+      "passed": true,
+      "task_id": "codex-second"
+    },
+    {
+      "at": "2026-09-10T10:58:19.021Z",
+      "event": "TASK_TRANSITION",
+      "from": "ACTIVE",
+      "reason": "worker finished; acceptance evaluated by the supervisor",
+      "task_id": "codex-second",
+      "to": "VERIFYING"
+    },
+    {
+      "at": "2026-09-10T10:58:19.024Z",
+      "event": "TASK_TRANSITION",
+      "from": "VERIFYING",
+      "reason": "every acceptance condition observed to hold",
+      "task_id": "codex-second",
+      "to": "CERTIFIED"
+    },
+    {
+      "at": "2026-09-10T10:58:19.027Z",
+      "event": "LEASE_RELEASED",
+      "lease_id": "operator-journey-codex-second-4",
+      "task_id": "codex-second"
+    },
+    {
+      "at": "2026-09-10T10:58:19.031Z",
+      "attempt_id": "operator-journey.codex-second.run.1.9f2f3812",
+      "event": "TASK_ACCEPTED",
+      "task_id": "codex-second"
+    },
+    {
+      "at": "2026-09-10T10:58:19.038Z",
+      "event": "NOTIFY_PROGRAM_COMPLETE",
+      "message": "every task in the approved program reached an accepted state",
+      "tasks": [
+        "claude-first",
+        "claude-second",
+        "codex-first",
+        "codex-second"
+      ]
+    },
+    {
+      "at": "2026-09-10T10:58:20.799Z",
+      "event": "NOTIFY_PROGRAM_COMPLETE",
+      "message": "every task in the approved program reached an accepted state",
+      "tasks": [
+        "claude-first",
+        "claude-second",
+        "codex-first",
+        "codex-second"
+      ]
+    }
+  ],
+  "program_id": "operator-journey"
+}
+
+=== 15. the workspace the workers actually produced ===
+claude-1.txt     CLAUDE-FIRST-OK
+claude-2.txt     CLAUDE-SECOND-OK
+codex-1.txt      CODEX-FIRST-OK
+codex-2.txt      CODEX-SECOND-OK

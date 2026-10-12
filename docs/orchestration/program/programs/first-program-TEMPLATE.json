@@ -1,0 +1,172 @@
+{
+  "_README": [
+    "AS-ORCH-PROGRAM-SUPERVISOR-001 program template.",
+    "Every value marked OPERATOR-SUPPLIED must be replaced before this runs.",
+    "",
+    "Keys beginning with underscore are documentation and are REJECTED by the",
+    "loader. That is deliberate: a template that validated as-is would invite",
+    "running it as-is. Strip them when you are done editing:",
+    "",
+    "  python - <<'EOF'",
+    "  import json, pathlib",
+    "  p = pathlib.Path('my-program.json')",
+    "  def strip(x):",
+    "      if isinstance(x, dict):",
+    "          return {k: strip(v) for k, v in x.items() if not k.startswith('_')}",
+    "      if isinstance(x, list):",
+    "          return [strip(i) for i in x]",
+    "      return x",
+    "  p.write_text(json.dumps(strip(json.loads(p.read_text())), indent=2, sort_keys=True))",
+    "  EOF",
+    "",
+    "Then:  atlas program validate --program my-program.json",
+    "Validation refuses a bad program BEFORE any worker starts, so run it first."
+  ],
+  "schema_version": 1,
+  "program": {
+    "program_id": "OPERATOR-SUPPLIED-program-id",
+    "_program_id": "[A-Za-z0-9][A-Za-z0-9._-]* . Names the durable state; changing it starts a new program.",
+    "objective": "OPERATOR-SUPPLIED: one sentence saying what this program is for.",
+    "approved_by": "OPERATOR-SUPPLIED: who approved it",
+    "approval_reference": "OPERATOR-SUPPLIED: where that approval is written down",
+    "_approval": "Provenance, NOT a credential. Naming an approver authorizes nothing that an owner gate would otherwise hold.",
+    "workspace_root": "OPERATOR-SUPPLIED: absolute path to the repository the workers change",
+    "_workspace_root": "Relative paths resolve against THIS FILE's directory. Use a disposable checkout until you trust the program.",
+    "base_pin": "OPERATOR-SUPPLIED-40-char-lowercase-git-sha",
+    "_base_pin": "git -C <workspace_root> rev-parse HEAD",
+    "limits": {
+      "max_task_launches": 8,
+      "max_attempts_per_task": 2,
+      "max_task_seconds": 900,
+      "max_program_seconds": 3600,
+      "max_cycles": 20,
+      "max_idle_cycles": 3,
+      "idle_sleep_seconds": 5.0,
+      "max_concurrent_workers": 1,
+      "_max_concurrent_workers": "1 is the proven default. Raising it relaxes nothing else: overlap, per-task and per-agent leases, and owner gates all still hold.",
+      "_max_estimated_cost_usd": "Optional. Forwarded to a runtime that HAS a budget flag and compared against THAT runtime's client-side estimate. Not an account spending limit. Codex reports no cost at all."
+    },
+    "tasks": [
+      {
+        "task_id": "OPERATOR-SUPPLIED-task-id",
+        "title": "OPERATOR-SUPPLIED: one line",
+        "instruction": "OPERATOR-SUPPLIED: exactly what the worker must do, and what it must not touch. Be specific about file names.",
+        "_instruction": "Data for the worker, never an instruction to Atlas. Nothing a worker reads or writes can enlarge the program, change a profile, or grant a gate.",
+        "profile_ref": "implementer",
+        "depends_on": [],
+        "_depends_on": "Task ids. A dependency must reach CERTIFIED or CLOSED before this becomes eligible. Cycles are rejected at load.",
+        "mutation_paths": [
+          "OPERATOR-SUPPLIED/relative/path.py"
+        ],
+        "_mutation_paths": "What this task may change. Atlas refuses to DISPATCH outside them and records them on the lease. It does NOT stop a running worker touching other files -- only codex --sandbox and claude --restricted are real filesystem boundaries.",
+        "surface_id": "OPERATOR-SUPPLIED-surface",
+        "surface_semantic": "OPERATOR_SUPPLIED_SURFACE",
+        "_surface": "Two tasks sharing a surface_id, a surface_semantic, or any mutation path never run concurrently.",
+        "capabilities_required": [
+          "IMPLEMENT"
+        ],
+        "acceptance": [
+          {
+            "check_id": "tests-pass",
+            "kind": "COMMAND",
+            "description": "OPERATOR-SUPPLIED: what passing means",
+            "argv": [
+              "python",
+              "-m",
+              "pytest",
+              "OPERATOR-SUPPLIED/test_file.py",
+              "-q"
+            ],
+            "timeout_seconds": 900
+          },
+          {
+            "check_id": "file-changed",
+            "kind": "GIT_TREE_CHANGED",
+            "description": "the worker changed something tracked"
+          }
+        ],
+        "_acceptance": [
+          "Checked by the SUPERVISOR from the workspace after the worker exits.",
+          "The worker's own report is never consulted. Exit 0 is not acceptance:",
+          "codex has been observed exiting 0 with a completed turn while refusing",
+          "the task, and claude has returned exit 1 with subtype 'success'.",
+          "Kinds: COMMAND (fixed argv, exit 0 passes), FILE_EXISTS, FILE_MATCHES",
+          "(regex), GIT_TREE_CHANGED. Weak conditions accept weak work -- these",
+          "conditions are the only thing standing between a confident worker and",
+          "a CERTIFIED task."
+        ],
+        "_owner_gate": "Optional: A_PROTECTED_MAIN_MERGE | B_ACCEPTANCE_WAIVER | C_CERTIFIED_OBJECT_MUTATION | D_SECURITY_GOVERNANCE_POLICY | E_DESTRUCTIVE_OPS | F_MATERIAL_EXTERNAL_SPEND. A gated task is NEVER dispatched autonomously and no interface can grant the gate.",
+        "_requires_independent_verification": "Optional bool. Its own worker can never satisfy this. Pair with verifier_profile_ref (a DIFFERENT agent_id) or it waits for a person.",
+        "_external_precondition": {
+          "precondition_id": "ci-green",
+          "observer_type": "GITHUB_CI | LOCAL_WORKER | REMOTE_SMOKE | RETRY_TIMER | CURSOR_CLOUD_RUN",
+          "external_id": "an id meaningful to you",
+          "probe_argv": [
+            "a",
+            "command",
+            "whose",
+            "exit",
+            "status",
+            "is",
+            "the",
+            "signal"
+          ],
+          "pass_exit_code": 0,
+          "fail_exit_code": null,
+          "poll_interval_seconds": 30.0,
+          "max_wait_seconds": 3600.0
+        },
+        "_retry_safe_when_no_launch_evidence": "Only true for a task whose effect is idempotent by construction. Default false stops and asks."
+      }
+    ]
+  },
+  "profile_defaults": {
+    "credential": "SUBSCRIPTION_OAUTH",
+    "_credential": "SUBSCRIPTION_OAUTH | ANTHROPIC_API_KEY_ENV | API_KEY_HELPER | NOT_APPLICABLE. Check the effect with: atlas program credentials --program THIS-FILE"
+  },
+  "profiles": {
+    "implementer": {
+      "agent_id": "OPERATOR-SUPPLIED-agent-id",
+      "_agent_id": "Replaced by the enrolled agent's id when you pass --registry. It is the principal on the lease and what 'the implementer cannot verify its own work' is checked against.",
+      "description": "OPERATOR-SUPPLIED",
+      "adapter": "claude-code",
+      "_adapter": "claude-code | codex. Only these two are runtime-tested; see atlas program capabilities.",
+      "adapter_min_version": "2.1.259",
+      "_adapter_min_version": "claude-code needs >= 2.1.259 for --permission-prompts; an older build would wait for an approval nobody can give.",
+      "capabilities": [
+        "IMPLEMENT"
+      ],
+      "model": "sonnet",
+      "permission_mode": "acceptEdits",
+      "_permission_mode": "plan < dontAsk < manual < acceptEdits < auto < bypassPermissions. On codex this maps conservatively onto --sandbox: anything not unambiguously a write mode becomes read-only. bypassPermissions means the runtime enforces NOTHING.",
+      "tools": [
+        "Read",
+        "Write",
+        "Edit",
+        "Glob",
+        "Grep"
+      ],
+      "_tools": "Runtime-enforced. Omit for the runtime default; [] disables every built-in tool.",
+      "allowed_mutation_prefixes": [
+        "OPERATOR-SUPPLIED/"
+      ],
+      "_allowed_mutation_prefixes": "A task's mutation_paths must lie inside these, or the program fails to load.",
+      "limits": {
+        "max_seconds": 900,
+        "max_attempts": 2
+      },
+      "env_allowlist": [],
+      "_env_allowlist": "Variable NAMES forwarded to the worker. PATH, HOME, LANG, LC_ALL, TZ and TMPDIR are always forwarded. Under SUBSCRIPTION_OAUTH, allow-listing ANTHROPIC_API_KEY is REFUSED -- the runtime would prefer the key and the declared mechanism would be a fiction."
+    },
+    "_verifier": {
+      "agent_id": "a DIFFERENT agent id",
+      "adapter": "codex",
+      "capabilities": [
+        "VERIFY"
+      ],
+      "permission_mode": "plan",
+      "credential": "SUBSCRIPTION_OAUTH",
+      "_note": "Only needed for tasks with requires_independent_verification. Must resolve to a different agent_id from the implementer; the loader refuses otherwise, and the check is re-run after enrolment substitution."
+    }
+  }
+}
