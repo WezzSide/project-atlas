@@ -65,13 +65,31 @@ The task-authoring policy is a different document from `contracts/AUTONOMY-POLIC
 is operator configuration, was not imported, and is reached by three separate paths:
 
 - **Queue service**: reads `ATLAS_QUEUE_POLICY_FILE`, which must be set at start.
-  - An autonomous submission is one whose envelope carries `author_node`. The service
-    evaluates it with `atlas_task_policy.evaluate` and refuses any result other than `ALLOW`
-    (HTTP 422).
-  - It refuses all autonomous submissions (HTTP 503) if the policy file is missing or the
-    policy engine cannot be imported.
-  - An identity marked `policy_enforced` may submit only autonomous envelopes (HTTP 403
-    otherwise).
+  - Whether a submission is policy-checked is decided by the authenticated identity's
+    token record, never by the request body. Every submitting identity is policy-checked
+    unless its record carries the explicit boolean grant `"policy_exempt": true` (and no
+    `"policy_enforced": true`). An absent, false, misspelled or non-boolean grant means
+    policy-checked.
+  - A policy-checked submission is evaluated with `atlas_task_policy.evaluate`; any result
+    other than `ALLOW` is refused (HTTP 422). The declared `author_node` is a checked
+    envelope field, not the identity; audit rows record the authenticated identity, the
+    declared author, the identity's roles, the enforcement state and the authority
+    reference separately.
+  - The policy document is validated before any task check. A missing, unreadable or
+    unusable policy, or an engine that cannot be imported, is an explicit refusal
+    (HTTP 503) with a distinct code and an audit row; no task is accepted.
+  - Task ids are canonical on every submit path: first character `A-Z a-z 0-9`, then
+    `A-Z a-z 0-9 . _ -`, at most 128 characters, and no `..`. The raw value is checked;
+    nothing is decoded, trimmed or normalised. The policy path applies the same rule to
+    `mission_id`, `idempotency_key` and `parent_task_id`, and the exempt path to
+    `parent_task_id`. A non-canonical id is refused before any task is written.
+  - `created_at` must be an RFC 3339 timestamp with `Z` or a numeric offset. It carries no
+    freshness meaning.
+  - A `synthetic_only` class requires the structured field `execution_subject` with the
+    value `SYNTHETIC` (allowed values `SYNTHETIC`, `PRODUCTION`; the policy must list the
+    field). Task text is not consulted. The field is the author's declaration: it makes the
+    classification explicit and auditable, not proven.
+  - An `ALLOW` is recorded in the same transaction as the task row it admits.
   - This is the authoritative enforcement point.
 - **Queue client (`author`)**: reads `ATLAS_TASK_POLICY_FILE`. It evaluates the task locally
   and records the decision. It submits only on a local `ALLOW`, and the server then
@@ -159,3 +177,16 @@ commit on `main`, so a deployment done this way becomes provable without further
   not imported. Those tests therefore do not certify the operator policy, and they do not
   establish the live fleet's effective policy configuration. An `ALLOW` in those tests is a
   test result, not an execution grant.
+- Binding policy enforcement to the identity record changes behaviour for any token record
+  that relied on the earlier implicit default (no flag meant unchecked). Repository
+  evidence cannot establish which records do; review the token configuration before
+  activating this revision, and grant `policy_exempt` explicitly where intended.
+- Ids already persisted in a deployed queue are outside the repository and were not checked
+  against the canonical rule.
+- The supervisor builds file paths from task ids and does not validate them itself; it
+  relies on queue admission refusing non-canonical ids.
+- The policy is evaluated at submission only, not again at claim time; there is no
+  cancellation route for an admitted task; open owner-interface missions are merged into the
+  mission registry and take precedence over the policy document's entry for the same id.
+- The declared `author_node` must equal the policy's `author_role` but is not bound to the
+  submitting identity's roles.

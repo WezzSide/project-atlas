@@ -49,7 +49,8 @@ def author(task_path,policy_path=None,decisions_dir=None):
     decisions_dir=decisions_dir or os.environ.get('ATLAS_AUTHORING_DECISIONS_DIR')
     if not policy_path or not decisions_dir: raise SystemExit('configuration error: ATLAS_TASK_POLICY_FILE and ATLAS_AUTHORING_DECISIONS_DIR must be set by operator configuration (no built-in default)')
     task=json.load(open(task_path)); pol=POL.load_policy(policy_path)
-    task.setdefault('author_node',pol['author_role']); task.setdefault('created_at',datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds').replace('+00:00','Z'))
+    if isinstance(pol.get('author_role'),str): task.setdefault('author_node',pol['author_role'])  # an unusable policy is denied by evaluate(), not raised here
+    task.setdefault('created_at',datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds').replace('+00:00','Z'))
     code,o=call('GET','/tasks'); open_tasks=o.get('tasks',[]) if code==200 else []
     d=POL.evaluate(task,pol,open_tasks); rec={'task_id':task.get('task_id'),'idempotency_key':task.get('idempotency_key'),'client_decision':d,'server_response':None}
     if d['decision']=='ALLOW':

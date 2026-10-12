@@ -8,9 +8,12 @@ Design invariants:
 - Receipts/evidence flow back and are stored append-only (never deleted).
 - Bind is loopback by default; a non-loopback bind requires explicit owner authority (ATLAS_QUEUE_BIND).
 - Node identity: static per-node bearer tokens (ATLAS_QUEUE_TOKENS_FILE: json {token: {"node":..,"roles":[..]}}).
+- Task submission is policy-checked unless the authenticated identity's token record carries "policy_exempt": true
+  (and no "policy_enforced": true). The request body never selects the path; declared author_node is not the identity.
+- Task ids are canonical on every submit path (see canonical_id) and are checked before any state write.
 """
 from __future__ import annotations
-import hashlib, hmac, json, os, sqlite3, sys, threading, time, uuid
+import hashlib, hmac, json, os, re, sqlite3, sys, threading, time, uuid
 sys.path.insert(0,os.path.dirname(os.path.abspath(__file__)))
 try:
     import atlas_task_policy as POL
@@ -90,12 +93,26 @@ def expire_leases(c):
         else:
             c.execute("UPDATE tasks SET state='READY', claimed_by=NULL, lease_id=NULL, lease_expires_at=NULL, updated_at=? WHERE task_id=? AND lease_id=?",(iso(),r['task_id'],r['lease_id'])); audit(c,r['claimed_by'],'lease_expired',r['task_id'],{'lease_id':r['lease_id'],'attempts':r['attempts']})
 
+# Same rule as atlas_task_policy.canonical_id, kept here so the exempt path does not depend on the engine import:
+# first character A-Z a-z 0-9, then A-Z a-z 0-9 . _ -, at most 128 characters, no '..'; raw string only (no decoding, trimming, normalisation).
+_CANONICAL_ID=re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}')
+def canonical_id(v): return type(v) is str and _CANONICAL_ID.fullmatch(v) is not None and '..' not in v
+
+def capped(v):
+    """Caller-declared values enter the append-only audit verbatim only when short strings (or absent)."""
+    return v if v is None or (type(v) is str and len(v)<=200) else repr(v)[:200]
+
+def policy_exempt(ident):
+    """Only an explicit boolean grant exempts an identity from policy; absent, false, misspelled or non-boolean means enforced."""
+    return ident.get('policy_exempt') is True and ident.get('policy_enforced',False) is False
+
 def validate_task(o):
     if not isinstance(o,dict): return 'envelope must be object'
     if set(o)-TASK_REQ-{'parent_task_id','lease_seconds'}: return f'unexpected fields: {sorted(set(o)-TASK_REQ)}'
     if not TASK_REQ<=set(o): return f'missing fields: {sorted(TASK_REQ-set(o))}'
     if o['schema_version']!=1: return 'schema_version must be 1'
-    if not isinstance(o['task_id'],str) or not o['task_id'] or len(o['task_id'])>128 or '/' in o['task_id']: return 'bad task_id'
+    if not canonical_id(o['task_id']): return 'bad task_id'
+    if o.get('parent_task_id') is not None and not canonical_id(o['parent_task_id']): return 'bad parent_task_id'
     if not isinstance(o['priority'],int) or not 0<=o['priority']<=100: return 'priority 0..100'
     for k in ('target_role','outcome','authority_reference'):
         if not isinstance(o[k],str) or not o[k]: return f'{k} must be non-empty string'
@@ -245,30 +262,56 @@ class H(BaseHTTPRequestHandler):
                 n=c.execute('UPDATE alerts SET resolved_at=?,resolved_by=? WHERE fingerprint=? AND resolved_at IS NULL',(iso(),node,body.get('fingerprint'))).rowcount; audit(c,node,'alert_resolved',None,{'fingerprint':body.get('fingerprint'),'n':n}); return self._send(200,{'resolved':n})
             if u.path=='/tasks':               # submit (idempotent on task_id)
                 if not can_submit: return self._send(403,{'error':'identity may not submit'})
-                autonomous='author_node' in body; policy_enforced=bool(ident.get('policy_enforced')); decision=None
-                if policy_enforced and not autonomous: return self._send(403,{'error':'this identity may only submit policy-checked autonomous envelopes (author_node, task_class, ...); owner envelopes require the owner identity'})
-                if autonomous:
-                    if not POL or not os.path.exists(POLICY_FILE): return self._send(503,{'error':'policy engine unavailable; autonomous authoring fails closed'})
-                    pol=POL.load_policy(POLICY_FILE)
-                    for r in c.execute("SELECT mission_id,state,cancel_requested FROM missions"):
-                        st='current' if r['state'] in ('ACCEPTED','ACTIVE','WAITING_AUTHORITY') and not r['cancel_requested'] else 'closed'
-                        pol['mission_registry'][r['mission_id']]={'status':st,'role':'*','source':'owner-interface'}
+                # The path is decided by the authenticated identity's record, never by a body field. The five facts below stay distinct in every audit row.
+                exempt=policy_exempt(ident); decision=None; fields=body if isinstance(body,dict) else {}
+                raw_tid=fields.get('task_id'); tid=raw_tid if canonical_id(raw_tid) else None
+                ctx={'authenticated_identity':node,'declared_author':capped(fields.get('author_node')),'roles':sorted(roles),'policy_enforcement':'EXEMPT' if exempt else 'ENFORCED','authority_reference':capped(fields.get('authority_reference'))}
+                if tid is None and raw_tid is not None: ctx['task_id_repr']=repr(raw_tid)[:200]
+                if not exempt:
+                    if not POL:
+                        audit(c,node,'policy_decision',tid,{**ctx,'decision':'DENY','code':'POLICY_ENGINE_UNAVAILABLE','reason':'POLICY_ENGINE_UNAVAILABLE: policy engine not importable'})
+                        return self._send(503,{'error':'policy engine unavailable; policy-enforced submission fails closed'})
                     open_tasks=[dict(r) for r in c.execute('SELECT task_id,idempotency_key,state,mission_id FROM tasks')]
-                    decision=POL.evaluate({k:v for k,v in body.items() if k!='lease_seconds'},pol,open_tasks)
-                    audit(c,node,'policy_decision',body.get('task_id'),{'decision':decision['decision'],'reason':decision['reason'],'task_class':decision.get('task_class'),'authority_reference':decision.get('authority_reference'),'policy_version':decision.get('policy_version'),'policy_sha256':decision.get('policy_sha256')})
-                    if decision['decision']!='ALLOW': return self._send(422,{'error':'policy DENY','decision':decision})
+                    try:
+                        pol=POL.load_policy(POLICY_FILE)
+                        if not POL.policy_problem(pol):
+                            for r in c.execute("SELECT mission_id,state,cancel_requested FROM missions"):
+                                st='current' if r['state'] in ('ACCEPTED','ACTIVE','WAITING_AUTHORITY') and not r['cancel_requested'] else 'closed'
+                                pol['mission_registry'][r['mission_id']]={'status':st,'role':'*','source':'owner-interface'}
+                        decision=POL.evaluate({k:v for k,v in body.items() if k!='lease_seconds'} if isinstance(body,dict) else body,pol,open_tasks)
+                    except Exception as e:   # last resort: an engine defect still fails closed with an audit row
+                        decision={'decision':'DENY','code':'POLICY_INVALID','reason':f'POLICY_INVALID: policy evaluation failed ({type(e).__name__})','checks':[]}
+                    row={**ctx,'decision':decision['decision'],'code':decision.get('code'),'reason':decision['reason'],'task_class':decision.get('task_class'),'policy_version':decision.get('policy_version'),'policy_sha256':decision.get('policy_sha256')}
+                    if decision['decision']!='ALLOW':
+                        audit(c,node,'policy_decision',tid,row)
+                        if decision.get('code') in ('POLICY_UNAVAILABLE','POLICY_INVALID'): return self._send(503,{'error':'policy engine unavailable; policy-enforced submission fails closed','decision':decision})
+                        return self._send(422,{'error':'policy DENY','decision':decision})
                 else:
                     err=validate_task(body)
-                    if err: return self._send(422,{'error':err})
+                    if err:
+                        audit(c,node,'submit_rejected',tid,{**ctx,'rejected':err[:200]})
+                        return self._send(422,{'error':err})
                 env=json.dumps({k:v for k,v in body.items() if k!='lease_seconds'},sort_keys=True); esha=sha(env)
                 ex=c.execute('SELECT envelope_sha256,state FROM tasks WHERE task_id=?',(body['task_id'],)).fetchone()
                 if ex:
                     if ex['envelope_sha256']==esha: return self._send(200,{'task_id':body['task_id'],'state':ex['state'],'idempotent':True})
+                    if decision: audit(c,node,'submit_rejected',tid,{**ctx,'policy_decision':decision['decision'],'rejected':'task_id exists with different envelope'})
                     return self._send(409,{'error':'task_id exists with different envelope','existing_sha256':ex['envelope_sha256']})
-                if body.get('idempotency_key') and c.execute('SELECT 1 FROM tasks WHERE idempotency_key=?',(body['idempotency_key'],)).fetchone(): return self._send(409,{'error':'idempotency_key already used','idempotency_key':body['idempotency_key']})
-                c.execute('INSERT INTO tasks(task_id,target_role,priority,state,envelope,envelope_sha256,authority_reference,parent_task_id,submitted_by,submitted_at,updated_at,idempotency_key,mission_id,task_class,author_node,policy_decision) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-                          (body['task_id'],body['target_role'],body['priority'],'READY',env,esha,body['authority_reference'],body.get('parent_task_id'),node,iso(),iso(),body.get('idempotency_key'),body.get('mission_id'),body.get('task_class'),body.get('author_node'),json.dumps(decision) if decision else None))
-                audit(c,node,'submit',body['task_id'],{'sha256':esha,'autonomous':autonomous,'task_class':body.get('task_class'),'policy':{'decision':decision['decision'],'policy_sha256':decision['policy_sha256']} if decision else None}); return self._send(201,{'task_id':body['task_id'],'state':'READY','envelope_sha256':esha,'policy_decision':decision})
+                if body.get('idempotency_key') and c.execute('SELECT 1 FROM tasks WHERE idempotency_key=?',(body['idempotency_key'],)).fetchone():
+                    if decision: audit(c,node,'submit_rejected',tid,{**ctx,'policy_decision':decision['decision'],'rejected':'idempotency_key already used'})
+                    return self._send(409,{'error':'idempotency_key already used','idempotency_key':body['idempotency_key']})
+                # An ALLOW is recorded only together with the task row it admitted: one transaction, or neither.
+                c.execute('BEGIN IMMEDIATE')
+                try:
+                    c.execute('INSERT INTO tasks(task_id,target_role,priority,state,envelope,envelope_sha256,authority_reference,parent_task_id,submitted_by,submitted_at,updated_at,idempotency_key,mission_id,task_class,author_node,policy_decision) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                              (body['task_id'],body['target_role'],body['priority'],'READY',env,esha,body['authority_reference'],body.get('parent_task_id'),node,iso(),iso(),body.get('idempotency_key'),body.get('mission_id'),body.get('task_class'),body.get('author_node'),json.dumps(decision) if decision else None))
+                    if decision: audit(c,node,'policy_decision',tid,row)
+                    audit(c,node,'submit',tid,{**ctx,'sha256':esha,'autonomous':not exempt,'task_class':body.get('task_class'),'policy':{'decision':decision['decision'],'policy_sha256':decision['policy_sha256']} if decision else None})
+                    c.execute('COMMIT')
+                except Exception as e:
+                    c.execute('ROLLBACK'); audit(c,node,'submit_rejected',tid,{**ctx,'policy_decision':decision['decision'] if decision else None,'rejected':f'task insert failed ({type(e).__name__})'})
+                    return self._send(422,{'error':'task could not be stored'})
+                return self._send(201,{'task_id':body['task_id'],'state':'READY','envelope_sha256':esha,'policy_decision':decision})
             if u.path=='/claim':               # pull: highest-priority READY task for one of my roles
                 role=body.get('role')
                 if role not in roles: return self._send(403,{'error':'identity not authorized for role','roles':sorted(roles)})
