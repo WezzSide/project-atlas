@@ -98,6 +98,10 @@ def expire_leases(c):
 _CANONICAL_ID=re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}')
 def canonical_id(v): return type(v) is str and _CANONICAL_ID.fullmatch(v) is not None and '..' not in v
 
+def capped(v):
+    """Caller-declared values enter the append-only audit verbatim only when short strings (or absent)."""
+    return v if v is None or (type(v) is str and len(v)<=200) else repr(v)[:200]
+
 def policy_exempt(ident):
     """Only an explicit boolean grant exempts an identity from policy; absent, false, misspelled or non-boolean means enforced."""
     return ident.get('policy_exempt') is True and ident.get('policy_enforced',False) is False
@@ -261,19 +265,22 @@ class H(BaseHTTPRequestHandler):
                 # The path is decided by the authenticated identity's record, never by a body field. The five facts below stay distinct in every audit row.
                 exempt=policy_exempt(ident); decision=None; fields=body if isinstance(body,dict) else {}
                 raw_tid=fields.get('task_id'); tid=raw_tid if canonical_id(raw_tid) else None
-                ctx={'authenticated_identity':node,'declared_author':fields.get('author_node'),'roles':sorted(roles),'policy_enforcement':'EXEMPT' if exempt else 'ENFORCED','authority_reference':fields.get('authority_reference')}
+                ctx={'authenticated_identity':node,'declared_author':capped(fields.get('author_node')),'roles':sorted(roles),'policy_enforcement':'EXEMPT' if exempt else 'ENFORCED','authority_reference':capped(fields.get('authority_reference'))}
                 if tid is None and raw_tid is not None: ctx['task_id_repr']=repr(raw_tid)[:200]
                 if not exempt:
                     if not POL:
                         audit(c,node,'policy_decision',tid,{**ctx,'decision':'DENY','code':'POLICY_ENGINE_UNAVAILABLE','reason':'POLICY_ENGINE_UNAVAILABLE: policy engine not importable'})
                         return self._send(503,{'error':'policy engine unavailable; policy-enforced submission fails closed'})
-                    pol=POL.load_policy(POLICY_FILE)
-                    if not POL.policy_problem(pol):
-                        for r in c.execute("SELECT mission_id,state,cancel_requested FROM missions"):
-                            st='current' if r['state'] in ('ACCEPTED','ACTIVE','WAITING_AUTHORITY') and not r['cancel_requested'] else 'closed'
-                            pol['mission_registry'][r['mission_id']]={'status':st,'role':'*','source':'owner-interface'}
                     open_tasks=[dict(r) for r in c.execute('SELECT task_id,idempotency_key,state,mission_id FROM tasks')]
-                    decision=POL.evaluate({k:v for k,v in body.items() if k!='lease_seconds'} if isinstance(body,dict) else body,pol,open_tasks)
+                    try:
+                        pol=POL.load_policy(POLICY_FILE)
+                        if not POL.policy_problem(pol):
+                            for r in c.execute("SELECT mission_id,state,cancel_requested FROM missions"):
+                                st='current' if r['state'] in ('ACCEPTED','ACTIVE','WAITING_AUTHORITY') and not r['cancel_requested'] else 'closed'
+                                pol['mission_registry'][r['mission_id']]={'status':st,'role':'*','source':'owner-interface'}
+                        decision=POL.evaluate({k:v for k,v in body.items() if k!='lease_seconds'} if isinstance(body,dict) else body,pol,open_tasks)
+                    except Exception as e:   # last resort: an engine defect still fails closed with an audit row
+                        decision={'decision':'DENY','code':'POLICY_INVALID','reason':f'POLICY_INVALID: policy evaluation failed ({type(e).__name__})','checks':[]}
                     row={**ctx,'decision':decision['decision'],'code':decision.get('code'),'reason':decision['reason'],'task_class':decision.get('task_class'),'policy_version':decision.get('policy_version'),'policy_sha256':decision.get('policy_sha256')}
                     if decision['decision']!='ALLOW':
                         audit(c,node,'policy_decision',tid,row)
@@ -281,7 +288,9 @@ class H(BaseHTTPRequestHandler):
                         return self._send(422,{'error':'policy DENY','decision':decision})
                 else:
                     err=validate_task(body)
-                    if err: return self._send(422,{'error':err})
+                    if err:
+                        audit(c,node,'submit_rejected',tid,{**ctx,'rejected':err[:200]})
+                        return self._send(422,{'error':err})
                 env=json.dumps({k:v for k,v in body.items() if k!='lease_seconds'},sort_keys=True); esha=sha(env)
                 ex=c.execute('SELECT envelope_sha256,state FROM tasks WHERE task_id=?',(body['task_id'],)).fetchone()
                 if ex:

@@ -32,18 +32,23 @@ def load_policy(path):
     try: p=json.loads(raw)
     except (ValueError,RecursionError) as e: return {'_load_error':('POLICY_INVALID',f'policy is not valid JSON ({type(e).__name__})'),'_sha256':digest}
     if not isinstance(p,dict): return {'_load_error':('POLICY_INVALID','policy must be a JSON object'),'_sha256':digest}
+    # Keys starting with '_' belong to the engine (_load_error, _sha256); the file may not supply them.
+    if any(k.startswith('_') for k in p): return {'_load_error':('POLICY_INVALID','reserved key in policy'),'_sha256':digest}
     p['_sha256']=digest; return p
 
 def _strs(v,nonempty=False): return isinstance(v,list) and all(type(x) is str and x for x in v) and (bool(v) or not nonempty)
 def _compiles(p):
     if type(p) is not str: return False
     try: re.compile(p); return True
-    except re.error: return False
+    except (re.error,OverflowError,RecursionError,ValueError,TypeError): return False
 
 def policy_problem(p):
     """(code, detail) for the first reason the policy document is unusable, or None. Wrong types make the policy unusable; they never widen it."""
     if not isinstance(p,dict): return ('POLICY_INVALID','policy must be an object')
-    if p.get('_load_error'): return tuple(p['_load_error'])
+    if '_load_error' in p:
+        le=p['_load_error']
+        if isinstance(le,(tuple,list)) and len(le)==2 and all(type(x) is str and x for x in le) and le[0] in ('POLICY_UNAVAILABLE','POLICY_INVALID'): return tuple(le)
+        return ('POLICY_INVALID','malformed load error')
     for k in ('policy_id','policy_version','author_role'):
         if type(p.get(k)) is not str or not p[k]: return ('POLICY_INVALID',f'{k} must be a non-empty string')
     if not _strs(p.get('required_fields'),True): return ('POLICY_INVALID','required_fields must be a non-empty list of strings')

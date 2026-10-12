@@ -369,7 +369,12 @@ class TestIdentityBoundEnforcement:
         assert code == 422
         assert "unexpected fields" in body["error"]
         assert svc.task_count() == 0
-        assert svc.audit() == []
+        # No policy evaluation happened; since the H2 remediation (D3) the exempt-path
+        # rejection itself is recorded as the only row.
+        (row,) = svc.audit()
+        assert row["action"] == "submit_rejected"
+        assert row["detail"]["policy_enforcement"] == "EXEMPT"
+        assert "unexpected fields" in row["detail"]["rejected"]
 
     def test_declared_author_is_recorded_apart_from_authenticated_identity(
         self, svc: Service
@@ -455,7 +460,13 @@ class TestCanonicalTaskIdAdmission:
         assert code == 422
         assert body["error"] == "bad task_id"
         assert svc.task_count() == tasks_before
-        assert svc.audit() == audit_before
+        # H2 remediation D3: the rejection itself is recorded (one row, no task key).
+        (row,) = svc.audit()[len(audit_before) :]
+        assert row["action"] == "submit_rejected"
+        assert row["task_id"] is None, "a non-canonical id is never used as audit key material"
+        assert row["detail"]["rejected"] == "bad task_id"
+        assert row["detail"]["policy_enforcement"] == "EXEMPT"
+        assert row["detail"]["task_id_repr"] == repr(bad_id)[:200]
 
     @pytest.mark.parametrize("bad_parent", ["../x", "a/b", "a..b", {"free": ["form"]}, ["x"], 7])
     def test_exempt_path_rejects_unsafe_parent_task_id(self, svc: Service, bad_parent: Any) -> None:
@@ -463,6 +474,9 @@ class TestCanonicalTaskIdAdmission:
         assert code == 422
         assert body["error"] == "bad parent_task_id"
         assert svc.task_count() == 0
+        (row,) = svc.audit()
+        assert row["action"] == "submit_rejected"
+        assert row["detail"]["rejected"] == "bad parent_task_id"
 
     @pytest.mark.parametrize("token", [TOK_ENF, TOK_EXEMPT])
     @pytest.mark.parametrize("good_id", ["A", "a1", "Task-1.v2_x", "a.b.c", "a" * 128])
@@ -527,11 +541,27 @@ def _write_fault(svc: Service, case: str) -> None:
     elif case == "string-target-roles":
         policy["allowed_classes"]["VERIFY"]["target_roles"] = "TEST-ROLE-1"
         svc.policy_path.write_text(json.dumps(policy))
+    elif case == "regex-huge-repeat":
+        policy["hard_deny_patterns"] = [{"id": "HD-BAD", "re": "a{4294967296}"}]
+        svc.policy_path.write_text(json.dumps(policy))
+    elif case == "regex-nested-groups":
+        policy["verdict_dictation_patterns"] = ["(" * 5000 + "a" + ")" * 5000]
+        svc.policy_path.write_text(json.dumps(policy))
+    elif case == "reserved-load-error-int":
+        policy["_load_error"] = 1
+        svc.policy_path.write_text(json.dumps(policy))
+    elif case == "reserved-load-error-spoof":
+        policy["_load_error"] = ["POLICY_INVALID", "spoof"]
+        svc.policy_path.write_text(json.dumps(policy))
     else:
         raise AssertionError(case)
 
 
 POLICY_FAULTS = {
+    "regex-huge-repeat": "POLICY_INVALID",
+    "regex-nested-groups": "POLICY_INVALID",
+    "reserved-load-error-int": "POLICY_INVALID",
+    "reserved-load-error-spoof": "POLICY_INVALID",
     "missing-file": "POLICY_UNAVAILABLE",
     "directory": "POLICY_UNAVAILABLE",
     "bad-json": "POLICY_INVALID",
@@ -560,6 +590,7 @@ class TestPolicyFaultAdmission:
         assert row["detail"]["decision"] == "DENY"
         assert row["detail"]["code"] == POLICY_FAULTS[case]
         assert row["detail"]["authenticated_identity"] == "TEST-H-NODE-ENF"
+        assert "spoof" not in row["detail"]["reason"]
         assert svc.call("GET", "/health", None)[0] == 200
 
     @pytest.mark.skipif(
@@ -625,6 +656,30 @@ class TestAuditIntegrity:
         (row,) = svc.audit()
         assert row["task_id"] is None
         assert row["detail"]["decision"] == "DENY"
+
+    @pytest.mark.parametrize("field", ["author_node", "authority_reference"])
+    @pytest.mark.parametrize("token", [TOK_ENF, TOK_EXEMPT])
+    def test_declared_fields_are_capped_in_the_audit_row(
+        self, svc: Service, field: str, token: str
+    ) -> None:
+        """H2 remediation D4: caller-declared text cannot inflate the append-only audit."""
+        big = "A" * 500_000
+        task = policy_task(**{field: big}) if token == TOK_ENF else owner_task(**{field: big})
+        task["task_id"] = "../x"  # rejected on both paths, so one row is written either way
+        code, _ = svc.submit(task, token)
+        assert code == 422
+        assert svc.task_count() == 0
+        row = svc.audit()[-1]
+        ctx_key = "declared_author" if field == "author_node" else "authority_reference"
+        assert len(row["detail"][ctx_key]) <= 200
+        assert len(json.dumps(row["detail"])) < 5_000
+
+    def test_short_declared_fields_are_recorded_verbatim(self, svc: Service) -> None:
+        """CURRENT_BEHAVIOR positive control."""
+        assert svc.submit(policy_task(), TOK_ENF)[0] == 201
+        detail = svc.audit()[-1]["detail"]
+        assert detail["declared_author"] == "TEST-AUTHOR"
+        assert detail["authority_reference"] == "AUTH-TEST-001"
 
     def test_allow_is_committed_with_its_task(self, svc: Service) -> None:
         """CURRENT_BEHAVIOR positive control: a legitimate submission is accepted and

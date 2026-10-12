@@ -372,3 +372,84 @@ class TestLoadPolicy:
         loaded = policy_engine.load_policy(path)
         assert len(loaded["_sha256"]) == 64
         assert policy_engine.evaluate(make_task(), loaded, [], NOW)["decision"] == "ALLOW"
+
+
+# Patterns whose compilation raises something other than re.error.
+NESTED_GROUPS = "(" * 5000 + "a" + ")" * 5000
+COMPILE_FAULT_PATTERNS = {"huge-repeat": "a{4294967296}", "nested-groups": NESTED_GROUPS}
+
+
+class TestPolicyCompileAndReservedKeys:
+    """EXPECTED_FUTURE_CONTRACT (implemented by the H2 remediation, D1/D2): policy content
+    can never make validation or evaluation raise, and the engine's reserved keys cannot be
+    supplied by the policy file."""
+
+    @pytest.mark.parametrize(
+        "pattern", list(COMPILE_FAULT_PATTERNS.values()), ids=list(COMPILE_FAULT_PATTERNS)
+    )
+    @pytest.mark.parametrize("where", ["hard_deny_patterns", "verdict_dictation_patterns"])
+    def test_pattern_compile_fault_is_policy_invalid(self, pattern: str, where: str) -> None:
+        if where == "hard_deny_patterns":
+            policy = _with((where,), [{"id": "HD-FAULT", "re": pattern}])
+        else:
+            policy = _with((where,), [pattern])
+        assert policy_engine.policy_problem(policy)[0] == "POLICY_INVALID"
+        decision = policy_engine.evaluate(make_task(), policy, [], NOW)
+        assert decision["decision"] == "DENY"
+        assert decision["code"] == "POLICY_INVALID"
+
+    @pytest.mark.parametrize(
+        "value", [1, "AB", ["POLICY_INVALID", "spoof"], ["POLICY_UNAVAILABLE", "spoof"], None, {}]
+    )
+    def test_load_error_key_in_file_is_rejected_as_reserved(
+        self, tmp_path: Path, value: Any
+    ) -> None:
+        policy = make_policy()
+        del policy["_sha256"]
+        policy["_load_error"] = value
+        path = tmp_path / "policy.json"
+        path.write_text(json.dumps(policy))
+        loaded = policy_engine.load_policy(path)
+        assert policy_engine.policy_problem(loaded) == ("POLICY_INVALID", "reserved key in policy")
+        decision = policy_engine.evaluate(make_task(), loaded, [], NOW)
+        assert decision["decision"] == "DENY"
+        assert decision["code"] == "POLICY_INVALID"
+        assert "spoof" not in decision["reason"]
+        assert loaded["_sha256"] is not None
+
+    @pytest.mark.parametrize("key", ["_sha256", "_comment", "_"])
+    def test_any_reserved_namespace_key_in_file_is_rejected(self, tmp_path: Path, key: str) -> None:
+        policy = make_policy()
+        del policy["_sha256"]
+        policy[key] = "x"
+        path = tmp_path / "policy.json"
+        path.write_text(json.dumps(policy))
+        decision = policy_engine.evaluate(make_task(), policy_engine.load_policy(path), [], NOW)
+        assert decision["code"] == "POLICY_INVALID"
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            1,
+            "AB",
+            ["A", "B"],
+            ["POLICY_INVALID"],
+            ["POLICY_INVALID", ""],
+            ["X", "y"],
+            ["POLICY_INVALID", "a", "b"],
+            [1, 2],
+        ],
+    )
+    def test_malformed_load_error_is_contained(self, value: Any) -> None:
+        """Defence in depth for callers that bypass load_policy."""
+        assert policy_engine.policy_problem({"_load_error": value}) == (
+            "POLICY_INVALID",
+            "malformed load error",
+        )
+        decision = policy_engine.evaluate(make_task(), {"_load_error": value}, [], NOW)
+        assert decision["code"] == "POLICY_INVALID"
+
+    @pytest.mark.parametrize("code", ["POLICY_UNAVAILABLE", "POLICY_INVALID"])
+    def test_well_formed_load_error_is_kept(self, code: str) -> None:
+        """CURRENT_BEHAVIOR positive control: the loader's own signal still passes through."""
+        assert policy_engine.policy_problem({"_load_error": (code, "detail")}) == (code, "detail")

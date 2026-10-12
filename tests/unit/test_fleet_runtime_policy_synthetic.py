@@ -684,7 +684,9 @@ class TestReproducibilityAndProvenance:
         synthetic_policy: dict[str, Any],
     ) -> None:
         path = tmp_path / "policy.json"
-        raw = json.dumps(synthetic_policy, sort_keys=True).encode()
+        # A policy file may not carry the engine's reserved '_' keys (H2 remediation D2).
+        on_disk = {k: v for k, v in synthetic_policy.items() if not k.startswith("_")}
+        raw = json.dumps(on_disk, sort_keys=True).encode()
         path.write_bytes(raw)
         loaded = policy_engine.load_policy(path)
         assert loaded["_sha256"] == hashlib.sha256(raw).hexdigest()
@@ -697,7 +699,8 @@ class TestReproducibilityAndProvenance:
         pinned_now: datetime,
     ) -> None:
         path = tmp_path / "policy.json"
-        path.write_text(json.dumps(synthetic_policy, sort_keys=True))
+        on_disk = {k: v for k, v in synthetic_policy.items() if not k.startswith("_")}
+        path.write_text(json.dumps(on_disk, sort_keys=True))
         loaded = policy_engine.load_policy(path)
         decision = policy_engine.evaluate(copy.deepcopy(base_task), loaded, [], pinned_now)
         assert decision["decision"] == "ALLOW"

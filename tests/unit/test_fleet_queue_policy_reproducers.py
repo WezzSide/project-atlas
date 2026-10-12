@@ -1319,15 +1319,20 @@ def test_fc1_owner_path_rejects_unsafe_task_ids(
 def test_fc1_owner_path_rejects_separator_task_ids_today(
     svc: QueueService, id_class: str, form: str, bad_id: str
 ) -> None:
-    """CURRENT_BEHAVIOR
-    The owner submit path (now: the explicitly exempt identity) rejects any task id
-    containing '/' with 422 'bad task_id' before any state write, as it did at base."""
+    """EXPECTED_FUTURE_CONTRACT (implemented by the H2 remediation, D3; re-labelled from
+    CURRENT_BEHAVIOR). The owner submit path (now: the explicitly exempt identity) rejects
+    any task id containing '/' with 422 'bad task_id' before any task write, as it did at
+    base. Base wrote no audit row for this rejection (counts stayed (0, 0)); the rejection
+    is now recorded as exactly one submit_rejected row with no task key."""
     code, body = svc.post("/tasks", owner_body(bad_id, target_role="TEST-ROLE-1"), TOK_EXEMPT)
     assert code == 422
     assert "bad task_id" in body["error"]
-    assert svc.counts() == (0, 0), (
-        f"rejected id {bad_id!r} ({id_class}:{form}) wrote state"
+    assert svc.counts() == (0, 1), (
+        f"rejected id {bad_id!r} ({id_class}:{form}) wrote a task or no audit row"
     )
+    (row,) = svc.audit_rows()
+    assert row["action"] == "submit_rejected"
+    assert row["task_id"] is None
 
 
 # "a.b.c" pins the 2026-10-07 owner decision that single dots stay allowed.
