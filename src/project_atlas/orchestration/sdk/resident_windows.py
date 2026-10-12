@@ -20,6 +20,7 @@ from typing import Final
 
 from project_atlas.orchestration.sdk.host import (
     host_state_dir,
+    no_window_creationflags,
     write_host_identity,
 )
 from project_atlas.orchestration.sdk.models import STATE_DIR_RELATIVE
@@ -263,6 +264,16 @@ def register_windows_logon_task(
         capture_output=True,
         text=True,
         check=False,
+        # A caller running with no console of its own (this module's whole
+        # reason for existing -- see AS-WIN-676 / no_window_creationflags())
+        # would otherwise get a brand-new, visible console window for this
+        # console-subsystem child, exactly like every other call this
+        # module family makes. `timeout` degrades a wedged `schtasks.exe`
+        # to a raised, catchable TimeoutExpired instead of hanging this
+        # call forever -- deliberately not caught here, so a real timeout
+        # still surfaces rather than being silently read as "not registered".
+        creationflags=no_window_creationflags(),
+        timeout=30,
     )
     receipt = {
         "registered": create.returncode == 0,
