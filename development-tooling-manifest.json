@@ -1,0 +1,198 @@
+{
+  "repository": "B0LK13/project-atlas",
+  "items": [
+    {
+      "name": "codebase-memory-mcp",
+      "kind": "mcp",
+      "version": "0.10.8",
+      "source": "npm",
+      "config": [
+        "~/.copilot/mcp-config.json",
+        "~/.config/Code/User/mcp.json",
+        "~/.cursor/mcp.json"
+      ],
+      "scope": "user",
+      "required": true,
+      "health": "pass",
+      "purpose": "Persistent code graph intelligence and architecture discovery."
+    },
+    {
+      "name": "github-mcp-server",
+      "kind": "mcp",
+      "version": "1.12.0",
+      "source": "local-binary",
+      "config": [
+        "~/.local/bin/github-mcp-wrapper",
+        "~/.copilot/mcp-config.json",
+        "~/.config/Code/User/mcp.json",
+        "~/.cursor/mcp.json"
+      ],
+      "scope": "user",
+      "required": true,
+      "health": "pass",
+      "purpose": "Repository metadata, PR, issue, commit, and CI truth."
+    },
+    {
+      "name": "@playwright/mcp",
+      "kind": "mcp",
+      "version": "0.0.80",
+      "source": "npm",
+      "config": [
+        "~/.copilot/mcp-config.json",
+        "~/.config/Code/User/mcp.json",
+        "~/.cursor/mcp.json"
+      ],
+      "scope": "user",
+      "required": true,
+      "health": "pass",
+      "purpose": "Browser automation for UI/evidence verification."
+    },
+    {
+      "name": "@upstash/context7-mcp",
+      "kind": "mcp",
+      "version": "4.0.5",
+      "source": "npm",
+      "config": [
+        "~/.copilot/mcp-config.json",
+        "~/.config/Code/User/mcp.json",
+        "~/.cursor/mcp.json"
+      ],
+      "scope": "user",
+      "required": false,
+      "health": "pass",
+      "purpose": "Current external library/framework documentation lookup."
+    },
+    {
+      "name": "semgrep",
+      "kind": "security-static-analysis",
+      "version": "1.176.1",
+      "source": "pipx",
+      "config": [],
+      "scope": "user",
+      "required": true,
+      "health": "pass",
+      "purpose": "Local static security scanning."
+    },
+    {
+      "name": "gitleaks",
+      "kind": "secret-scanning",
+      "version": "8.30.1",
+      "source": "github-release",
+      "config": [],
+      "scope": "user",
+      "required": true,
+      "health": "pass",
+      "purpose": "Secret detection in repository working tree/history."
+    },
+    {
+      "name": "trivy",
+      "kind": "supply-chain",
+      "version": "0.74.0",
+      "source": "github-release",
+      "config": [],
+      "scope": "user",
+      "required": true,
+      "health": "pass",
+      "purpose": "Vulnerability scanning for dependencies/containers."
+    },
+    {
+      "name": "syft",
+      "kind": "supply-chain",
+      "version": "1.51.1",
+      "source": "github-release",
+      "config": [],
+      "scope": "user",
+      "required": true,
+      "health": "pass",
+      "purpose": "SBOM generation."
+    },
+    {
+      "name": "grype",
+      "kind": "supply-chain",
+      "version": "0.118.0",
+      "source": "github-release",
+      "config": [],
+      "scope": "user",
+      "required": true,
+      "health": "pass",
+      "purpose": "SBOM vulnerability analysis."
+    },
+    {
+      "name": "actionlint",
+      "kind": "ci-tooling",
+      "version": "1.7.12",
+      "source": "go-install",
+      "config": [],
+      "scope": "user",
+      "required": true,
+      "health": "pass",
+      "purpose": "GitHub Actions workflow linting."
+    },
+    {
+      "name": "markdownlint-cli2",
+      "kind": "documentation-quality",
+      "version": "0.23.2",
+      "source": "npm",
+      "config": [],
+      "scope": "user",
+      "required": false,
+      "health": "pass",
+      "purpose": "Markdown quality checks."
+    },
+    {
+      "name": "taplo",
+      "kind": "config-quality",
+      "version": "0.10.0",
+      "source": "github-release",
+      "config": [],
+      "scope": "user",
+      "required": false,
+      "health": "pass",
+      "purpose": "TOML validation and formatting."
+    },
+    {
+      "name": "hadolint",
+      "kind": "container-quality",
+      "version": "2.15.1",
+      "source": "github-release",
+      "config": [],
+      "scope": "user",
+      "required": true,
+      "health": "pass",
+      "purpose": "Dockerfile linting."
+    },
+    {
+      "name": "yamllint",
+      "kind": "config-quality",
+      "version": "1.38.0",
+      "source": "pipx",
+      "config": [],
+      "scope": "user",
+      "required": true,
+      "health": "pass",
+      "purpose": "YAML linting and validation."
+    },
+    {
+      "name": "pre-commit",
+      "kind": "workflow-tooling",
+      "version": "4.6.2",
+      "source": "pipx",
+      "config": [],
+      "scope": "user",
+      "required": false,
+      "health": "pass",
+      "purpose": "Optional local hook runner (no repo hooks imposed)."
+    },
+    {
+      "name": "pip-audit",
+      "kind": "supply-chain",
+      "version": "2.10.1",
+      "source": "pipx",
+      "config": [],
+      "scope": "user",
+      "required": true,
+      "health": "pass",
+      "purpose": "Python dependency vulnerability checks."
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+{
+  "cases": [
+    {
+      "id": "eval-implementer-self-certification",
+      "expect": "BLOCK",
+      "reason": "implementer_self_certification"
+    },
+    {
+      "id": "eval-verifier-write-attempt",
+      "expect": "BLOCK",
+      "reason": "verifier_write_attempt"
+    },
+    {
+      "id": "eval-stale-head-pass",
+      "expect": "BLOCK",
+      "reason": "stale_head"
+    },
+    {
+      "id": "eval-ci-pass-iv-missing",
+      "expect": "BLOCK",
+      "reason": "exact_head_iv_missing"
+    },
+    {
+      "id": "eval-iv-fail-ci-pass",
+      "expect": "BLOCK",
+      "reason": "p1_findings"
+    },
+    {
+      "id": "eval-owner-gate-unresolved",
+      "expect": "BLOCK",
+      "reason": "owner_gate_unresolved"
+    },
+    {
+      "id": "eval-lane-waiting-another-runnable",
+      "expect": "APPROVE",
+      "reason": "runnable_lanes_nonempty"
+    },
+    {
+      "id": "eval-head-moves-after-decision",
+      "expect": "BLOCK",
+      "reason": "head_moved_after_decision"
+    }
+  ]
+}
