@@ -1,0 +1,20 @@
+{
+  "assessment": "implementation_review_not_independent_verification",
+  "branch": "feat/as-impr-plane-001-delivery-evidence-report",
+  "ci_run_id": "34448415572",
+  "ci_status_at_freeze": "partial_ubuntu_green_windows_pending_on_prior_head",
+  "directive": "ATLAS-IMPROVEMENT-PLANE-REVIEW-READINESS-004",
+  "dq_delivery_tip_head": "7aecdc3fa6312335a0c237cba62f3dfa0365b29a",
+  "dq_delivery_tip_tree": "b3fc11990973fcbd47108066af383990fcf69087",
+  "merge_authorized": false,
+  "note": "Review-readiness freeze; prior DQ ee901aaa ubuntu CI green (run 34448415572).",
+  "package_id": "AS-IMPR-PLANE-001",
+  "pin_kind": "review_candidate_freeze",
+  "pr": "https://github.com/B0LK13/project-atlas/pull/792",
+  "prior_dq_head": "ee901aaa864230af615562dbde6566f764e9998b",
+  "prior_dq_tree": "9ea1fdeb13237a322030fe0e213ead31cf4c2011",
+  "review_candidate_head": "38cec36dffd03d6cf0dc48180f9e0ffd5ba5dbbe",
+  "review_candidate_tree": "b1c79af00967b296407bb5d0c31a0f7c3ad42bb9",
+  "source_pin_head": "b87b4a226f4aa8b2f669edf112aa3476454f754f",
+  "source_pin_tree": "46d1989b026a2f15920ec5e1c78a106799bd1249"
+}

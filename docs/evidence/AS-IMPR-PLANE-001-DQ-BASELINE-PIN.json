@@ -1,0 +1,16 @@
+{
+  "package_id": "AS-IMPR-PLANE-001",
+  "directive": "ATLAS-IMPROVEMENT-PLANE-DECISION-QUALITY-003",
+  "pin_kind": "decision_quality_baseline",
+  "branch": "feat/as-impr-plane-001-delivery-evidence-report",
+  "tip_head": "a1b3ee413d1ce5bc49e9ad1c083836fb3cada8b7",
+  "tip_tree": "829ac6015ba3e1933ac0087b19317c81aaf25a94",
+  "source_pin_head": "b87b4a226f4aa8b2f669edf112aa3476454f754f",
+  "source_pin_tree": "46d1989b026a2f15920ec5e1c78a106799bd1249",
+  "implementation_cycle_hardening_head": "6431c999553b8a14e30f48b9470a9b33a6d5dbf4",
+  "working_tree": "clean",
+  "ahead_of_origin_main": 6,
+  "merge_authorized": false,
+  "execution_authorized": false,
+  "note": "Decision-quality mission baseline freeze; not a Truth Core claim."
+}

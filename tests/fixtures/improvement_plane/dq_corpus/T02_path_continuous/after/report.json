@@ -1,0 +1,45 @@
+{
+  "coverage": {
+    "provenance": {
+      "accepted": [
+        {
+          "path": "open.json"
+        },
+        {
+          "path": "other.json"
+        }
+      ],
+      "accepted_count": 2
+    }
+  },
+  "package_id": "AS-IMPR-PLANE-001",
+  "panels": {
+    "closed_findings": {
+      "items": [
+        {
+          "finding_id": "ENG-T02",
+          "sources": [
+            "docs/evidence/open.json"
+          ],
+          "statuses": [
+            "CLOSED"
+          ]
+        }
+      ]
+    },
+    "data_quality_risks": {
+      "contradictory_status": []
+    },
+    "owner_action_backlog": {
+      "items": []
+    },
+    "recurring_failures": {
+      "items": []
+    },
+    "waiting_work": {
+      "items": []
+    }
+  },
+  "repo_root": "/corpus",
+  "schema": "atlas.improvement-plane.report.v1"
+}
