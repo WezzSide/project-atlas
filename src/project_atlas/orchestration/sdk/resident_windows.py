@@ -192,10 +192,19 @@ def ensure_resident_alive(
     package_src: Path,
     python: str | None = None,
 ) -> dict[str, object]:
-    """Restart resident if not live. Idempotent."""
+    """Restart resident if not live. Idempotent.
+
+    Uses `read_primary_lock_state()`, not the legacy int-returning
+    `read_primary_lock_pid()`: duplicate-governor prevention must key off
+    `state.held` (a real, atomic OS-lock fact), never off whether the
+    holder's identity happens to be confirmed. A live primary whose
+    receipt is temporarily unconfirmed (`state.pid is None`) is still a
+    live primary -- spawning a second one here would violate the very
+    invariant the lock exists to enforce. PID UNKNOWN != SAFE TO SPAWN.
+    """
     from project_atlas.orchestration.sdk.resident_driver import (
         clear_stop,
-        read_primary_lock_pid,
+        read_primary_lock_state,
     )
     from project_atlas.orchestration.sdk.resident_mission import persist_mission
 
@@ -207,8 +216,7 @@ def ensure_resident_alive(
                 "pid": status.GOVERNOR_PID,
                 "live": True,
             }
-        holder = read_primary_lock_pid(root)
-        if holder > 0:
+        if read_primary_lock_state(root).held:
             time.sleep(0.5)
             continue
         break
@@ -221,11 +229,11 @@ def ensure_resident_alive(
             "live": True,
         }
 
-    holder = read_primary_lock_pid(root)
-    if holder > 0:
+    state = read_primary_lock_state(root)
+    if state.held:
         return {
             "action": "noop",
-            "pid": holder,
+            "pid": state.pid,  # may be None -- held is what matters here
             "live": True,
         }
 
