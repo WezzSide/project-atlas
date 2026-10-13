@@ -33,7 +33,10 @@ changes what the operator is told when nothing can be.
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -351,6 +354,39 @@ def test_f6_cleanup_failure_does_not_mask_the_domain_error(
     )
 
 
+@contextmanager
+def _capturing(caplog: pytest.LogCaptureFixture, logger_name: str) -> Iterator[None]:
+    """Capture a non-propagating project logger on every pytest the project declares.
+
+    ``configure_logging`` sets ``propagate = False`` on the ``project_atlas`` logger
+    (``src/project_atlas/logging.py``), so its records never reach the handler caplog
+    installs on the root logger. pytest 9 also attaches that handler to the logger named
+    in ``caplog.at_level``; pytest 8, which ``pyproject.toml`` still permits via
+    ``pytest>=8.0``, does not. Without this the assertions below pass or fail purely on
+    which pytest happens to be installed, so the guarantee is only as strong as the
+    developer's environment. Attaching the handler explicitly makes it version
+    independent; it weakens nothing, because every payload assertion still runs.
+    """
+    logger = logging.getLogger(logger_name)
+    logger.addHandler(caplog.handler)
+    try:
+        with caplog.at_level(logging.WARNING, logger=logger_name):
+            yield
+    finally:
+        logger.removeHandler(caplog.handler)
+
+
+def _assert_cleanup_logged(records: list[logging.LogRecord]) -> None:
+    """The operator-usable payload F6 promises: the staging path and the error class."""
+    assert records, "the swallowed cleanup failure was not logged at all"
+    context = getattr(records[0], "context", None)
+    assert isinstance(context, dict), (
+        "payload must nest under 'context' or both formatters discard it"
+    )
+    assert context.get("error") == "PermissionError"
+    assert str(context.get("path", "")).endswith(".tmp"), context
+
+
 def test_f6_cleanup_failure_is_logged_with_the_path_and_cause(
     projection_vault, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -380,16 +416,74 @@ def test_f6_cleanup_failure_is_logged_with_the_path_and_cause(
     monkeypatch.setattr(Path, "unlink", deny_unlink)
 
     with (
-        caplog.at_level("WARNING", logger="project_atlas.obsidian_projection"),
+        _capturing(caplog, "project_atlas.obsidian_projection"),
         pytest.raises(ObsidianProjectionError),
     ):
         materialize_obsidian_projection(vault, project_id=project_id, refresh_brief=False)
 
     records = [r for r in caplog.records if "staging file" in r.getMessage()]
-    assert records, "the swallowed cleanup failure was not logged at all"
-    context = getattr(records[0], "context", None)
-    assert isinstance(context, dict), (
-        "payload must nest under 'context' or both formatters discard it"
+    _assert_cleanup_logged(records)
+
+
+def _cleanup_record(**context: object) -> logging.LogRecord:
+    """A warning shaped like the one the cleanup boundary emits."""
+    record = logging.LogRecord(
+        name="project_atlas.obsidian_projection",
+        level=logging.WARNING,
+        pathname=__file__,
+        lineno=0,
+        msg="obsidian projection: staging file could not be removed",
+        args=(),
+        exc_info=None,
     )
-    assert context.get("error") == "PermissionError"
-    assert str(context.get("path", "")).endswith(".tmp"), context
+    if context:
+        record.context = dict(context)
+    return record
+
+
+@pytest.mark.parametrize(
+    ("records", "degraded"),
+    [
+        ([], "nothing logged"),
+        ([_cleanup_record()], "no context payload"),
+        ([_cleanup_record(path="note.md.tmp")], "context without the error class"),
+        ([_cleanup_record(error="PermissionError")], "context without the staging path"),
+        ([_cleanup_record(error="OSError", path="note.md.tmp")], "wrong error class"),
+        ([_cleanup_record(error="PermissionError", path="note.md")], "not the staging path"),
+    ],
+)
+def test_f6_payload_assertion_is_not_vacuous(
+    records: list[logging.LogRecord], degraded: str
+) -> None:
+    """Negative control for the assertion the F6 test relies on.
+
+    If this ever stops raising, the F6 test has become a log-existence check and the
+    payload guarantee -- operator sees the staging path and the error class -- is gone.
+    """
+    with pytest.raises(AssertionError):
+        _assert_cleanup_logged(records)
+
+
+def test_f6_capture_helper_reaches_a_non_propagating_logger(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The helper must capture even though the project logger does not propagate.
+
+    This is the version-independence guarantee itself: on pytest 8 the equivalent
+    ``caplog.at_level`` alone captures nothing here.
+    """
+    name = "project_atlas.obsidian_projection"
+    logger = logging.getLogger(name)
+    propagated = logger.propagate
+    logger.propagate = False
+    try:
+        with _capturing(caplog, name):
+            logger.warning(
+                "obsidian projection: staging file could not be removed",
+                extra={"context": {"error": "PermissionError", "path": "note.md.tmp"}},
+            )
+    finally:
+        logger.propagate = propagated
+
+    records = [record for record in caplog.records if "staging file" in record.getMessage()]
+    _assert_cleanup_logged(records)
