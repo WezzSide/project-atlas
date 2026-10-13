@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -74,13 +75,43 @@ def _write_atomic(path: Path, content: bytes) -> None:
 
 
 def _peak_rss_kb() -> int | None:
-    try:
-        import resource
-    except ImportError:
+    """Peak resident set size in KB, or ``None`` when unsupported.
+
+    ``resource`` is POSIX-only -- it does not exist on Windows at all, and
+    typeshed's stub reflects that: it declares no ``getrusage``/
+    ``RUSAGE_SELF`` under the win32 platform mypy targets by default on a
+    Windows host, so a bare ``try: import resource / except ImportError``
+    left this file's single Windows-reached line statically unresolvable
+    (mypy checks it as if it could still run there, since it has no way to
+    prove the ImportError branch already returned). The explicit
+    ``if sys.platform == "win32": ... else: ...`` shape below is not just a
+    comment for humans: mypy specially narrows on ``sys.platform``
+    comparisons shaped this way, so on a win32 target it skips checking the
+    ``else`` body against the (correctly) resource-less win32 stub --
+    while on a non-Windows target it narrows the other way and the real
+    POSIX path is checked exactly as before (an ``if/else``, not an
+    early-return, because with ``warn_unreachable = true`` an early-return
+    form makes mypy flag the POSIX-only code after it as an unreachable-
+    statement *error* on a win32 target, rather than simply skip-checking
+    it). ``None`` is the existing, already-tested "unsupported platform"
+    contract (see ``tests/unit/test_as_coder_alpha_connect_perf_001.py``'s
+    fixtures) -- this changes typing only, not the returned value or any
+    caller. The inner ``except ImportError`` fallback is kept for any other
+    POSIX-like platform that also lacks ``resource`` (e.g. some restricted/
+    embedded interpreters) -- Windows is the only platform excluded
+    unconditionally because it is the only one confirmed to never have the
+    module.
+    """
+    if sys.platform == "win32":
         return None
-    usage = resource.getrusage(resource.RUSAGE_SELF)
-    value = int(usage.ru_maxrss)
-    return value if value >= 0 else None
+    else:
+        try:
+            import resource
+        except ImportError:
+            return None
+        usage = resource.getrusage(resource.RUSAGE_SELF)
+        value = int(usage.ru_maxrss)
+        return value if value >= 0 else None
 
 
 def _time_ms(fn: Callable[[], Any]) -> tuple[Any, int]:
