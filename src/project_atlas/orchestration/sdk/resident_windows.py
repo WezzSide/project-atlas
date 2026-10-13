@@ -23,12 +23,31 @@ from project_atlas.orchestration.sdk.host import (
     write_host_identity,
 )
 from project_atlas.orchestration.sdk.models import STATE_DIR_RELATIVE
+from project_atlas.orchestration.sdk.resident_driver import read_primary_lock_pid
 from project_atlas.orchestration.sdk.resident_status import load_status, status_claims_live
 
 TASK_NAME: Final[str] = "AtlasGovernorResident"
 WRAPPER_NAME: Final[str] = "atlas-resident-driver.cmd"
 WATCHDOG_PID_NAME: Final[str] = "resident-watchdog.pid"
 WATCHDOG_INTERVAL_SEC: Final[float] = 20.0
+
+#: D146 (native-Windows evidence, confirmed via Win32_Process ancestry): a
+#: venv's ``Scripts\python.exe`` on Windows can be a launcher/trampoline
+#: stub rather than a copy of the real interpreter -- confirmed on-host by
+#: binary size/hash against the base interpreter this venv's ``pyvenv.cfg``
+#: names, and by ``Win32_Process`` ancestry showing the launcher spawn the
+#: real interpreter as its *child* (the child's ``ParentProcessId`` equals
+#: the launcher's own PID). ``Popen.pid`` is then the launcher's PID, not
+#: the PID that actually runs the resident loop and calls
+#: ``acquire_primary_lock`` -- exactly the identity this function's callers
+#: need. This poll budget is newly introduced here for this poll only --
+#: no other caller in this module already depends on it;
+#: ``ensure_resident_alive``'s own poll loop below uses a different budget
+#: (12 * 0.5s = 6s) for a different purpose (waiting for status to claim
+#: liveness, not for lock acquisition). 80 * 0.25s = 20s gives real headroom
+#: for a slow subprocess spawn + full package import on slow-I/O hosts.
+_RESIDENT_STARTUP_POLL_ATTEMPTS: Final[int] = 80
+_RESIDENT_STARTUP_POLL_INTERVAL_SEC: Final[float] = 0.25
 
 
 def _creationflags() -> int:
@@ -68,7 +87,27 @@ def detach_resident_driver(
     package_src: Path,
     python: str | None = None,
 ) -> int:
-    """Start resident loop in a new Windows process group. Returns PID."""
+    """Start resident loop in a new Windows process group.
+
+    Returns the PID that actually holds the primary lock -- confirmed via
+    ``read_primary_lock_pid`` -- never merely ``Popen.pid`` (D146: on a
+    Windows venv whose interpreter is a launcher stub, ``Popen.pid`` names
+    the launcher, a *parent* of the process that actually runs the resident
+    loop and acquires the lock; the two are not interchangeable). Audited:
+    the sole production caller (``ensure_resident_alive``) and the
+    on-disk host-identity receipt this writes (read by no code in this
+    repository today) both only need a confirmed identity or an honest
+    absence of one -- neither needs the launcher's PID specifically.
+
+    Fail-honest, not fail-silent: if the resident's own identity is not
+    confirmed within the poll budget -- a genuine startup failure, or a
+    launcher-host quirk this poll doesn't account for -- returns ``0``
+    (this module's existing convention for "no confirmed PID", shared with
+    ``read_primary_lock_pid``/``read_watchdog_pid``), never the launcher PID
+    presented as if it were confirmed. A caller that needs "something to
+    poll for regardless" must call ``read_primary_lock_pid(root)`` itself,
+    exactly as ``ensure_resident_alive`` and the D146 regression tests do.
+    """
     interpreter = python or sys.executable
     args = [
         interpreter,
@@ -87,7 +126,9 @@ def detach_resident_driver(
     env["PYTHONPATH"] = str(package_src) + (
         os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else ""
     )
-    proc = subprocess.Popen(
+    # D146 (R1): the returned Popen handle is deliberately not consulted
+    # after this point -- see the poll loop below for why.
+    subprocess.Popen(
         args,
         cwd=str(root),
         stdout=log,
@@ -98,16 +139,34 @@ def detach_resident_driver(
         env=env,
         close_fds=True,
     )
+    resolved_pid = 0
+    for _ in range(_RESIDENT_STARTUP_POLL_ATTEMPTS):
+        holder = read_primary_lock_pid(root)
+        if holder > 0:
+            resolved_pid = holder
+            break
+        # D146 review (R1): the launched process object exiting is NOT
+        # sufficient evidence the resident cannot still appear -- a
+        # launcher/trampoline can legitimately exit *before* its
+        # real-interpreter child finishes importing and acquires the
+        # primary lock (detach-and-exit is a valid launcher pattern, not
+        # only "launcher waits for child"; this repo's own host observed
+        # the latter, but the poll must not assume every launcher does).
+        # `proc` is intentionally not consulted here: the only thing that
+        # establishes authoritative identity is the primary lock itself,
+        # so the bounded wait watches only that, for its full budget,
+        # regardless of the launched process object's own lifetime.
+        time.sleep(_RESIDENT_STARTUP_POLL_INTERVAL_SEC)
     write_host_identity(
         root,
-        pid=int(proc.pid),
+        pid=resolved_pid,
         backend="RESIDENT_SELF_WAKE",
         package_head="AS-ORCH-SELF-WAKE-RESIDENT-DRIVER-001",
         worktree=str(
             package_src.parent.parent if package_src.name == "src" else package_src
         ),
     )
-    return int(proc.pid)
+    return resolved_pid
 
 
 def run_watchdog_loop(
@@ -193,10 +252,7 @@ def ensure_resident_alive(
     python: str | None = None,
 ) -> dict[str, object]:
     """Restart resident if not live. Idempotent."""
-    from project_atlas.orchestration.sdk.resident_driver import (
-        clear_stop,
-        read_primary_lock_pid,
-    )
+    from project_atlas.orchestration.sdk.resident_driver import clear_stop
     from project_atlas.orchestration.sdk.resident_mission import persist_mission
 
     for _ in range(12):
@@ -232,7 +288,10 @@ def ensure_resident_alive(
     persist_mission(root)
     clear_stop(root)
     pid = detach_resident_driver(root=root, package_src=package_src, python=python)
-    return {"action": "restarted", "pid": pid, "live": True}
+    # D146: `pid` is 0 when detach_resident_driver() could not confirm the
+    # resident's own identity within its poll budget -- report that
+    # honestly rather than always claiming "live".
+    return {"action": "restarted", "pid": pid, "live": pid > 0}
 
 
 def register_windows_logon_task(
