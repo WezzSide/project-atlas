@@ -17,7 +17,7 @@
 
 Deepen the wave-2 compatibility-pin PREP **beyond** the base expectation /
 scenario stubs already landed under `docs/atlas-2.2/compat-pin/` (PR
-[#196](https://github.com/B0LK13/project-atlas/pull/196)).
+[#196](https://github.com/WezzSide/project-atlas/pull/196)).
 
 This PREP owns a **unique deepen path** under `docs/atlas-2.2/compat-pin/**` for:
 

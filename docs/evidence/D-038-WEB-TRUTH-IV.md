@@ -2,7 +2,7 @@
 
 **Directive:** D-PROJECT-ATLAS-CODER-ALPHA-038
 **Branch:** cursor/coder-alpha-web-001-d038
-**PR:** https://github.com/B0LK13/project-atlas/pull/338
+**PR:** https://github.com/WezzSide/project-atlas/pull/338
 
 ## Result: PASS
 

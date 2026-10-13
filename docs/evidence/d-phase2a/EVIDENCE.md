@@ -397,7 +397,7 @@ per D-CODEX-ATLAS-PR643-POST-MERGE-SEAL §3, the run is looked up
 directly against `headBranch=main, headSha=2cee1489...`):
 
 - Run ID: `33284815468`
-- URL: https://github.com/B0LK13/project-atlas/actions/runs/33284815468
+- URL: https://github.com/WezzSide/project-atlas/actions/runs/33284815468
 - `headSha`: `2cee148947c01b9b228d8576c72cf8190bf6966a`
 - `conclusion`: `success`
 - Jobs: `control-plane` success, `quality (ubuntu-latest, 3.12, full)`

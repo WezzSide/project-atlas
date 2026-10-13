@@ -6,6 +6,7 @@ import hashlib
 import re
 
 from project_atlas.orchestration.autonomy.models import CANONICAL_REPOSITORY_IDENTITY
+from project_atlas.orchestration.autonomy.trust import repository_identities_match
 from project_atlas.orchestration.sdk.models import AgentRole, SdkRuntimeError
 
 _SAFE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
@@ -20,7 +21,7 @@ def build_idempotency_key(
     attempt: int,
 ) -> str:
     """Derive a stable key so retries never duplicate work."""
-    if repository_identity.casefold() != CANONICAL_REPOSITORY_IDENTITY:
+    if not repository_identities_match(repository_identity, CANONICAL_REPOSITORY_IDENTITY):
         raise SdkRuntimeError("foreign repository rejected", code="FOREIGN_REPO")
     if not _SAFE.fullmatch(node_id):
         raise SdkRuntimeError("unsafe node_id", code="UNSAFE_NODE")

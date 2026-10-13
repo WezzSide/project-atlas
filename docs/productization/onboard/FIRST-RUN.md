@@ -18,7 +18,7 @@ Give a stranger a single narrative that **links**:
 
 Same as install stranger path:
 
-1. Git clone of `B0LK13/project-atlas`
+1. Git clone of `WezzSide/project-atlas`
 2. Python **3.12+** on PATH
 3. Node.js LTS + **npm** on PATH
 4. Writable repo `.tmp` directory

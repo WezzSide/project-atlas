@@ -20,7 +20,7 @@ moved. They are cited as evidence for the mechanism, not as a fixture.
 ## A. No repository rulesets
 
 ```
-$ gh api repos/B0LK13/project-atlas/rulesets
+$ gh api repos/WezzSide/project-atlas/rulesets
 []
 ```
 
@@ -30,7 +30,7 @@ legacy branch-protection API is the whole picture rather than half of it.
 ## B. Branch protection on `main`, as retrieved
 
 ```
-$ gh api repos/B0LK13/project-atlas/branches/main/protection
+$ gh api repos/WezzSide/project-atlas/branches/main/protection
 ```
 
 | setting | value |
@@ -48,7 +48,7 @@ Absence of a key is weak evidence, so it was confirmed against the dedicated
 endpoint, which asserts the negative directly rather than leaving it inferred:
 
 ```
-$ gh api repos/B0LK13/project-atlas/branches/main/protection/required_status_checks
+$ gh api repos/WezzSide/project-atlas/branches/main/protection/required_status_checks
 {"message":"Required status checks not enabled", ... "status":"404"}
 ```
 

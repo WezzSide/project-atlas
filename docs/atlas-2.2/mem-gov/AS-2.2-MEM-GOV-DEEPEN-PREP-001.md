@@ -17,7 +17,7 @@
 
 Deepen the wave-1 governed memory PREP **beyond** the base record / axis stubs
 already landed under `docs/atlas-2.2/contracts/mem-gov/` and
-`docs/atlas-2.2/fixtures/mem-gov/` (PR [#169](https://github.com/B0LK13/project-atlas/pull/169)).
+`docs/atlas-2.2/fixtures/mem-gov/` (PR [#169](https://github.com/WezzSide/project-atlas/pull/169)).
 
 This PREP owns a **unique deepen path** under `docs/atlas-2.2/mem-gov/**` for:
 

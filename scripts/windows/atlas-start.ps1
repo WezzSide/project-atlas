@@ -641,7 +641,7 @@ if (-not $repoRoot) {
     Write-AtlasProductError `
         -What "Cannot resolve Project Atlas repository root." `
         -Cause "scripts/windows helpers could not find pyproject.toml + apps/web." `
-        -Action "Run from a full git checkout of B0LK13/project-atlas." `
+        -Action "Run from a full git checkout of WezzSide/project-atlas." `
         -Retry "powershell -NoProfile -File scripts\windows\atlas-start.ps1"
     exit 1
 }

@@ -1,7 +1,7 @@
 # D-177 Lane H — Genuine independent core-diff IV (PR #474)
 
 **Mode:** READ-ONLY except pytest (no merge, no PR create, no push)  
-**Repo:** `B0LK13/project-atlas`  
+**Repo:** `WezzSide/project-atlas`  
 **As-of local:** 2026-08-25  
 **Lane:** H — CORE_DIFF_IV for SHADOW-C-002 encoding-safe attention output  
 **MERGE_AUTHORIZATION:** `NOT_GRANTED`
@@ -12,7 +12,7 @@
 
 | Field | Value |
 | --- | --- |
-| PR | [#474](https://github.com/B0LK13/project-atlas/pull/474) |
+| PR | [#474](https://github.com/WezzSide/project-atlas/pull/474) |
 | Title | fix(cli): encoding-safe attention output for cp1252/cp850 (SHADOW-C-002) |
 | HEAD | `68201eb0801eec50e5e5d44ddc73b05c9a967569` |
 | TREE | `e06d2a8e0a8e85e5a19d8f2c71ed90c7531f3ade` |

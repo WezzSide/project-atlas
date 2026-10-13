@@ -14,7 +14,7 @@
 ## 0. Clean clone (required for demo certification)
 
 ```powershell
-git clone https://github.com/B0LK13/project-atlas.git
+git clone https://github.com/WezzSide/project-atlas.git
 cd project-atlas
 git checkout feat/as-demo-2.1-001   # or main after merge
 ```

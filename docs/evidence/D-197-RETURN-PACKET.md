@@ -18,7 +18,7 @@ MERGE_AUTHORIZATION = NOT_GRANTED
 | NEW_TREE | `fa16373ffd97c53ce001572015d0da27ec379aa6` |
 | BASE | `f1b5256510cb66e037e6774aa49d753bdb7dd96f` |
 | BRANCH | `cursor/atlas3-foundation-convergence-b8f1` |
-| PR | https://github.com/B0LK13/project-atlas/pull/511 |
+| PR | https://github.com/WezzSide/project-atlas/pull/511 |
 
 Historical only (do not transfer certification):
 

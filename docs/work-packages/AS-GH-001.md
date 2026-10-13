@@ -10,7 +10,7 @@
 - **Independent Verifier:** Agent Two
 - **Release Governor:** Project Owner / Merge Operator
 - **Exact baseline:** `a7a6ebc41ea884f7ce4ec2d70da89e6a44097381`
-- **Repository:** `B0LK13/project-atlas`
+- **Repository:** `WezzSide/project-atlas`
 - **ADR:** `docs/adr/ADR-006-github-repository-governance-baseline.md`
 
 ## Implementation status

@@ -7,7 +7,7 @@
 
 | Requirement | Notes |
 |---|---|
-| Git | clone `https://github.com/B0LK13/project-atlas` |
+| Git | clone `https://github.com/WezzSide/project-atlas` |
 | Python | 3.12+ (`py -3.12` or `python`) |
 | Network | `pip install` and optional `gh` for CI verification |
 | Writable temp | e.g. `%TEMP%` or `/tmp` for disposable clone workspace |
@@ -21,7 +21,7 @@
 $TARGET_HEAD = "2b8ebab468d4b9e9ce119a86b5a5350de3df96b3"
 $WORK = Join-Path $env:TEMP "atlas-clean-machine-cert"
 Remove-Item -Recurse -Force $WORK -ErrorAction SilentlyContinue
-git clone --depth 1 https://github.com/B0LK13/project-atlas.git $WORK
+git clone --depth 1 https://github.com/WezzSide/project-atlas.git $WORK
 cd $WORK
 git fetch --depth 1 origin $TARGET_HEAD
 git checkout $TARGET_HEAD

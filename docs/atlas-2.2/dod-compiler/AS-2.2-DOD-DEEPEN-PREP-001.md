@@ -18,7 +18,7 @@
 
 Deepen the wave-1 DoD compiler PREP **beyond** the base chain stubs already
 landed under `docs/atlas-2.2/contracts/dod-compiler/` and
-`docs/atlas-2.2/fixtures/dod-compiler/` (PR [#170](https://github.com/B0LK13/project-atlas/pull/170)).
+`docs/atlas-2.2/fixtures/dod-compiler/` (PR [#170](https://github.com/WezzSide/project-atlas/pull/170)).
 
 This PREP owns a **unique deepen path** under `docs/atlas-2.2/dod-compiler/**` for:
 

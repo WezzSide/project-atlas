@@ -4,7 +4,7 @@
 DIRECTIVE              = D-177
 LANES                  = G (owner queue) / H (#474 IV note) / I (#471 recert) / J (unique MCP)
 MODE                   = READ-ONLY
-REPO                   = B0LK13/project-atlas
+REPO                   = WezzSide/project-atlas
 AS_OF_UTC              = 2026-08-25T11:45:00Z
 MERGE_AUTHORIZATION    = NOT_GRANTED
 NEW_PRS                = FORBIDDEN

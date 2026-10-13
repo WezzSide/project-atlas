@@ -17,7 +17,7 @@
 
 Deepen the wave-1 research workspace PREP **beyond** the base pipeline stubs
 already landed under `docs/atlas-2.2/contracts/research/` and
-`docs/atlas-2.2/fixtures/research/` (PR [#171](https://github.com/B0LK13/project-atlas/pull/171)).
+`docs/atlas-2.2/fixtures/research/` (PR [#171](https://github.com/WezzSide/project-atlas/pull/171)).
 
 This PREP owns a **unique deepen path** under `docs/atlas-2.2/research/**` for:
 

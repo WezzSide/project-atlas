@@ -89,6 +89,22 @@ class MutationAttributionProvider(Protocol):
     ) -> list[str] | None: ...
 
 
+_PRE_TRANSFER_GITHUB_OWNERS: Final[frozenset[str]] = frozenset({"b0lk13", "bolkdev"})
+_LIVE_GITHUB_OWNER: Final[str] = "WezzSide"
+_LIVE_GITHUB_REPO: Final[str] = "project-atlas"
+
+
+def _live_github_identity(owner: str, repo: str) -> str:
+    """Map prior GitHub owners onto the live owner (WezzSide)."""
+    repo_name = repo.removesuffix(".git")
+    if (
+        owner.casefold() in _PRE_TRANSFER_GITHUB_OWNERS
+        and repo_name.casefold() == _LIVE_GITHUB_REPO
+    ):
+        owner = _LIVE_GITHUB_OWNER
+    return f"https://github.com/{owner}/{repo_name}".casefold()
+
+
 def normalize_repo_identity(raw: str | None) -> str | None:
     """Normalize repo URLs to a comparable identity.
 
@@ -97,8 +113,9 @@ def normalize_repo_identity(raw: str | None) -> str | None:
     - bare ``owner/repo`` (no foreign host labels)
 
     Rejects foreign hosts (gitlab/evil/etc.) and suffix tricks such as
-    ``evil.com/github.com/B0LK13/project-atlas`` that previously matched via
-    ``re.search``.
+    ``evil.com/github.com/WezzSide/project-atlas`` that previously matched via
+    ``re.search``. Pre-transfer ``github.com/B0LK13/project-atlas``
+    identities alias to the live owner so old remotes still attribute.
     """
     if raw is None:
         return None
@@ -118,13 +135,13 @@ def normalize_repo_identity(raw: str | None) -> str | None:
     if match is not None:
         owner = match.group("owner")
         repo = match.group("repo")
-        return f"https://github.com/{owner}/{repo}".casefold()
+        return _live_github_identity(owner, repo)
     # Bare owner/repo only — reject anything with an extra host/path segment.
     bare = _OWNER_REPO_ONLY.fullmatch(text)
     if bare is not None and "." not in bare.group("owner"):
         owner = bare.group("owner")
         repo = bare.group("repo")
-        return f"https://github.com/{owner}/{repo}".casefold()
+        return _live_github_identity(owner, repo)
     # Foreign or malformed: return a stable non-canonical identity when a host
     # is present so callers raise "foreign repository"; otherwise None.
     parts = [p for p in text.split("/") if p]

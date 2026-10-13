@@ -1,10 +1,10 @@
 blank_issues_enabled: false
 contact_links:
   - name: Security policy (read before reporting)
-    url: https://github.com/B0LK13/project-atlas/blob/main/SECURITY.md
+    url: https://github.com/WezzSide/project-atlas/blob/main/SECURITY.md
     about: >-
       Do not open an ordinary public issue for a suspected vulnerability.
       External private intake is not currently operational; see SECURITY.md.
   - name: Contributing and governance
-    url: https://github.com/B0LK13/project-atlas/blob/main/CONTRIBUTING.md
+    url: https://github.com/WezzSide/project-atlas/blob/main/CONTRIBUTING.md
     about: Internal contribution workflow for the owner and authorized agents.

@@ -17,7 +17,7 @@
 
 Deepen the wave-1 live Reality Gap collector PREP **beyond** the base design
 and schema drafts already landed under `docs/atlas-2.2/reality-live/` and
-`docs/atlas-2.2/contracts/reality-live/` (PR [#167](https://github.com/B0LK13/project-atlas/pull/167)).
+`docs/atlas-2.2/contracts/reality-live/` (PR [#167](https://github.com/WezzSide/project-atlas/pull/167)).
 
 This PREP owns a **unique deepen path** under `docs/atlas-2.2/reality-live/**` for:
 

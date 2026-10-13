@@ -29,7 +29,7 @@ including `quality (windows-latest, 3.12, windows)`.
 
 Independent exact-head IV verdict: `PASS_WITH_NONBLOCKING_FINDINGS`,
 `P0 = 0`, `P1 = 0`, `P2 = 3`. The receipt is recorded as a comment on
-[PR #699](https://github.com/B0LK13/project-atlas/pull/699). The verifier
+[PR #699](https://github.com/WezzSide/project-atlas/pull/699). The verifier
 broadened scope by its own choice and re-derived the F2 correctness properties
 first-hand rather than inheriting the predecessor's verdict, including proving
 its own instrument's sensitivity against the pre-fix implementation.

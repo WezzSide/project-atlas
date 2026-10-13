@@ -17,7 +17,7 @@
 
 Deepen the wave-1 conflict projection cockpit PREP **beyond** the base stubs
 already landed under `docs/atlas-2.2/conflict-ux/` (PR
-[#181](https://github.com/B0LK13/project-atlas/pull/181) / base
+[#181](https://github.com/WezzSide/project-atlas/pull/181) / base
 `AS-2.2-CONFLICT-UX-PREP-001`).
 
 This PREP owns a **unique deepen delta** under `docs/atlas-2.2/conflict-ux/**`

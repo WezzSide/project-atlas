@@ -649,7 +649,7 @@ def test_p4_workspace_root_mismatch_and_sequence_rollback(tmp_path: Path) -> Non
             state=AgentState.IDLE,
             worker_backend=WorkerBackend.CURSOR_AGENT_CLI.value,
             workspace=str(foreign.resolve()),
-            repository="https://github.com/B0LK13/project-atlas",
+            repository="https://github.com/WezzSide/project-atlas",
             creation_generation=106,
             creation_sequence=2,
         )
@@ -672,7 +672,7 @@ def test_p4_workspace_root_mismatch_and_sequence_rollback(tmp_path: Path) -> Non
             state=AgentState.IDLE,
             worker_backend=WorkerBackend.CURSOR_AGENT_CLI.value,
             workspace=str(tmp_path.resolve()),
-            repository="https://github.com/B0LK13/project-atlas",
+            repository="https://github.com/WezzSide/project-atlas",
             creation_generation=106,
             creation_sequence=1,
         )
@@ -697,7 +697,7 @@ def test_p4_same_lineage_resume_succeeds(tmp_path: Path) -> None:
             state=AgentState.IDLE,
             worker_backend=WorkerBackend.CURSOR_AGENT_CLI.value,
             workspace=str(tmp_path.resolve()),
-            repository="https://github.com/B0LK13/project-atlas",
+            repository="https://github.com/WezzSide/project-atlas",
             creation_generation=106,
             creation_sequence=seq,
         )
@@ -720,7 +720,7 @@ def test_p4_missing_sequence_is_stale(tmp_path: Path) -> None:
             state=AgentState.IDLE,
             worker_backend=WorkerBackend.CURSOR_AGENT_CLI.value,
             workspace=str(tmp_path.resolve()),
-            repository="https://github.com/B0LK13/project-atlas",
+            repository="https://github.com/WezzSide/project-atlas",
             creation_generation=106,
         )
     )

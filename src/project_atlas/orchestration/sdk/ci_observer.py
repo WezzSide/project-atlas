@@ -13,7 +13,7 @@ from project_atlas.orchestration.autonomy.evidence import hash_payload
 from project_atlas.orchestration.sdk.host import no_window_creationflags
 
 CANONICAL_PR = 429
-CANONICAL_REPO = "B0LK13/project-atlas"
+CANONICAL_REPO = "WezzSide/project-atlas"
 
 REQUIRED_JOB_NAMES: Final[tuple[str, ...]] = (
     "control-plane",

@@ -45,7 +45,7 @@ Outline-only helper (no process supervision): `scripts/demo.ps1` (`-InitVault` /
 
 ## Prerequisites
 
-1. Clean clone / worktree of `B0LK13/project-atlas`
+1. Clean clone / worktree of `WezzSide/project-atlas`
 2. PowerShell 5.1+ (Windows)
 3. Node.js + `npm` (for `apps/web`)
 4. Optional for `-WithApi`: Python 3.12+ and `pip install -e ".[dev]"` so `atlas` is on PATH

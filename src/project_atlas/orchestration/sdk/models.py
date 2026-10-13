@@ -10,7 +10,10 @@ from typing import Final, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from project_atlas.orchestration.autonomy.models import CANONICAL_REPOSITORY_IDENTITY
-from project_atlas.orchestration.autonomy.trust import require_full_pin
+from project_atlas.orchestration.autonomy.trust import (
+    repository_identities_match,
+    require_full_pin,
+)
 
 PACKAGE_ID: Final[Literal["AS-ORCH-CONTINUATION-BROKER-001"]] = (
     "AS-ORCH-CONTINUATION-BROKER-001"
@@ -22,7 +25,7 @@ PRIMARY_BACKEND: Final[Literal["CURSOR_SDK_DURABLE_AGENT_RUNTIME"]] = (
     "CURSOR_SDK_DURABLE_AGENT_RUNTIME"
 )
 STOP_HOOK_BACKEND: Final[Literal["CURSOR_STOP_HOOK_FOLLOWUP"]] = "CURSOR_STOP_HOOK_FOLLOWUP"
-CANONICAL_REPO_URL: Final[str] = "https://github.com/B0LK13/project-atlas"
+CANONICAL_REPO_URL: Final[str] = "https://github.com/WezzSide/project-atlas"
 DEFAULT_MODEL: Final[str] = "composer-2.5"
 STATE_DIR_RELATIVE: Final[str] = ".atlas/orchestration/sdk-runtime"
 AGENTS_NAME: Final[str] = "agents.json"
@@ -234,7 +237,9 @@ class RunRecord(BaseModel):
     def _closed(self) -> RunRecord:
         if self.merge_authorized or self.execution_authorized or self.authority_granted:
             raise ValueError("run registry cannot carry authority")
-        if self.repository_identity.casefold() != CANONICAL_REPOSITORY_IDENTITY:
+        if not repository_identities_match(
+            self.repository_identity, CANONICAL_REPOSITORY_IDENTITY
+        ):
             raise ValueError("cross-project run reuse is forbidden")
         if self.status in TERMINAL_RUN_STATUSES and self.completed_at is None:
             raise ValueError("terminal run requires completed_at")

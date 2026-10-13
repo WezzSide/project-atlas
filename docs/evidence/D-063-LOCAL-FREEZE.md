@@ -1,14 +1,14 @@
 # D-063 — Local D-049 revalidation freeze
 
 **Directive:** D-PROJECT-ATLAS-CLOUD-KNOWLEDGE-ESTATE-DISCOVERY-063  
-**PR:** https://github.com/B0LK13/project-atlas/pull/346
+**PR:** https://github.com/WezzSide/project-atlas/pull/346
 
 ## Frozen tip (NO TIP MUTATION after this receipt)
 
 Local validates this exact hardened implementation tip:
 
 ```
-PR_346 = https://github.com/B0LK13/project-atlas/pull/346
+PR_346 = https://github.com/WezzSide/project-atlas/pull/346
 PR_346_HEAD = 9c71cc2c71779678f79037c0c279390355015d63
 PR_346_TREE = 10539a861dc9a5b32ebf00862d6710a66f3725cd
 LOCAL_D049_REVALIDATION_READY = YES

@@ -43,7 +43,10 @@ from project_atlas.orchestration.autonomy.return_gate import (
     render_stop_hook_dag_continuation,
     stop_hook_terminal_return_allowed,
 )
-from project_atlas.orchestration.autonomy.trust import require_full_pin
+from project_atlas.orchestration.autonomy.trust import (
+    repository_identities_match,
+    require_full_pin,
+)
 from project_atlas.source_identity import IdentityLockError, ProjectIdentityLock
 
 PACKAGE_ID: Final[Literal["AS-ORCH-CONTINUATION-BROKER-001"]] = (
@@ -226,7 +229,9 @@ class BrokerState(BaseModel):
     def _no_authority(self) -> BrokerState:
         if self.merge_authorized or self.execution_authorized or self.authority_granted:
             raise ValueError("broker state cannot carry authority")
-        if self.repository_identity.casefold() != CANONICAL_REPOSITORY_IDENTITY:
+        if not repository_identities_match(
+            self.repository_identity, CANONICAL_REPOSITORY_IDENTITY
+        ):
             raise ValueError("cross-project broker reuse is forbidden")
         if self.consumed and self.phase not in {BrokerPhase.CONSUMED, BrokerPhase.IDLE}:
             raise ValueError("consumed successor must be CONSUMED or IDLE")
@@ -387,7 +392,7 @@ def session_exit_does_not_end_dag(*, worker_terminal: bool, dag_terminal: bool) 
 
 def _require_identity(repository_identity: str) -> str:
     identity = repository_identity.strip()
-    if identity.casefold() != CANONICAL_REPOSITORY_IDENTITY:
+    if not repository_identities_match(identity, CANONICAL_REPOSITORY_IDENTITY):
         raise BrokerError("foreign project broker reuse is forbidden", code="FOREIGN_PROJECT")
     return CANONICAL_REPOSITORY_IDENTITY
 

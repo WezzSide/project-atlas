@@ -72,7 +72,7 @@ try {
         Write-AtlasProductError `
             -What "Cannot resolve Project Atlas repository root." `
             -Cause "Expected pyproject.toml and apps/web/package.json two levels above scripts/windows." `
-            -Action "Clone B0LK13/project-atlas and run this script from the checkout (scripts\windows\atlas-preflight.ps1)." `
+            -Action "Clone WezzSide/project-atlas and run this script from the checkout (scripts\windows\atlas-preflight.ps1)." `
             -Retry "powershell -NoProfile -File scripts\windows\atlas-preflight.ps1"
         $checks.failed_check = "repo_root"
         if ($Json) { $checks | ConvertTo-Json -Depth 6; exit 1 }

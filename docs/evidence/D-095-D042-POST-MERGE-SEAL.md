@@ -231,7 +231,7 @@ on tip `822a6d82`. Triaged against production code on exact main
 
 ### COMMENT A — `set_conversation_review_state` vault path
 
-Source: https://github.com/B0LK13/project-atlas/pull/353#discussion_r3787029613
+Source: https://github.com/WezzSide/project-atlas/pull/353#discussion_r3787029613
 
 `capture_conversation()` and `list_conversation_captures()` raise
 `VAULT_NOT_FOUND` when `vault` is not a directory.
@@ -249,8 +249,8 @@ CLOSURE_BLOCKING               = NO
 ### COMMENT B/C — `ALLOWED_PROVIDERS` / no-op branch
 
 Sources:
-https://github.com/B0LK13/project-atlas/pull/353#discussion_r3787029640
-https://github.com/B0LK13/project-atlas/pull/353#discussion_r3787029656
+https://github.com/WezzSide/project-atlas/pull/353#discussion_r3787029640
+https://github.com/WezzSide/project-atlas/pull/353#discussion_r3787029656
 
 `_normalize_provider()` requires `PROVIDER_RE`. Tokens matching the
 regex that are not in `ALLOWED_PROVIDERS` hit an explicit `pass`
@@ -267,7 +267,7 @@ CLOSURE_BLOCKING               = NO
 
 ### COMMENT D — schema required fields
 
-Source: https://github.com/B0LK13/project-atlas/pull/353#discussion_r3787029683
+Source: https://github.com/WezzSide/project-atlas/pull/353#discussion_r3787029683
 
 Stored-record schema defines `inbox`, `projection`, and `idempotency`
 but does not list them in `required`. The producer always writes them.

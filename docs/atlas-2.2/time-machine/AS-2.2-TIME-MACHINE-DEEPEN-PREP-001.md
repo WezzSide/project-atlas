@@ -18,7 +18,7 @@
 
 Deepen the wave-1 Knowledge Time Machine PREP **beyond** the base as-of / diff
 stubs already landed under `docs/atlas-2.2/time-machine/` (PR
-[#168](https://github.com/B0LK13/project-atlas/pull/168)).
+[#168](https://github.com/WezzSide/project-atlas/pull/168)).
 
 This PREP owns a **unique deepen path** under `docs/atlas-2.2/time-machine/**` for:
 
