@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ATLAS_DAG_SNAPSHOT_V1",
+  "type": "object",
+  "required": [
+    "schema",
+    "generated_at_utc",
+    "main_head",
+    "nodes",
+    "safe_runnable_count"
+  ],
+  "properties": {
+    "schema": {
+      "const": "ATLAS_DAG_SNAPSHOT_V1"
+    },
+    "generated_at_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "main_head": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "main_tree": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "safe_runnable_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "nodes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "node_id",
+          "lane",
+          "state",
+          "hazard_class"
+        ],
+        "properties": {
+          "node_id": {
+            "type": "string"
+          },
+          "lane": {
+            "type": "string"
+          },
+          "pr": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "head": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tree": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "owner": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "type": "string"
+          },
+          "hazard_class": {
+            "type": "string",
+            "enum": [
+              "A_REAL_HOST_SAFE",
+              "B_DISPOSABLE_ONLY",
+              "C_HUMAN_CHECKPOINT",
+              "NONE"
+            ]
+          },
+          "dependencies": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "blockers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "next_actions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  }
+}

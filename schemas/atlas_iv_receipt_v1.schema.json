@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ATLAS_IV_RECEIPT_V1",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema",
+    "receipt_id",
+    "timestamp_utc",
+    "pr",
+    "head",
+    "tree",
+    "verifier_id",
+    "session_id",
+    "candidate_author_conflict",
+    "write_activity_count",
+    "result",
+    "p0",
+    "p1",
+    "p2",
+    "claim_integrity",
+    "formal_independence",
+    "findings",
+    "evidence"
+  ],
+  "properties": {
+    "schema": {
+      "const": "ATLAS_IV_RECEIPT_V1"
+    },
+    "receipt_id": {
+      "type": "string",
+      "minLength": 8
+    },
+    "timestamp_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "pr": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "head": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "tree": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "verifier_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "session_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "candidate_author_conflict": {
+      "type": "boolean"
+    },
+    "write_activity_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "result": {
+      "type": "string",
+      "enum": [
+        "PASS",
+        "PASS_WITH_FINDINGS",
+        "FAIL",
+        "BLOCKED_PROVENANCE",
+        "INCOMPLETE"
+      ]
+    },
+    "p0": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "p1": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "p2": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "claim_integrity": {
+      "type": "string",
+      "enum": [
+        "PASS",
+        "FAIL",
+        "UNKNOWN"
+      ]
+    },
+    "formal_independence": {
+      "type": "string",
+      "enum": [
+        "PASS",
+        "FAIL",
+        "UNKNOWN"
+      ]
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}
