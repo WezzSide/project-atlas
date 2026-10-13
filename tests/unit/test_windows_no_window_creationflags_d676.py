@@ -25,6 +25,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from unittest import mock
 from unittest.mock import patch
 
 import pytest
@@ -202,6 +203,71 @@ class TestReturnCodeAndErrorPropagationUnchanged:
             pytest.raises(subprocess.TimeoutExpired),
         ):
             resident_driver.poll_github_ci("123")
+
+
+class TestWindowsProbesAreNonInteractiveAndBounded:
+    """The two real child-process probes must not touch the console or hang.
+
+    `pid_is_alive` and `process_start_identity` shell out to `tasklist` and
+    `powershell` from a resident driver's polling loop. Two properties matter
+    beyond hiding the window:
+
+    * **stdin is detached.** A child sharing the parent's console stdin can
+      interact with that console. Windows delivers console control events to
+      every process attached to the console, so a child that provokes one
+      raises it in the parent too -- which is how a suite where no test fails
+      still ends in `KeyboardInterrupt` and a non-zero exit.
+    * **the call is bounded.** These answer a question about a PID; they
+      respond quickly or something is wrong. Unbounded, a wedged child hangs
+      the polling loop with no diagnostic.
+
+    Asserted against the real call sites rather than the helper, because the
+    helper cannot enforce how its callers invoke `subprocess.run`.
+    """
+
+    def test_pid_is_alive_detaches_stdin_and_bounds_the_call(self) -> None:
+        captured: dict[str, object] = {}
+
+        def _fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+            captured.update(kwargs)
+            return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+
+        with mock.patch.object(host.os, "name", "nt"), mock.patch.object(
+            host.subprocess, "run", _fake_run
+        ):
+            host.pid_is_alive(1234)
+
+        assert captured["stdin"] is subprocess.DEVNULL
+        assert captured["timeout"] == host._WINDOWS_PROBE_TIMEOUT_SECONDS
+
+    def test_process_start_identity_detaches_stdin_and_bounds_the_call(self) -> None:
+        captured: dict[str, object] = {}
+
+        def _fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+            captured.update(kwargs)
+            return subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="")
+
+        with mock.patch.object(host.os, "name", "nt"), mock.patch.object(
+            host.subprocess, "run", _fake_run
+        ):
+            host.process_start_identity(1234)
+
+        assert captured["stdin"] is subprocess.DEVNULL
+        assert captured["timeout"] == host._WINDOWS_PROBE_TIMEOUT_SECONDS
+
+    @pytest.mark.parametrize(
+        "probe", [lambda: host.pid_is_alive(1234), lambda: host.process_start_identity(1234)]
+    )
+    def test_a_wedged_probe_is_survivable(self, probe: object) -> None:
+        """A timeout must degrade, not propagate: callers poll, they do not crash."""
+
+        def _timeout(*args: object, **kwargs: object) -> None:
+            raise subprocess.TimeoutExpired(cmd="probe", timeout=1)
+
+        with mock.patch.object(host.os, "name", "nt"), mock.patch.object(
+            host.subprocess, "run", _timeout
+        ):
+            assert probe() in (False, "unknown")  # type: ignore[operator]
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="authentic Windows process-path smoke")
