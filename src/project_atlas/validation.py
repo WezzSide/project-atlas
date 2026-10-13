@@ -30,6 +30,98 @@ from project_atlas.schema import SchemaValidationError, validate_record
 from project_atlas.source_identity import canonical_source_sha256
 
 LINK = re.compile(r"\]\(([^)]+)\)")
+# A fenced code block (``_quote_source_text``'s multi-line "source-excerpt"
+# shape: a fence line, verbatim content, a matching closing fence) or an
+# inline code span (one or more backticks, content, a closing run of
+# backticks -- CommonMark's actual rules, via the \1 backreference).
+# Content inside either renders as inert literal text, never a live link,
+# even when it contains a `](...)`-shaped substring.
+#
+# Fence indentation is capped at 0-3 spaces (CommonMark: a fence indented
+# 4+ spaces is not a fence at all -- it is an indented code block, a
+# separate construct this helper does not attempt to recognize). Tabs in
+# the leading whitespace are deliberately excluded rather than expanded to
+# CommonMark's tab-stop columns: Atlas's own generated content never emits
+# tab-indented fences, and getting tab-stop math wrong risks the opposite,
+# more dangerous failure mode (masking real links) more than it risks
+# missing a hypothetical hand-authored tab-indented fence.
+#
+# The closing fence must be *at least* as long as the opening one (``\1``
+# followed by zero or more further fence characters), not merely "any run
+# of 3+": ``_quote_source_text`` widens the fence beyond the longest
+# backtick run already present in the quoted content specifically so a
+# shorter accidental run inside that content (e.g. someone's excerpt
+# quoting another 3-backtick fence) can never be mistaken for the real
+# close. This "at least as long" rule is fenced blocks' own CommonMark
+# semantics, distinct from inline code spans below.
+#
+# CommonMark permits two independent fence characters, backtick and tilde,
+# and a fence of one character is never closed by the other -- so this is
+# two homogeneous patterns, not one class matching either character (which
+# would wrongly accept a mixed-character run like "`~`" as a fence, and
+# would let a backtick fence be closed by tildes or vice versa).
+#
+# Backtick fences further forbid backticks in the info string (CommonMark:
+# otherwise a line-starting inline code span would be taken as a fence).
+# The opener therefore uses ``[^`\n]*``, not ``[^\n]*``.
+#
+# The two patterns are applied in document order -- leftmost opener wins
+# -- rather than as successive whole-document passes. A later pass that
+# does not see the other delimiter's closer would let an inner unclosed
+# opener fall through to ``\Z`` and blank every live link after the outer
+# fence. Tilde fences exist so authors can quote backtick fences,
+# including an opener that never closes.
+#
+# The closing-fence alternative's trailing ``\r?`` tolerates CRLF line
+# endings: Python's ``re.M`` ``$`` anchors immediately before a bare
+# ``\n``, not before a ``\r`` that precedes it, so on CRLF text the
+# un-consumed ``\r`` made the closing line fail to match at all, falling
+# through to the ``\Z`` alternative and masking (over-masking) the rest of
+# the document -- including any real links after the fence. Independently
+# found via an adversarial CRLF regression test, not part of the verifier's
+# three reported findings.
+_FENCED_CODE_BLOCK = re.compile(
+    r"^ {0,3}(`{3,})[^`\n]*\n.*?(?:^ {0,3}\1`*[ \t]*\r?$|\Z)", re.M | re.S
+)
+_FENCED_CODE_BLOCK_TILDE = re.compile(
+    r"^ {0,3}(~{3,})[^\n]*\n.*?(?:^ {0,3}\1~*[ \t]*\r?$|\Z)", re.M | re.S
+)
+# Inline code spans require the closing backtick run to be *exactly* as
+# long as the opening one (CommonMark: "a code span begins with a backtick
+# string and ends with a backtick string of equal length" -- unlike fenced
+# blocks' "at least as long"). Two structural requirements this single
+# backreference alone does not give:
+#
+# 1. ``(?!`)`` immediately after ``\1``: without it, ``\1`` is satisfied by
+#    matching a *prefix* of a longer closing run (e.g. two open backticks
+#    are "closed" by the first two of three), silently absorbing the
+#    extra backtick into the span and suppressing a real link that follows
+#    it. Independently reproduced: ``` ``[live](missing.md)``` ``` (2
+#    open, 3 close) wrongly masked the link before this fix.
+# 2. ``(?>(`+))`` atomic grouping around the opening capture: a plain
+#    greedy ``(`+)`` backtracks to a *shorter* opening run when the
+#    maximal one has no valid same-length close later in the text (e.g.
+#    3 open, only 2 close anywhere) -- re-trying with 2 backticks
+#    captured and 1 left over as ordinary content, which can then find a
+#    same-length close that should never have counted, since the actual
+#    3-backtick run opened no valid span at all. Atomic grouping commits
+#    to the maximal run once found, matching CommonMark's actual
+#    algorithm (try the longest backtick string once; no match anywhere
+#    means no code span, full stop -- never retry shorter).
+# 3. ``(?<!`)`` before the opening group: atomicity alone only stops
+#    backtracking *within one match attempt at a fixed start position*.
+#    ``re.sub`` still retries at the *next* character position when a
+#    match fails there -- which, for "```[live](missing.md)``" (3 open,
+#    only 2 close anywhere), let a retry starting one character in treat
+#    the last two of those three opening backticks as a fresh 2-backtick
+#    opener, closed by the real 2-backtick run at the end -- a match
+#    CommonMark's own algorithm never considers, because "```" is one
+#    indivisible backtick-string token, not "1 stray backtick + a
+#    2-backtick string". The lookbehind refuses to *start* a match
+#    immediately after another backtick, so a match can only ever begin
+#    at the first character of a maximal run; independently confirmed
+#    this closes that case without the atomic group above.
+_INLINE_CODE_SPAN = re.compile(r"(?<!`)(?>(`+))(?:(?!\1)[\s\S])*?\1(?!`)")
 
 # AS-H-010 process exit codes for ``atlas validate`` (argparse usage remains 2).
 VALIDATION_EXIT_OK = 0
@@ -46,6 +138,57 @@ _ORPHAN_LAYER_ROOTS = frozenset({"projects", "01-portfolio"})
 _ORPHAN_EXCLUDED_ROOTS = frozenset(
     {"sources", "00-system", "templates", "state", "review", "receipts", "generated"}
 )
+
+
+def _mask_inert_markdown_regions(text: str) -> str:
+    """Replace fenced code blocks and inline code spans with equal-length
+    blank runs (never removing bytes -- character offsets used elsewhere in
+    ``text`` stay valid) so the link checker never mistakes a `](...)`-
+    shaped substring inside quoted, verbatim source content for a real
+    navigable Markdown link.
+
+    ``knowledge_compiler._quote_source_text`` deliberately renders untrusted
+    claim text inside a code span or fenced block specifically so embedded
+    Markdown (headings, links, directives) is inert, not live -- a single-
+    line claim value containing a same-directory relative link that was
+    valid at its *source* location (e.g. "Complements
+    [OPENAI-MCP-DESIGN.md](OPENAI-MCP-DESIGN.md).") is correctly rendered
+    as literal, non-navigable text once quoted; the previous unconditional
+    regex scan did not know that and reported it as broken. Content outside
+    any code span/fence is unaffected and still checked exactly as before.
+    """
+    if "`" not in text and "~" not in text:
+        return text
+    masked = _mask_fenced_code_blocks(text)
+    return _INLINE_CODE_SPAN.sub(lambda m: re.sub(r"[^\n]", " ", m.group(0)), masked)
+
+
+def _earliest_fence(text: str, pos: int) -> re.Match[str] | None:
+    """Return the leftmost backtick or tilde fence starting at or after ``pos``."""
+    backtick = _FENCED_CODE_BLOCK.search(text, pos)
+    tilde = _FENCED_CODE_BLOCK_TILDE.search(text, pos)
+    if backtick is None:
+        return tilde
+    if tilde is None:
+        return backtick
+    return backtick if backtick.start() <= tilde.start() else tilde
+
+
+def _mask_fenced_code_blocks(text: str) -> str:
+    """Mask fenced blocks in document order so an inner unclosed opener
+    cannot ``\\Z``-swallow past an earlier outer fence of the other type.
+    """
+    pieces: list[str] = []
+    pos = 0
+    while pos < len(text):
+        match = _earliest_fence(text, pos)
+        if match is None:
+            pieces.append(text[pos:])
+            break
+        pieces.append(text[pos : match.start()])
+        pieces.append(re.sub(r"[^\n]", " ", match.group(0)))
+        pos = match.end()
+    return "".join(pieces)
 
 
 def validate(
@@ -77,7 +220,7 @@ def validate(
             # link resolution applies to generated layers only (AS-EXT-001A).
             continue
         text = markdown.read_text(encoding="utf-8")
-        for target in LINK.findall(text):
+        for target in LINK.findall(_mask_inert_markdown_regions(text)):
             if target.startswith(("http://", "https://", "#")):
                 continue
             candidate = (markdown.parent / target.split("#", 1)[0]).resolve()
@@ -1028,7 +1171,7 @@ def _collect_reachable_notes(vault: Path) -> set[str]:
             text = current.read_text(encoding="utf-8")
         except (OSError, UnicodeError):
             continue
-        for target in LINK.findall(text):
+        for target in LINK.findall(_mask_inert_markdown_regions(text)):
             resolved = _resolve_md_link(current, target, vault)
             if resolved is None:
                 # Escaping targets are already reported by the link validator.
