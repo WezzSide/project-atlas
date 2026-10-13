@@ -1,0 +1,395 @@
+{
+  "repository": "B0LK13/project-atlas",
+  "platforms": [
+    "linux",
+    "windows"
+  ],
+  "items": [
+    {
+      "name": "codebase-memory-mcp",
+      "version": "0.10.8",
+      "kind": "mcp",
+      "source": "npm",
+      "required": true,
+      "platform": [
+        "linux",
+        "windows"
+      ],
+      "install_method": {
+        "linux": "npm i -g codebase-memory-mcp@0.10.8",
+        "windows": "npm i -g codebase-memory-mcp@0.10.8"
+      },
+      "config_locations": {
+        "linux": [
+          "$HOME/.copilot/mcp-config.json",
+          "$HOME/.config/Code/User/mcp.json",
+          "$HOME/.cursor/mcp.json"
+        ],
+        "windows": [
+          "$env:USERPROFILE\\.copilot\\mcp-config.json",
+          "$env:APPDATA\\Code\\User\\mcp.json",
+          "$env:USERPROFILE\\.cursor\\mcp.json"
+        ]
+      },
+      "security_scope": "user",
+      "health_command": "codebase-memory-mcp --version",
+      "purpose": "Persistent code graph intelligence and architecture discovery."
+    },
+    {
+      "name": "github-mcp-server",
+      "version": "1.12.0",
+      "kind": "mcp",
+      "source": "npm+wrapper",
+      "required": true,
+      "platform": [
+        "linux",
+        "windows"
+      ],
+      "install_method": {
+        "linux": "npm i -g github-mcp-server@1.12.0 and wrapper with runtime-auth gh token indirection.",
+        "windows": "npm i -g github-mcp-server@1.12.0 and PowerShell wrapper with runtime-auth gh token indirection."
+      },
+      "config_locations": {
+        "linux": [
+          "$HOME/.local/bin/github-mcp-wrapper",
+          "$HOME/.copilot/mcp-config.json",
+          "$HOME/.config/Code/User/mcp.json",
+          "$HOME/.cursor/mcp.json"
+        ],
+        "windows": [
+          "$env:USERPROFILE\\.local\\bin\\github-mcp-wrapper.ps1",
+          "$env:USERPROFILE\\.copilot\\mcp-config.json",
+          "$env:APPDATA\\Code\\User\\mcp.json",
+          "$env:USERPROFILE\\.cursor\\mcp.json"
+        ]
+      },
+      "security_scope": "runtime-token-only",
+      "health_command": "github-mcp-server --version",
+      "purpose": "Repository metadata, PR, issue, commit, and CI truth."
+    },
+    {
+      "name": "@playwright/mcp",
+      "version": "0.0.80",
+      "kind": "mcp",
+      "source": "npm",
+      "required": true,
+      "platform": [
+        "linux",
+        "windows"
+      ],
+      "install_method": {
+        "linux": "npm i -g @playwright/mcp@0.0.80",
+        "windows": "npm i -g @playwright/mcp@0.0.80"
+      },
+      "config_locations": {
+        "linux": [
+          "$HOME/.copilot/mcp-config.json",
+          "$HOME/.config/Code/User/mcp.json",
+          "$HOME/.cursor/mcp.json"
+        ],
+        "windows": [
+          "$env:USERPROFILE\\.copilot\\mcp-config.json",
+          "$env:APPDATA\\Code\\User\\mcp.json",
+          "$env:USERPROFILE\\.cursor\\mcp.json"
+        ]
+      },
+      "security_scope": "headless-browser-automation",
+      "health_command": "npx -y @playwright/mcp@0.0.80 --help",
+      "purpose": "Browser automation for UI/evidence verification."
+    },
+    {
+      "name": "@upstash/context7-mcp",
+      "version": "4.0.5",
+      "kind": "mcp",
+      "source": "npm",
+      "required": false,
+      "platform": [
+        "linux",
+        "windows"
+      ],
+      "install_method": {
+        "linux": "npm i -g @upstash/context7-mcp@4.0.5",
+        "windows": "npm i -g @upstash/context7-mcp@4.0.5"
+      },
+      "config_locations": {
+        "linux": [
+          "$HOME/.copilot/mcp-config.json",
+          "$HOME/.config/Code/User/mcp.json",
+          "$HOME/.cursor/mcp.json"
+        ],
+        "windows": [
+          "$env:USERPROFILE\\.copilot\\mcp-config.json",
+          "$env:APPDATA\\Code\\User\\mcp.json",
+          "$env:USERPROFILE\\.cursor\\mcp.json"
+        ]
+      },
+      "security_scope": "read-only-network-docs",
+      "health_command": "npx -y @upstash/context7-mcp@4.0.5 --help",
+      "purpose": "Current external library/framework documentation lookup."
+    },
+    {
+      "name": "semgrep",
+      "version": "1.176.1",
+      "kind": "security-static-analysis",
+      "source": "pipx",
+      "required": true,
+      "platform": [
+        "linux",
+        "windows"
+      ],
+      "install_method": {
+        "linux": "pipx install semgrep==1.176.1",
+        "windows": "pipx install semgrep==1.176.1"
+      },
+      "config_locations": {
+        "linux": [],
+        "windows": []
+      },
+      "security_scope": "local-scan",
+      "health_command": "semgrep --version",
+      "purpose": "Local static security scanning."
+    },
+    {
+      "name": "gitleaks",
+      "version": "8.30.1",
+      "kind": "secret-scanning",
+      "source": "github-release",
+      "required": true,
+      "platform": [
+        "linux",
+        "windows"
+      ],
+      "install_method": {
+        "linux": "Install release binary for linux_x64.",
+        "windows": "winget install --id Gitleaks.Gitleaks --scope user"
+      },
+      "config_locations": {
+        "linux": [],
+        "windows": []
+      },
+      "security_scope": "local-secret-scan",
+      "health_command": "gitleaks version",
+      "purpose": "Secret detection in repository working tree/history."
+    },
+    {
+      "name": "trivy",
+      "version": "0.74.0",
+      "kind": "supply-chain",
+      "source": "github-release",
+      "required": true,
+      "platform": [
+        "linux",
+        "windows"
+      ],
+      "install_method": {
+        "linux": "Install release binary for Linux-64bit.",
+        "windows": "winget install --id AquaSecurity.Trivy --scope user"
+      },
+      "config_locations": {
+        "linux": [],
+        "windows": []
+      },
+      "security_scope": "local-vulnerability-scan",
+      "health_command": "trivy --version",
+      "purpose": "Vulnerability scanning for dependencies/containers."
+    },
+    {
+      "name": "syft",
+      "version": "1.51.1",
+      "kind": "supply-chain",
+      "source": "github-release",
+      "required": true,
+      "platform": [
+        "linux",
+        "windows"
+      ],
+      "install_method": {
+        "linux": "Install release binary for linux_amd64.",
+        "windows": "winget install --id Anchore.Syft --scope user"
+      },
+      "config_locations": {
+        "linux": [],
+        "windows": []
+      },
+      "security_scope": "local-sbom",
+      "health_command": "syft version",
+      "purpose": "SBOM generation."
+    },
+    {
+      "name": "grype",
+      "version": "0.118.0",
+      "kind": "supply-chain",
+      "source": "github-release",
+      "required": true,
+      "platform": [
+        "linux",
+        "windows"
+      ],
+      "install_method": {
+        "linux": "Install release binary for linux_amd64.",
+        "windows": "winget install --id Anchore.Grype --scope user"
+      },
+      "config_locations": {
+        "linux": [],
+        "windows": []
+      },
+      "security_scope": "local-sbom-vuln-analysis",
+      "health_command": "grype version",
+      "purpose": "SBOM vulnerability analysis."
+    },
+    {
+      "name": "actionlint",
+      "version": "1.7.12",
+      "kind": "ci-tooling",
+      "source": "go-install-or-release",
+      "required": true,
+      "platform": [
+        "linux",
+        "windows"
+      ],
+      "install_method": {
+        "linux": "go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12",
+        "windows": "winget install --id rhysd.actionlint --scope user"
+      },
+      "config_locations": {
+        "linux": [],
+        "windows": []
+      },
+      "security_scope": "local-ci-lint",
+      "health_command": "actionlint -version",
+      "purpose": "GitHub Actions workflow linting."
+    },
+    {
+      "name": "markdownlint-cli2",
+      "version": "0.23.2",
+      "kind": "documentation-quality",
+      "source": "npm",
+      "required": false,
+      "platform": [
+        "linux",
+        "windows"
+      ],
+      "install_method": {
+        "linux": "npm i -g markdownlint-cli2@0.23.2",
+        "windows": "npm i -g markdownlint-cli2@0.23.2"
+      },
+      "config_locations": {
+        "linux": [],
+        "windows": []
+      },
+      "security_scope": "local-doc-lint",
+      "health_command": "markdownlint-cli2 --version",
+      "purpose": "Markdown quality checks."
+    },
+    {
+      "name": "taplo",
+      "version": "0.10.0",
+      "kind": "config-quality",
+      "source": "github-release",
+      "required": false,
+      "platform": [
+        "linux",
+        "windows"
+      ],
+      "install_method": {
+        "linux": "Install release binary and verify checksum.",
+        "windows": "winget install --id tamasfe.taplo --scope user"
+      },
+      "config_locations": {
+        "linux": [],
+        "windows": []
+      },
+      "security_scope": "local-config-lint",
+      "health_command": "taplo --version",
+      "purpose": "TOML validation and formatting."
+    },
+    {
+      "name": "hadolint",
+      "version": "2.15.1",
+      "kind": "container-quality",
+      "source": "github-release",
+      "required": true,
+      "platform": [
+        "linux",
+        "windows"
+      ],
+      "install_method": {
+        "linux": "Install release binary.",
+        "windows": "winget install --id hadolint.hadolint --scope user"
+      },
+      "config_locations": {
+        "linux": [],
+        "windows": []
+      },
+      "security_scope": "local-dockerfile-lint",
+      "health_command": "hadolint --version",
+      "purpose": "Dockerfile linting."
+    },
+    {
+      "name": "yamllint",
+      "version": "1.38.0",
+      "kind": "config-quality",
+      "source": "pipx",
+      "required": true,
+      "platform": [
+        "linux",
+        "windows"
+      ],
+      "install_method": {
+        "linux": "pipx install yamllint==1.38.0",
+        "windows": "pipx install yamllint==1.38.0"
+      },
+      "config_locations": {
+        "linux": [],
+        "windows": []
+      },
+      "security_scope": "local-yaml-lint",
+      "health_command": "yamllint --version",
+      "purpose": "YAML linting and validation."
+    },
+    {
+      "name": "pre-commit",
+      "version": "4.6.2",
+      "kind": "workflow-tooling",
+      "source": "pipx",
+      "required": false,
+      "platform": [
+        "linux",
+        "windows"
+      ],
+      "install_method": {
+        "linux": "pipx install pre-commit==4.6.2",
+        "windows": "pipx install pre-commit==4.6.2"
+      },
+      "config_locations": {
+        "linux": [],
+        "windows": []
+      },
+      "security_scope": "local-hook-runner",
+      "health_command": "pre-commit --version",
+      "purpose": "Optional local hook runner (no repo hooks imposed)."
+    },
+    {
+      "name": "pip-audit",
+      "version": "2.10.1",
+      "kind": "supply-chain",
+      "source": "pipx",
+      "required": true,
+      "platform": [
+        "linux",
+        "windows"
+      ],
+      "install_method": {
+        "linux": "pipx install pip-audit==2.10.1",
+        "windows": "pipx install pip-audit==2.10.1"
+      },
+      "config_locations": {
+        "linux": [],
+        "windows": []
+      },
+      "security_scope": "local-python-vuln-scan",
+      "health_command": "pip-audit --version",
+      "purpose": "Python dependency vulnerability checks."
+    }
+  ]
+}
