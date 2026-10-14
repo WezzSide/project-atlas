@@ -144,7 +144,7 @@ jobs:
       # dedicated branch and restricted via --allowedTools in claude_args.
       - name: Run agent (bounded prompt, restricted tools)
         id: agent
-        uses: anthropics/claude-code-action@756cc22e19660d20e8cc9496b4f242475a7f7790 # v1 (v1.0 release tag)
+        uses: anthropics/claude-code-action@1d6de8cb0c237e7c15e9e1bdf973826ebae490cc # v1 (v1.0 release tag)
         with:
           prompt: |
             Bounded task for Project Atlas (branch ${{ env.AGENT_BRANCH }}):
@@ -553,7 +553,7 @@ jobs:
       - name: Upload sanitized SDK diagnostic
         if: ${{ failure() && steps.agent.outcome == 'failure' }}
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: atlas-agent-sdk-diagnostic
           path: ${{ runner.temp }}/claude-sdk-diagnostic.json
@@ -645,7 +645,7 @@ jobs:
       - name: Upload envelope salvage evidence
         if: ${{ failure() && steps.agent.outcome == 'failure' && steps.salvage_persist.outcome == 'success' }}
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: atlas-agent-envelope-salvage
           path: ${{ runner.temp }}/atlas-envelope-salvage.json
@@ -684,7 +684,7 @@ jobs:
         run: bash infra/atlas-runner/scripts/smoke-workload.sh
 
       - name: Upload executor evidence
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: atlas-agent-execute-evidence
           path: |
