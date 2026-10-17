@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Final
 
 from atlas_contracts.identity import safe_relative_component
+from project_atlas.secrets import scan_text
 
 ATLAS3_NAMESPACE: Final[str] = "project_atlas.atlas3"
 GENERATOR_ID: Final[str] = "atlas-3-isolated-runtime-001"
@@ -105,6 +106,22 @@ def write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
             tmp.unlink(missing_ok=True)
 
 
+def _redact_secret_strings(value: Any) -> Any:
+    """Replace decoded secret-shaped strings after json.loads.
+
+    AS-SEC-SCAN-ATLAS3-ANSWER-JSON-ESC-001: scan_text misses JSON ``\\u``
+    escapes on raw bytes. Pulse/Start composers must not persist those
+    decoded tokens into generated/ops/atlas3/**.
+    """
+    if isinstance(value, str):
+        return "UNKNOWN" if scan_text(value) else value
+    if isinstance(value, list):
+        return [_redact_secret_strings(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _redact_secret_strings(item) for key, item in value.items()}
+    return value
+
+
 def read_json(path: Path) -> dict[str, Any] | None:
     if not path.is_file():
         return None
@@ -112,7 +129,10 @@ def read_json(path: Path) -> dict[str, Any] | None:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError):
         return None
-    return raw if isinstance(raw, dict) else None
+    if not isinstance(raw, dict):
+        return None
+    redacted = _redact_secret_strings(raw)
+    return redacted if isinstance(redacted, dict) else None
 
 
 def load_answer(vault: Path, answer_id: str) -> dict[str, Any] | None:
