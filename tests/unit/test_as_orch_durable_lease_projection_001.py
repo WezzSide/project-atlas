@@ -829,6 +829,46 @@ def test_reap_fails_closed_on_a_corrupt_individual_row(tmp_path: Path) -> None:
     assert exc.value.code == "STATE_CORRUPT"
 
 
+def test_obstructed_store_parent_is_projection_error_not_oserror(tmp_path: Path) -> None:
+    """A file where a store directory component must exist is a domain
+    failure, not a raw OSError past the autonomy CLI catch tuple.
+
+    Reproduced on main ``b87b4a22``: ``project_grant`` / ``persist_projection``
+    called ``_write_atomic`` whose ``parent.mkdir`` sat outside any
+    lease-owned OSError wrap, so ``NotADirectoryError`` / ``FileExistsError``
+    escaped ``_mutate_projection`` (which only caught ``IdentityLockError``).
+    """
+    blocker = tmp_path / "not-a-directory"
+    blocker.write_text("file where a directory is required\n", encoding="utf-8")
+    store = blocker / "lease-store"
+    lease = _lease(lease_id="LEASE-1", agent_id="worker-a", package_id="PKG-A", sequence=1)
+
+    with pytest.raises(ProjectionError) as exc:
+        project_grant(store, lease, live_main=PIN)
+    assert exc.value.code == "PROJECTION_WRITE_BLOCKED"
+    assert not isinstance(exc.value, OSError)
+    assert exc.value.__cause__ is not None
+    assert isinstance(exc.value.__cause__, OSError)
+
+
+def test_short_write_is_projection_error_not_oserror(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``_write_atomic``'s ``raise OSError("short write...")`` must not
+    escape the lease mutator as a raw OSError. The helper stays shared
+    with origination, so the conversion lives at this boundary.
+    """
+    import os
+
+    monkeypatch.setattr(os, "write", lambda _fd, _data: 0)
+    lease = _lease(lease_id="LEASE-1", agent_id="worker-a", package_id="PKG-A", sequence=1)
+
+    with pytest.raises(ProjectionError) as exc:
+        project_grant(tmp_path, lease, live_main=PIN)
+    assert exc.value.code == "PROJECTION_WRITE_BLOCKED"
+    assert isinstance(exc.value.__cause__, OSError)
+
+
 def test_reap_no_ops_safely_with_nothing_to_do(tmp_path: Path) -> None:
     """Defensive coverage: empty completed_lease_ids, and a completed id
     with no matching durable row at all (e.g. the durable lease
