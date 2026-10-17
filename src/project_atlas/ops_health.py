@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from project_atlas.schema import validate_record
+from project_atlas.secrets import scan_text
 
 SCHEMA_ID = "atlas.ops.health_snapshot.v1"
 COLLECTOR_ID = "atlas.ops.health"
@@ -100,7 +101,13 @@ def _estate_id(vault: Path) -> str:
     for key in ("vault_uuid", "vault_id"):
         value = identity.get(key)
         if isinstance(value, str) and value.strip():
-            return value.strip()
+            token = value.strip()
+            # AS-SEC-SCAN-OPS-HEALTH-UUID-JSON-ESC-001: json.loads of
+            # vault.json can decode \\u escapes that scan_text misses on raw
+            # bytes. Do not persist a decoded secret as estate_id.
+            if scan_text(token):
+                return "unknown"
+            return token
     return "unknown"
 
 
