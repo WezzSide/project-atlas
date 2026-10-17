@@ -14,6 +14,7 @@ from typing import Any, Literal
 
 from project_atlas.authz import OperatorProfile, default_operator
 from project_atlas.compat_anchor import SNAPSHOT_ID, require_compatibility_anchor
+from project_atlas.secrets import scan_text
 
 PACKAGE_ID = "AS-2.1-COLLAB-001"
 TRUTH_BOUNDARY = "COLLAB SESSION != MULTIUSER PLANE / != AUTHORITY"
@@ -109,6 +110,12 @@ def append_collab_action(
     payload: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
     if payload.get("closed") is True:
         raise CollabError("collab-session-closed")
+    subject = str(payload.get("subject") or "")
+    # AS-SEC-SCAN-COLLAB-SUBJECT-JSON-ESC-001: json.loads of an existing
+    # session can decode ``\u`` subject escapes that scan_text misses on
+    # raw bytes. Fail closed before rewrite.
+    if scan_text(subject):
+        raise CollabError("collab-session-secret-content")
     name = action_name.strip()
     if not re.fullmatch(r"^[a-z][a-z0-9-]{0,63}$", name):
         raise CollabError("collab-action-name-invalid")
@@ -144,6 +151,9 @@ def close_collab_session(
     payload: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
     if payload.get("closed") is True:
         raise CollabError("collab-session-already-closed")
+    subject = str(payload.get("subject") or "")
+    if scan_text(subject):
+        raise CollabError("collab-session-secret-content")
     entry = {"action": "close-session", "operator_id": op.operator_id}
     actions = list(payload.get("actions") or [])
     actions.append(entry)
