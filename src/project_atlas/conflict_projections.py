@@ -14,6 +14,7 @@ from project_atlas.domain.authority_semantics import (
     AuthoritativeStateRecord,
     AuthorityDisposition,
 )
+from project_atlas.secrets import scan_text
 
 DUPLICATE_SOURCE_KIND = "duplicate-source"
 
@@ -142,6 +143,10 @@ def conflict_index_companions(
         text = str(key)
         if not text or text == "None":
             return
+        # AS-SEC-SCAN-INDEXES-CONFLICT-PROJECTID-JSON-ESC-001: companion
+        # maps decode ``\u`` project_id / source_id after json.loads.
+        if scan_text(text) or scan_text(value):
+            return
         index.setdefault(text, []).append(value)
 
     for conflict in records:
@@ -183,6 +188,10 @@ def review_index_companions(
     def _add(index: dict[str, list[str]], key: object, value: str) -> None:
         text = str(key)
         if not text or text == "None":
+            return
+        # AS-SEC-SCAN-INDEXES-REVIEW-PROJECTID-JSON-ESC-001: companion
+        # maps decode ``\u`` project_id after json.loads.
+        if scan_text(text) or scan_text(value):
             return
         index.setdefault(text, []).append(value)
 
