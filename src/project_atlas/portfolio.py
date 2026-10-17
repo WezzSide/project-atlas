@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any
 
 from project_atlas.ingestion import _promote
+from project_atlas.secrets import scan_text
 from project_atlas.semantic_compiler import COVERAGE_RULES, coverage_for
 
 GENERATED_PORTFOLIO_ROOT = "generated/portfolio"
@@ -108,7 +109,7 @@ def _classifications(vault: Path) -> dict[str, str]:
     return {
         str(source_id): str(info.get("type", ""))
         for source_id, info in classifications.items()
-        if isinstance(info, dict)
+        if isinstance(info, dict) and not (isinstance(source_id, str) and scan_text(source_id))
     }
 
 
@@ -171,7 +172,13 @@ def _project_source_ids(vault: Path, project_id: str, concepts: list[dict[str, A
     for concept in concepts:
         for source in concept.get("sources", []):
             if isinstance(source, dict) and source.get("source_id"):
-                result.add(str(source["source_id"]))
+                source_id = str(source["source_id"])
+                # AS-SEC-SCAN-PORTFOLIO-SOURCEID-JSON-ESC-001: json.loads of
+                # concept source_id can decode ``\u`` escapes that scan_text
+                # misses on raw bytes.
+                if scan_text(source_id):
+                    continue
+                result.add(source_id)
     return result
 
 
