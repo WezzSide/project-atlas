@@ -23,6 +23,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
 from project_atlas.schema import validate_record
+from project_atlas.secrets import scan_text
 
 GENERATOR_ID = "atlas-int-010"
 INDEX_SCHEMA = "event-tombstone-index"
@@ -76,6 +77,8 @@ def _safe_component(value: str, *, label: str) -> str:
         raise TombstoneError(f"unsafe {label}: {value!r}")
     if PurePosixPath(value).is_absolute() or ".." in PurePosixPath(value).parts:
         raise TombstoneError(f"unsafe {label}: {value!r}")
+    if scan_text(value):
+        raise TombstoneError(f"secret-content {label}")
     return value
 
 
@@ -133,6 +136,26 @@ def load_index(vault: Path) -> dict[str, Any]:
         validate_record(loaded, INDEX_SCHEMA)
     except Exception as exc:
         raise TombstoneError(f"malformed tombstone index: {exc}") from exc
+    rows = loaded.get("tombstones")
+    if isinstance(rows, list):
+        cleaned: list[Any] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                raise TombstoneError("tombstone entry must be an object")
+            fields = [
+                str(row.get("unit_key") or ""),
+                str(row.get("event_id") or ""),
+                str(row.get("project_id") or ""),
+            ]
+            paths = row.get("deleted_paths")
+            if isinstance(paths, list):
+                fields.extend(str(item) for item in paths)
+            # AS-SEC-SCAN-TOMBSTONE-JSON-ESC-001: drop decoded secret-shaped
+            # identity rows so index rewrite cannot persist them.
+            if any(scan_text(field) for field in fields if field):
+                continue
+            cleaned.append(row)
+        loaded["tombstones"] = cleaned
     return loaded
 
 
