@@ -31,6 +31,7 @@ from project_atlas.graph_resolution import (
     resolve_from_acceptance,
 )
 from project_atlas.schema import validate_record
+from project_atlas.secrets import scan_text
 
 if TYPE_CHECKING:
     from project_atlas.graph_quarantine import QuarantineStoreResult
@@ -132,8 +133,8 @@ class RelationshipRecord:
             "relationship_type": self.relationship_type,
             "source_entity_id": self.source_entity_id,
             "target_entity_id": self.target_entity_id,
-            "source_graphify_id": self.source_graphify_id,
-            "target_graphify_id": self.target_graphify_id,
+            "source_graphify_id": _safe_graphify_id(self.source_graphify_id),
+            "target_graphify_id": _safe_graphify_id(self.target_graphify_id),
             "link_quality": self.link_quality,
             "relationship_fingerprint": self.relationship_fingerprint,
             "authority": {
@@ -144,7 +145,7 @@ class RelationshipRecord:
                 ),
             },
             "status": "retained",
-            "provenance": self.provenance,
+            "provenance": _safe_provenance(self.provenance),
             "truth_boundary": TRUTH_BOUNDARY,
         }
         if self.relationship_type == "extension":
@@ -193,11 +194,11 @@ class RelationshipQuarantine:
         if self.relationship_fingerprint is not None:
             payload["relationship_fingerprint"] = self.relationship_fingerprint
         if self.graphify_edge_ids:
-            payload["graphify_edge_ids"] = list(self.graphify_edge_ids)
+            payload["graphify_edge_ids"] = _safe_graphify_ids(self.graphify_edge_ids)
         if self.source_graphify_id is not None:
-            payload["source_graphify_id"] = self.source_graphify_id
+            payload["source_graphify_id"] = _safe_graphify_id(self.source_graphify_id)
         if self.target_graphify_id is not None:
-            payload["target_graphify_id"] = self.target_graphify_id
+            payload["target_graphify_id"] = _safe_graphify_id(self.target_graphify_id)
         if self.artifact_refs:
             payload["artifact_refs"] = [item.as_dict() for item in self.artifact_refs]
         return payload
@@ -268,6 +269,31 @@ class _EdgeMaterial:
 @dataclass
 class _CollapseBucket:
     materials: list[_EdgeMaterial] = field(default_factory=list)
+
+
+def _safe_graphify_id(raw: str | None) -> str:
+    """Omit decoded secret-shaped Graphify ids from persist payloads.
+
+    AS-SEC-SCAN-GRAPH-REL-GID-JSON-ESC-001: json.loads of Graphify
+    nodes/edges can decode ``\\u`` ids that scan_text misses on raw bytes.
+    """
+    text = str(raw or "").strip()
+    if not text or scan_text(text):
+        return "UNKNOWN"
+    return text
+
+
+def _safe_graphify_ids(values: Sequence[Any]) -> list[str]:
+    return [_safe_graphify_id(str(item)) for item in values]
+
+
+def _safe_provenance(provenance: Mapping[str, Any]) -> dict[str, Any]:
+    payload = dict(provenance)
+    for key in ("source_graphify_ids", "target_graphify_ids", "graphify_edge_ids"):
+        raw = payload.get(key)
+        if isinstance(raw, list):
+            payload[key] = _safe_graphify_ids(raw)
+    return payload
 
 
 def normalize_relationship_type(raw: str | None) -> tuple[str, str | None]:
