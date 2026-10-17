@@ -10,6 +10,7 @@ import pytest
 from project_atlas.receipt_revocation import (
     RevocationError,
     assert_receipt_active,
+    empty_index,
     inventory_with_revocations,
     is_receipt_revoked,
     list_revocations,
@@ -17,6 +18,7 @@ from project_atlas.receipt_revocation import (
     revoke_receipt,
 )
 from project_atlas.schema import validate_record
+from project_atlas.secrets import scan_text
 
 
 def _write_receipt(vault: Path, project: str, event: str) -> Path:
@@ -133,3 +135,30 @@ def test_as_int_011_does_not_touch_tombstone_index(tmp_path: Path) -> None:
     revoke_receipt(vault, project_id="proj-a", event_id="AE-001")
     assert not (vault / "generated" / "ops" / "event-tombstones.json").exists()
     assert (vault / "generated" / "ops" / "receipt-revocations.json").is_file()
+
+
+def test_json_unicode_escape_event_id_is_not_rewritten(tmp_path: Path) -> None:
+    """AS-SEC-SCAN-REVOCATION-JSON-ESC-001: decoded event_id must not persist."""
+    token = "AKIAAAAAAAAAAAAAAAAA"
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    index = empty_index()
+    index["revocations"] = [
+        {
+            "unit_key": f"harbor-api/{token}",
+            "project_id": "harbor-api",
+            "event_id": token,
+            "receipt_path": f"receipts/agent-events/harbor-api/{token}.yaml",
+            "reason": "operator",
+            "status": "revoked",
+        }
+    ]
+    raw = json.dumps(index).replace(token, "\\u0041KIAAAAAAAAAAAAAAAAA")
+    written = vault / "generated" / "ops" / "receipt-revocations.json"
+    written.parent.mkdir(parents=True)
+    written.write_text(raw, encoding="utf-8")
+    assert scan_text(raw) == []
+    revoke_receipt(vault, project_id="harbor-api", event_id="evt-other")
+    text = written.read_text(encoding="utf-8")
+    assert token not in text
+    assert scan_text(text) == []

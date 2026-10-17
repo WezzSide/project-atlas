@@ -22,6 +22,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
 from project_atlas.schema import validate_record
+from project_atlas.secrets import scan_text
 
 GENERATOR_ID = "atlas-int-011"
 INDEX_SCHEMA = "receipt-revocation-index"
@@ -88,6 +89,8 @@ def _safe_component(value: str, *, label: str) -> str:
         raise RevocationError(f"unsafe {label}: {value!r}")
     if PurePosixPath(value).is_absolute() or ".." in PurePosixPath(value).parts:
         raise RevocationError(f"unsafe {label}: {value!r}")
+    if scan_text(value):
+        raise RevocationError(f"secret-content {label}")
     return value
 
 
@@ -161,6 +164,24 @@ def load_index(vault: Path) -> dict[str, Any]:
         validate_record(loaded, INDEX_SCHEMA)
     except Exception as exc:
         raise RevocationError(f"malformed revocation index: {exc}") from exc
+    rows = loaded.get("revocations")
+    if isinstance(rows, list):
+        cleaned: list[Any] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                raise RevocationError("revocation entry must be an object")
+            fields = [
+                str(row.get("unit_key") or ""),
+                str(row.get("event_id") or ""),
+                str(row.get("project_id") or ""),
+                str(row.get("receipt_path") or ""),
+            ]
+            # AS-SEC-SCAN-REVOCATION-JSON-ESC-001: drop decoded secret-shaped
+            # identity rows so index rewrite cannot persist them.
+            if any(scan_text(field) for field in fields if field):
+                continue
+            cleaned.append(row)
+        loaded["revocations"] = cleaned
     return loaded
 
 
