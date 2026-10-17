@@ -9,6 +9,8 @@ from project_atlas.ask_atlas_live import ask_atlas_live
 from project_atlas.cli import EXIT_OK, main
 from project_atlas.connect import connect_project
 from project_atlas.project_brief import materialize_project_briefs
+from project_atlas.project_decisions import materialize_decisions_lenses
+from project_atlas.secrets import scan_text
 from project_atlas.web_api.knowledge import list_knowledge_answers
 
 
@@ -126,3 +128,25 @@ def test_decisions_unknown_without_decision_docs(tmp_path: Path) -> None:
     assert brief["important_decisions"] == "UNKNOWN"
     next_work = brief["suggested_next_work"]
     assert any("DECISIONS" in item or "decision" in item.lower() for item in next_work)
+
+
+def test_json_unicode_escape_claim_is_not_persisted(tmp_path: Path) -> None:
+    """AS-SEC-SCAN-DECISIONS-JSON-ESC-001: decoded claim secrets must not persist."""
+    token = "AKIAAAAAAAAAAAAAAAAA"
+    vault = tmp_path / "vault"
+    (vault / "projects" / "harbor-api").mkdir(parents=True)
+    claims = vault / "state" / "claims"
+    claims.mkdir(parents=True)
+    raw = (
+        '{"schema_version":1,"claims":[{"claim_id":"\\u0041KIAAAAAAAAAAAAAAAAA",'
+        '"claim_type":"decision","value":"We will adopt \\u0041KIAAAAAAAAAAAAAAAAA",'
+        '"project_id":"harbor-api","verification":"verified"}]}'
+    )
+    (claims / "harbor-api.json").write_text(raw, encoding="utf-8")
+    assert scan_text(raw) == []
+    materialize_decisions_lenses(vault, project_ids=["harbor-api"])
+    answer = (
+        vault / "generated" / "answers" / "ans-decisions-harbor-api.json"
+    ).read_text(encoding="utf-8")
+    assert token not in answer
+    assert scan_text(answer) == []
