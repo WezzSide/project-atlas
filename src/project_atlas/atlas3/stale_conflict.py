@@ -8,6 +8,7 @@ remains NOT_GRANTED.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any, Final
 
@@ -16,7 +17,6 @@ from project_atlas.atlas3.contracts import (
     TRUTH_BOUNDARY,
     Atlas3Error,
     honesty_block,
-    read_json,
     require_project,
     require_vault,
 )
@@ -36,6 +36,47 @@ def _pulse_path(vault: Path, project_id: str) -> Path:
 
 def _reconcile_path(vault: Path, project_id: str) -> Path:
     return vault / OPS_RELATIVE / "memory" / project_id / "reconcile.json"
+
+
+def _read_artifact_object(path: Path, *, corrupt_code: str) -> dict[str, Any] | None:
+    """Missing file stays absent. Existing corrupt/non-object artifacts fail closed."""
+    if not path.is_file():
+        return None
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise Atlas3Error(corrupt_code, f"{path.name} is not readable JSON") from exc
+    if not isinstance(raw, dict):
+        raise Atlas3Error(corrupt_code, f"{path.name} must be an object")
+    return raw
+
+
+def _require_object_list(raw: object, *, label: str, code: str) -> list[dict[str, Any]]:
+    if not isinstance(raw, list):
+        raise Atlas3Error(code, f"{label} must be a list")
+    rows: list[dict[str, Any]] = []
+    for index, item in enumerate(raw):
+        if not isinstance(item, dict):
+            raise Atlas3Error(code, f"{label}[{index}] must be an object")
+        rows.append(item)
+    return rows
+
+
+def _assert_artifact_project_scope(
+    payload: dict[str, Any], *, project_id: str, label: str
+) -> None:
+    """Explicit foreign project_id fails closed. Unlabeled / null / whitespace stay allowed."""
+    explicit = payload.get("project_id")
+    if explicit is None:
+        return
+    text = str(explicit).strip()
+    if not text:
+        return
+    if text != project_id:
+        raise Atlas3Error(
+            "PROJECT_MISMATCH",
+            f"{label} project_id {explicit!r} != requested {project_id!r}",
+        )
 
 
 def _reject_authority_claims(payload: dict[str, Any], *, label: str) -> None:
@@ -78,42 +119,48 @@ def compile_stale_conflict_intel(vault: Path | str, project_id: str) -> dict[str
     events = list_events(root, pid)
     stale_ledger = _stale_ledger_rows(events)
 
-    pulse = read_json(_pulse_path(root, pid))
+    pulse = _read_artifact_object(_pulse_path(root, pid), corrupt_code="PULSE_CORRUPT")
     if pulse is not None:
-        if not isinstance(pulse, dict):
-            raise Atlas3Error("PULSE_CORRUPT", "pulse artifact must be an object")
+        _assert_artifact_project_scope(pulse, project_id=pid, label="pulse")
         _reject_authority_claims(pulse, label="pulse")
         questions = pulse.get("questions")
         if questions is not None and not isinstance(questions, dict):
             raise Atlas3Error("PULSE_CORRUPT", "pulse questions must be an object")
 
-    recon = read_json(_reconcile_path(root, pid))
+    recon = _read_artifact_object(
+        _reconcile_path(root, pid), corrupt_code="RECONCILE_CORRUPT"
+    )
     memory_items: list[dict[str, Any]] = []
     memory_stale: list[dict[str, Any]] = []
     memory_conflicts: dict[str, Any] | None = None
     if recon is not None:
-        if not isinstance(recon, dict):
-            raise Atlas3Error("RECONCILE_CORRUPT", "memory reconcile must be an object")
+        _assert_artifact_project_scope(recon, project_id=pid, label="reconcile")
         _reject_authority_claims(recon, label="reconcile")
         nested = recon.get("reconciliation")
-        block = nested if isinstance(nested, dict) else recon
-        if not isinstance(block, dict):
+        if nested is not None and not isinstance(nested, dict):
             raise Atlas3Error("RECONCILE_CORRUPT", "reconciliation must be an object")
+        block = nested if isinstance(nested, dict) else recon
+        _assert_artifact_project_scope(block, project_id=pid, label="reconciliation")
         _reject_authority_claims(block, label="reconciliation")
-        raw_items = block.get("items") or []
-        if not isinstance(raw_items, list):
-            raise Atlas3Error("RECONCILE_CORRUPT", "reconciliation items must be a list")
-        memory_items = [item for item in raw_items if isinstance(item, dict)]
+        raw_items = block.get("items") if "items" in block else []
+        memory_items = _require_object_list(
+            raw_items if raw_items is not None else [],
+            label="reconciliation items",
+            code="RECONCILE_CORRUPT",
+        )
         assert_items_project_scope(memory_items, project_id=pid)
-        raw_stale = block.get("stale_memories") or []
-        if raw_stale:
-            if not isinstance(raw_stale, list):
-                raise Atlas3Error("RECONCILE_CORRUPT", "stale_memories must be a list")
-            memory_stale = [item for item in raw_stale if isinstance(item, dict)]
+        if "stale_memories" in block:
+            memory_stale = _require_object_list(
+                block.get("stale_memories") if block.get("stale_memories") is not None else [],
+                label="stale_memories",
+                code="RECONCILE_CORRUPT",
+            )
             assert_items_project_scope(memory_stale, project_id=pid)
             if any(str(item.get("freshness") or "") == "CURRENT" for item in memory_stale):
                 raise Atlas3Error("STALE_AS_CURRENT", "stale_memories must not be CURRENT")
         raw_conflicts = block.get("conflicts")
+        if raw_conflicts is not None and not isinstance(raw_conflicts, dict):
+            raise Atlas3Error("RECONCILE_CORRUPT", "conflicts must be an object")
         if isinstance(raw_conflicts, dict):
             _reject_authority_claims(raw_conflicts, label="conflicts")
             memory_conflicts = raw_conflicts
