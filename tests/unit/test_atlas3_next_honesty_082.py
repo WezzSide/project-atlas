@@ -182,6 +182,60 @@ def test_corrupt_pulse_fails_closed(tmp_path: Path) -> None:
     assert exc.value.code == "PULSE_CORRUPT"
 
 
+def test_foreign_pulse_project_fails_closed(tmp_path: Path) -> None:
+    vault = _vault(tmp_path)
+    _write_json(
+        vault / "generated" / "ops" / "atlas3" / "pulse" / "harbor-api.json",
+        {
+            "project_id": "other-api",
+            "questions": {
+                "what_should_i_look_at_next": {
+                    "status": "derived",
+                    "value": "review the foreign datastore",
+                }
+            },
+        },
+    )
+    with pytest.raises(Atlas3Error) as exc:
+        compile_next_action_honesty(vault, "harbor-api")
+    assert exc.value.code == "PROJECT_MISMATCH"
+
+
+def test_foreign_next_lens_project_fails_closed(tmp_path: Path) -> None:
+    vault = _vault(tmp_path)
+    _write_json(
+        vault / "generated" / "answers" / "ans-next-harbor-api.json",
+        {
+            "status": "derived",
+            "value": "open the foreign unknown queue",
+            "project_id": "other-api",
+        },
+    )
+    with pytest.raises(Atlas3Error) as exc:
+        compile_next_action_honesty(vault, "harbor-api")
+    assert exc.value.code == "PROJECT_MISMATCH"
+
+
+def test_same_project_pulse_label_still_composes(tmp_path: Path) -> None:
+    vault = _vault(tmp_path)
+    _write_json(
+        vault / "generated" / "ops" / "atlas3" / "pulse" / "harbor-api.json",
+        {
+            "project_id": "harbor-api",
+            "questions": {
+                "what_should_i_look_at_next": {
+                    "status": "derived",
+                    "value": "review the datastore conflict",
+                }
+            },
+        },
+    )
+    report = compile_next_action_honesty(vault, "harbor-api")
+    assert report["status"] == "derived"
+    assert report["next"] == "review the datastore conflict"
+    assert report["write_applied"] is False
+
+
 def test_does_not_invoke_pulse_writer(tmp_path: Path) -> None:
     vault = _vault(tmp_path)
     compile_next_action_honesty(vault, "harbor-api")
