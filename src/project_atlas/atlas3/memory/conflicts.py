@@ -31,9 +31,18 @@ def detect_conflicts(
         raise Atlas3Error("CONFLICT_INVALID", "items must be a list")
     versions: dict[str, list[str]] = {}
     intents: list[str] = []
+    scoped: set[str] = set()
     for item in items:
         if not isinstance(item, dict):
             raise Atlas3Error("CONFLICT_INVALID", "item is not an object")
+        explicit = item.get("project_id")
+        if explicit is not None and str(explicit).strip():
+            scoped.add(str(explicit))
+        if len(scoped) > 1:
+            raise Atlas3Error(
+                "PROJECT_MISMATCH",
+                f"mixed-project conflict batch: {sorted(scoped)}",
+            )
         text = str(item.get("text") or "")
         match = _PG.search(text)
         if not match:

@@ -46,6 +46,44 @@ def test_mixed_valid_and_corrupt_fails_closed() -> None:
     assert exc.value.code == "CONFLICT_INVALID"
 
 
+def test_mixed_project_versions_fail_closed() -> None:
+    with pytest.raises(Atlas3Error) as exc:
+        detect_conflicts(
+            [
+                {
+                    "text": "production uses postgresql 15",
+                    "project_id": "harbor-api",
+                    "provider": "chatgpt",
+                },
+                {
+                    "text": "production uses postgresql 16",
+                    "project_id": "other-api",
+                    "provider": "claude",
+                },
+            ]
+        )
+    assert exc.value.code == "PROJECT_MISMATCH"
+
+
+def test_same_project_versions_still_conflict() -> None:
+    report = detect_conflicts(
+        [
+            {
+                "text": "production uses postgresql 15",
+                "project_id": "harbor-api",
+                "provider": "chatgpt",
+            },
+            {
+                "text": "production uses postgresql 16",
+                "project_id": "harbor-api",
+                "provider": "claude",
+            },
+        ]
+    )
+    assert report["conflicted_history"] is True
+    assert report["winner"] is None
+
+
 def test_module_does_not_touch_2x_bridges() -> None:
     root = Path(__file__).resolve().parents[2]
     source = (root / "src/project_atlas/atlas3/memory/conflicts.py").read_text(
