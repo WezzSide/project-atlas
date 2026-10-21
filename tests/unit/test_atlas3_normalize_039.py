@@ -100,6 +100,60 @@ def test_malformed_provider_fails_closed() -> None:
     assert exc.value.code == "MALFORMED_PROVIDER"
 
 
+def test_foreign_turn_project_fails_closed() -> None:
+    with pytest.raises(Atlas3Error) as exc:
+        normalize_turns(
+            [
+                {
+                    "role": "user",
+                    "text": "FOREIGN datastore",
+                    "project_id": "other-api",
+                }
+            ],
+            provider="chatgpt",
+            conversation_id="c1",
+            import_mode="EXPORT",
+            project_id="harbor-api",
+        )
+    assert exc.value.code == "PROJECT_MISMATCH"
+
+
+def test_forged_metadata_project_fails_closed() -> None:
+    with pytest.raises(Atlas3Error) as exc:
+        normalize_turns(
+            [
+                {
+                    "role": "user",
+                    "text": "FOREIGN datastore",
+                    "provider_metadata": {"bound_project_id": "other-api"},
+                }
+            ],
+            provider="chatgpt",
+            conversation_id="c1",
+            import_mode="EXPORT",
+            project_id="harbor-api",
+        )
+    assert exc.value.code == "PROJECT_MISMATCH"
+
+
+def test_same_project_turn_label_still_normalizes() -> None:
+    envelopes = normalize_turns(
+        [
+            {
+                "role": "user",
+                "text": "which datastore?",
+                "project_id": "harbor-api",
+            }
+        ],
+        provider="chatgpt",
+        conversation_id="c-norm",
+        import_mode="EXPORT",
+        project_id="harbor-api",
+    )
+    assert len(envelopes) == 1
+    assert envelopes[0]["project_id"] == "harbor-api"
+
+
 def test_module_does_not_touch_2x_bridges() -> None:
     root = Path(__file__).resolve().parents[2]
     source = (root / "src/project_atlas/atlas3/memory/normalize.py").read_text(
