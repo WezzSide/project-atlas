@@ -551,6 +551,49 @@ def test_duplicate_discovery_is_idempotent(tmp_path: Path) -> None:
     assert len(loaded.records) == 1
 
 
+def test_obstructed_store_parent_is_origination_projection_error_not_oserror(
+    tmp_path: Path,
+) -> None:
+    """A file where a store directory component must exist is a domain
+    failure, not a raw OSError past the origination CLI catch tuple.
+
+    Reproduced on main ``b87b4a22``: ``persist_proposed`` called shared
+    ``_write_atomic`` whose ``parent.mkdir`` escaped as
+    ``NotADirectoryError`` because the lock wrapper only caught
+    ``IdentityLockError``.
+    """
+    blocker = tmp_path / "not-a-directory"
+    blocker.write_text("file where a directory is required\n", encoding="utf-8")
+    store = blocker / "origination-store"
+    outcomes = _originate_synthetic(tmp_path)
+    proposal, result = outcomes[0].proposal, outcomes[0].policy
+
+    with pytest.raises(projection.OriginationProjectionError) as exc:
+        projection.persist_proposed(store, proposal, result)
+    assert exc.value.code == "PROJECTION_WRITE_BLOCKED"
+    assert not isinstance(exc.value, OSError)
+    assert exc.value.__cause__ is not None
+    assert isinstance(exc.value.__cause__, OSError)
+
+
+def test_short_write_is_origination_projection_error_not_oserror(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Shared ``_write_atomic`` still raises OSError; this boundary must
+    convert it so the origination CLI catch tuple sees a domain error.
+    """
+    monkeypatch.setattr(os, "write", lambda _fd, _data: 0)
+    store = tmp_path / "store"
+    store.mkdir()
+    outcomes = _originate_synthetic(tmp_path)
+    proposal, result = outcomes[0].proposal, outcomes[0].policy
+
+    with pytest.raises(projection.OriginationProjectionError) as exc:
+        projection.persist_proposed(store, proposal, result)
+    assert exc.value.code == "PROJECTION_WRITE_BLOCKED"
+    assert isinstance(exc.value.__cause__, OSError)
+
+
 def test_restart_replay_reads_identical_record_from_disk(tmp_path: Path) -> None:
     """RESTART_REPLAY: a record persisted by one process is found,
     unchanged, by a fresh read against the same store (simulating a new

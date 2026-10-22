@@ -402,6 +402,14 @@ def persist_materialized_if_no_active_conflict(
         raise OriginationProjectionError(
             "projection lock is held", code="CONCURRENT_PROJECTION"
         ) from exc
+    except OSError as exc:
+        # Sibling of ORCHLEASE-008: shared ``_write_atomic`` stays
+        # OSError-typed. Origination CLI catches OriginationProjectionError
+        # only, so a blocked store previously crashed the scan entrypoint.
+        raise OriginationProjectionError(
+            f"origination projection write is blocked ({exc.__class__.__name__})",
+            code="PROJECTION_WRITE_BLOCKED",
+        ) from exc
     materialized = next(row for row in rows if row.origination_identity == origination_identity)
     return materialized, None
 
@@ -664,6 +672,14 @@ def reconcile_revision(
         raise OriginationProjectionError(
             "projection lock is held", code="CONCURRENT_PROJECTION"
         ) from exc
+    except OSError as exc:
+        # Sibling of ORCHLEASE-008: shared ``_write_atomic`` stays
+        # OSError-typed. Origination CLI catches OriginationProjectionError
+        # only, so a blocked store previously crashed the scan entrypoint.
+        raise OriginationProjectionError(
+            f"origination projection write is blocked ({exc.__class__.__name__})",
+            code="PROJECTION_WRITE_BLOCKED",
+        ) from exc
 
     materialized_row = (
         next(r for r in rows if r.origination_identity == origination_identity)
@@ -782,6 +798,14 @@ def persist_proposed(
         raise OriginationProjectionError(
             "projection lock is held", code="CONCURRENT_PROJECTION"
         ) from exc
+    except OSError as exc:
+        # Sibling of ORCHLEASE-008: shared ``_write_atomic`` stays
+        # OSError-typed. Origination CLI catches OriginationProjectionError
+        # only, so a blocked store previously crashed the scan entrypoint.
+        raise OriginationProjectionError(
+            f"origination projection write is blocked ({exc.__class__.__name__})",
+            code="PROJECTION_WRITE_BLOCKED",
+        ) from exc
     return record
 
 
@@ -825,6 +849,14 @@ def persist_materialized(
         raise OriginationProjectionError(
             "projection lock is held", code="CONCURRENT_PROJECTION"
         ) from exc
+    except OSError as exc:
+        # Sibling of ORCHLEASE-008: shared ``_write_atomic`` stays
+        # OSError-typed. Origination CLI catches OriginationProjectionError
+        # only, so a blocked store previously crashed the scan entrypoint.
+        raise OriginationProjectionError(
+            f"origination projection write is blocked ({exc.__class__.__name__})",
+            code="PROJECTION_WRITE_BLOCKED",
+        ) from exc
     return next(row for row in rows if row.origination_identity == origination_identity)
 
 
@@ -857,6 +889,14 @@ def mark_terminal(store: Path, origination_identity: str, *, node_state: str) ->
     except IdentityLockError as exc:
         raise OriginationProjectionError(
             "projection lock is held", code="CONCURRENT_PROJECTION"
+        ) from exc
+    except OSError as exc:
+        # Sibling of ORCHLEASE-008: shared ``_write_atomic`` stays
+        # OSError-typed. Origination CLI catches OriginationProjectionError
+        # only, so a blocked store previously crashed the scan entrypoint.
+        raise OriginationProjectionError(
+            f"origination projection write is blocked ({exc.__class__.__name__})",
+            code="PROJECTION_WRITE_BLOCKED",
         ) from exc
     return next(row for row in rows if row.origination_identity == origination_identity)
 
