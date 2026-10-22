@@ -135,19 +135,23 @@ def enable_bounded_l3(
     pid = policy_id.strip()
     if not _ID_RE.fullmatch(pid):
         raise AutonomyL3Error("autonomy-l3-policy-id-invalid")
+    aid = arm_id.strip()
+    if not _ID_RE.fullmatch(aid):
+        # Fail-closed: arm_id is interpolated into a scheduler receipt path.
+        raise AutonomyL3Error("autonomy-l3-arm-id-invalid")
     if max_jobs < 1 or max_jobs > 10:
         raise AutonomyL3Error("autonomy-l3-max-jobs-out-of-range")
     if job_timeout_s < 1 or job_timeout_s > 600:
         raise AutonomyL3Error("autonomy-l3-timeout-out-of-range")
-    arm_path = vault / "generated" / "ops" / "scheduler" / f"{arm_id}-arm.json"
+    arm_path = vault / "generated" / "ops" / "scheduler" / f"{aid}-arm.json"
     if not arm_path.is_file():
         raise AutonomyL3Error("autonomy-l3-scheduler-not-armed")
     arm = json.loads(arm_path.read_text(encoding="utf-8"))
     if arm.get("armed") is not True:
         raise AutonomyL3Error("autonomy-l3-scheduler-arm-inactive")
-    if arm.get("arm_id") != arm_id:
+    if arm.get("arm_id") != aid:
         raise AutonomyL3Error("autonomy-l3-receipt-mismatch:arm-receipt")
-    _reject_arm_overlap(vault, arm_id=arm_id, policy_id=pid)
+    _reject_arm_overlap(vault, arm_id=aid, policy_id=pid)
     payload: dict[str, Any] = {
         "schema_version": 1,
         "package_id": PACKAGE_ID,
@@ -167,7 +171,7 @@ def enable_bounded_l3(
         "max_jobs_per_arm": max_jobs,
         "job_timeout_s": job_timeout_s,
         "allowed_jobs": ["validate", "build-indexes", "version"],
-        "arm_id": arm_id,
+        "arm_id": aid,
         "operator_id": op.operator_id,
         "vault_write_enabled": False,
         "truth_boundary": TRUTH_BOUNDARY,
