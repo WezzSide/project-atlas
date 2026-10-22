@@ -374,12 +374,16 @@ def detect_project_duplicates(
                 obs.retired_slot_id,
                 obs.identity_lock_key,
                 obs.root_path,
+                obs.project_id,
             ):
+                # AS-SEC-SCAN-XPROJ-DUP-JSON-ESC-001: do not echo a
+                # JSON-``\\u``-decoded secret project_id into reject
+                # candidate_id, project_ids, or inputs.
                 result.rejects.append(
                     _reject(
                         category="secret-finding",
                         reason="Observation fields contain secret-like material; excluded.",
-                        project_ids=[obs.project_id],
+                        project_ids=(),
                         inputs={"index": index},
                     )
                 )
