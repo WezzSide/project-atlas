@@ -5,6 +5,25 @@ exact commands run, exact results, deviations, and remaining risks.
 
 ---
 
+## AS-CTRL-CAPTURE-SCRIPT-HIJACK-001 — certified capture_event.py only
+
+Base: `b87b4a226f4aa8b2f669edf112aa3476454f754f` / tree `46d1989b026a2f15920ec5e1c78a106799bd1249`.
+
+`agent_control.event_client._document` preferred
+`<vault_parent>/atlas-vault-documentation/scripts/capture_event.py` over the
+certified script next to the control plane. Default connect vault is
+`<project>/.atlas-vault`, so a project tree can replace the governed capture
+binary. `subprocess.run` executed the plant; session recorded `AE-HIJACK`
+with `captured=2` and zero real `AE-*.md` files.
+
+Fix: always invoke `Path(__file__).resolve().parents[1]/scripts/capture_event.py`.
+Regression in `atlas-vault-documentation/tests/test_agent_control.py`.
+
+Does not merge, wake OPT, or treat receipts as authority.
+`MERGE_AUTHORIZATION = NOT_GRANTED`.
+
+---
+
 ## D-193 — Atlas 3.0 foundation convergence
 
 **Date:** 2026-08-25

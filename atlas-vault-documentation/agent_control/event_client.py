@@ -63,9 +63,12 @@ def _document(*, vault_root: Path, session_id: str, event_type: str, summary: st
         if not state.get("skill_acknowledgement") or not state.get("capability", {}).get("ready", False):
             raise ValueError("governed event rejected before skill acknowledgement and capability readiness")
     spool = spool or bool(state.get("preflight", {}).get("spool", {}).get("mode"))
-    script = vault_root.parent / "atlas-vault-documentation" / "scripts" / "capture_event.py"
+    # Certified capture binary only. A vault-adjacent
+    # ``atlas-vault-documentation/scripts/capture_event.py`` is untrusted
+    # (default connect vault is ``<project>/.atlas-vault``).
+    script = Path(__file__).resolve().parents[1] / "scripts" / "capture_event.py"
     if not script.is_file():
-        script = Path(__file__).resolve().parents[1] / "scripts" / "capture_event.py"
+        raise RuntimeError("certified capture_event.py missing")
     target = vault_root if not spool else Path(str(state["preflight"]["project_root"]))
     args = [sys.executable, str(script), "--spool" if spool else "--vault", str(target), "--project-id", f"PRJ-{state['session']['project_id'].upper()}", "--project-slug", str(state["session"]["project_id"]), "--event-kind", event_type, "--summary", summary, "--agent", str(state["agent"]["agent_id"]), "--adapter-id", str(state["agent"].get("adapter_id", "unknown")), "--skill-id", str(state["skill"].get("id", "unknown")), "--skill-version", str(state["skill"].get("version", "unknown")), "--skill-sha256", str(state["skill"].get("sha256", "unknown")), "--session-id", session_id, "--work-package", work_package or str(state["session"]["task_id"]), "--json"]
     for value in changed_files or []:
