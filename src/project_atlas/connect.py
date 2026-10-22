@@ -44,6 +44,7 @@ from project_atlas.incremental_connect import (
 from project_atlas.indexes import build_indexes
 from project_atlas.ingestion import ingest
 from project_atlas.scaffold import ScaffoldError, create_scaffold
+from project_atlas.secrets import redact_text, scan_text
 from project_atlas.source_identity import (
     IdentityLockError,
     assert_project_uuid_one_owner,
@@ -319,8 +320,50 @@ def _read_project_marker(project_root: Path) -> tuple[Path, dict[str, Any]]:
     raise ConnectError("INVALID_PROJECT_MARKER: project marker not found")
 
 
+def _identity_without_secret(value: str | None) -> str | None:
+    """Return ``value`` only when it is ID-grammar-safe and not secret-shaped.
+
+    AS-SEC-SCAN-CONNECT-YAML-001: ``yaml.safe_load`` decodes quoted ``\\u``/``\\x``
+    after any raw-byte scan. An ID-pattern cloud-access-key (e.g. decoded
+    ``AKIA…``) must not become bind ``project_id``. Findings are metadata-only.
+    """
+    if not isinstance(value, str):
+        return None
+    token = value.strip()
+    if not token or not re.fullmatch(ID_PATTERN, token):
+        return None
+    if scan_text(token):
+        return None
+    return token
+
+
+def _safe_bound_project_id(value: object) -> str | None:
+    """Sanitize a candidate bind/receipt project id (AS-SEC-SCAN-CONNECT-YAML-001).
+
+    Ingest may still allocate ``projects/<decoded-secret>/`` (F5-B freeze;
+    do not remedi ``ingestion.py`` here). Connect must not copy that
+    directory name, or a prior receipt's ``bound_project_id``, into a
+    new bind or receipt when the value is secret-shaped.
+    """
+    if not isinstance(value, str):
+        return None
+    return _identity_without_secret(value)
+
+
+def _safe_project_ids(values: object) -> list[str]:
+    """Return ID-safe, non-secret project ids from a receipt/vault list."""
+    if not isinstance(values, list):
+        return []
+    return [
+        token
+        for item in values
+        for token in [_safe_bound_project_id(item)]
+        if token is not None
+    ]
+
+
 def _marker_project_id(project_root: Path) -> str | None:
-    """Return marker ``project.id`` when present and ID-grammar-safe."""
+    """Return marker ``project.id`` when present, ID-safe, and not secret-shaped."""
     try:
         _marker, raw = _read_project_marker(project_root)
     except ConnectError:
@@ -331,9 +374,7 @@ def _marker_project_id(project_root: Path) -> str | None:
         candidate = project.get("id")
     if not isinstance(candidate, str) or not candidate.strip():
         candidate = raw.get("project_id")
-    if isinstance(candidate, str) and re.fullmatch(ID_PATTERN, candidate.strip()):
-        return candidate.strip()
-    return None
+    return _identity_without_secret(candidate if isinstance(candidate, str) else None)
 
 
 def _assert_marker_uuid_ownership(project_root: Path, vault: Path) -> None:
@@ -353,8 +394,11 @@ def _assert_marker_uuid_ownership(project_root: Path, vault: Path) -> None:
         return
     if raw_uuid is None:
         return
+    safe_id = _identity_without_secret(project_id)
+    if safe_id is None:
+        return
     project_uuid = validate_project_uuid(str(raw_uuid))
-    assert_project_uuid_one_owner(vault, {project_id.strip(): project_uuid})
+    assert_project_uuid_one_owner(vault, {safe_id: project_uuid})
 
 
 def _write_bind(
@@ -365,14 +409,18 @@ def _write_bind(
     project_ids: list[str] | None = None,
     primary_project_id: str | None = None,
 ) -> Path:
-    projects = sorted({str(item) for item in (project_ids or []) if str(item).strip()})
+    projects = sorted(
+        {
+            token
+            for item in (project_ids or [])
+            for token in [_identity_without_secret(str(item))]
+            if token is not None
+        }
+    )
     primary: str | None = None
-    if (
-        isinstance(primary_project_id, str)
-        and primary_project_id.strip()
-        and primary_project_id.strip() in projects
-    ):
-        primary = primary_project_id.strip()
+    safe_primary = _identity_without_secret(primary_project_id)
+    if safe_primary is not None and safe_primary in projects:
+        primary = safe_primary
     elif len(projects) == 1:
         primary = projects[0]
     payload = {
@@ -464,7 +512,7 @@ def resolve_bound_project_id(
                     f"(candidates: {', '.join(ids)})"
                 )
     vault_path = explicit_vault or resolve_bound_vault(root)
-    projects = _list_vault_projects(vault_path)
+    projects = _safe_project_ids(_list_vault_projects(vault_path))
     if len(projects) == 1:
         return projects[0]
     if not projects:
@@ -478,11 +526,22 @@ def resolve_bound_project_id(
 
 
 def _write_receipt(vault: Path, report: dict[str, Any]) -> Path:
+    """Persist the connect receipt without credential-shaped identities.
+
+    AS-SEC-SCAN-CONNECT-YAML-001 / P1-RECEIPT-BOUND: ingest may still mint
+    ``projects/<decoded-secret>/`` (F5-B). The receipt must not copy that
+    name into ``bound_project_id`` or echo it in ``projects``. Defense in
+    depth redacts any remaining secret-shaped spans before the write.
+    """
+    report["bound_project_id"] = _safe_bound_project_id(report.get("bound_project_id"))
+    report["projects"] = _safe_project_ids(report.get("projects"))
     path = vault / RECEIPT_RELATIVE
-    _write_atomic(
-        path,
-        (json.dumps(report, indent=2, sort_keys=True) + "\n").encode("utf-8"),
-    )
+    serialized = json.dumps(report, indent=2, sort_keys=True) + "\n"
+    if scan_text(serialized):
+        serialized = redact_text(serialized)
+        if not serialized.endswith("\n"):
+            serialized += "\n"
+    _write_atomic(path, serialized.encode("utf-8"))
     return path
 
 
@@ -528,11 +587,9 @@ def _finish_no_change_reconnect(
     primary = _marker_project_id(project_root)
     vault_projects = list(report["projects"] or [])
     if primary is None and len(vault_projects) == 1:
-        primary = vault_projects[0]
+        primary = _safe_bound_project_id(vault_projects[0])
     if primary is None:
-        bound = prior_receipt.get("bound_project_id")
-        if isinstance(bound, str) and bound.strip():
-            primary = bound.strip()
+        primary = _safe_bound_project_id(prior_receipt.get("bound_project_id"))
     locks = acquire_project_identity_locks(vault_path, [str(item) for item in vault_projects])
     try:
         bind_path = _write_bind(
@@ -828,7 +885,7 @@ def connect_project(
     primary = _marker_project_id(project_root)
     vault_projects = list(report["projects"] or [])
     if primary is None and len(vault_projects) == 1:
-        primary = vault_projects[0]
+        primary = _safe_bound_project_id(vault_projects[0])
     try:
         bind_path = _write_bind(
             project_root,
