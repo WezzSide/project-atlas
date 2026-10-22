@@ -165,11 +165,20 @@ def load_assessable_claims(vault: Path, project_id: str) -> tuple[AssessableClai
         )
     found: list[AssessableClaim] = []
     for item in entries:
+        # AS-INTEL-MIXED-CORRUPT-CLAIMS-001: mixed valid+corrupt is not
+        # a healthy partial read. Core query/kdiff fail closed on an
+        # incomplete claim entry; silently skipping here reported
+        # OBSERVED / VALID_EMPTY over a damaged claims file.
         if not isinstance(item, dict):
-            continue
+            raise WebIntelligenceError(
+                f"intel-api-claims-malformed:{token}", HonestyClass.MALFORMED_INPUT
+            )
         claim = _claim_from_record(item, token)
-        if claim is not None:
-            found.append(claim)
+        if claim is None:
+            raise WebIntelligenceError(
+                f"intel-api-claims-malformed:{token}", HonestyClass.MALFORMED_INPUT
+            )
+        found.append(claim)
     return tuple(found)
 
 
@@ -186,22 +195,29 @@ def load_validity_windows(vault: Path, project_id: str) -> tuple[ValidityWindowI
                 f"intel-api-claims-unreadable:{token}", HonestyClass.MALFORMED_INPUT
             ) from exc
         entries = raw.get("claims") if isinstance(raw, dict) else None
-        if isinstance(entries, list):
-            for item in entries:
-                if not isinstance(item, dict):
-                    continue
-                claim_id = str(item.get("claim_id") or "").strip()
-                if not claim_id:
-                    continue
-                valid_from = _optional_bound(item.get("valid_from"))
-                valid_to = _optional_bound(item.get("valid_to"))
-                if valid_from or valid_to:
-                    by_claim[claim_id] = ValidityWindowInput(
-                        claim_id=claim_id,
-                        valid_from=valid_from,
-                        valid_to=valid_to,
-                        evidence_kind="claim-record",
-                    )
+        if not isinstance(entries, list):
+            raise WebIntelligenceError(
+                f"intel-api-claims-malformed:{token}", HonestyClass.MALFORMED_INPUT
+            )
+        for item in entries:
+            if not isinstance(item, dict):
+                raise WebIntelligenceError(
+                    f"intel-api-claims-malformed:{token}", HonestyClass.MALFORMED_INPUT
+                )
+            claim_id = str(item.get("claim_id") or "").strip()
+            if not claim_id:
+                raise WebIntelligenceError(
+                    f"intel-api-claims-malformed:{token}", HonestyClass.MALFORMED_INPUT
+                )
+            valid_from = _optional_bound(item.get("valid_from"))
+            valid_to = _optional_bound(item.get("valid_to"))
+            if valid_from or valid_to:
+                by_claim[claim_id] = ValidityWindowInput(
+                    claim_id=claim_id,
+                    valid_from=valid_from,
+                    valid_to=valid_to,
+                    evidence_kind="claim-record",
+                )
     catalog = vault / "generated" / "ops" / "bitemporal" / f"{token}-validity-catalog.json"
     if _existing_file(catalog):
         try:
@@ -217,10 +233,14 @@ def load_validity_windows(vault: Path, project_id: str) -> tuple[ValidityWindowI
             )
         for item in windows:
             if not isinstance(item, dict):
-                continue
+                raise WebIntelligenceError(
+                    f"intel-api-catalog-malformed:{token}", HonestyClass.MALFORMED_INPUT
+                )
             claim_id = str(item.get("claim_id") or "").strip()
             if not claim_id:
-                continue
+                raise WebIntelligenceError(
+                    f"intel-api-catalog-malformed:{token}", HonestyClass.MALFORMED_INPUT
+                )
             existing = by_claim.get(claim_id)
             by_claim[claim_id] = ValidityWindowInput(
                 claim_id=claim_id,
