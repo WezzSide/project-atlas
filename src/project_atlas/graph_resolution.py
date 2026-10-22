@@ -27,6 +27,7 @@ from project_atlas.graph_acceptance import (
     accept_graphify_artifacts,
 )
 from project_atlas.schema import validate_record
+from project_atlas.secrets import scan_text
 from project_atlas.source_identity import validate_project_uuid
 
 PACKAGE_ID = "AS-GRAPH-002"
@@ -379,6 +380,10 @@ def _graphify_node_id(node: Mapping[str, Any]) -> str:
             # ADV-G2-002: empty/`.`/`..` are unsafe identifiers.
             if node_id in {".", ".."}:
                 raise GraphResolutionError("malformed-accepted-node")
+            # AS-SEC-SCAN-GRAPH-NODEID-JSON-ESC-001: decoded JSON ``\\u``
+            # node ids must not become resolved filenames or entity ids.
+            if scan_text(node_id):
+                raise GraphResolutionError("secret-content")
             return node_id
     raise GraphResolutionError("malformed-accepted-node")
 
@@ -1026,7 +1031,9 @@ def load_accepted_nodes(
         for node in _load_nodes_from_artifact(path, artifact.family):
             try:
                 node_id = _graphify_node_id(node)
-            except GraphResolutionError:
+            except GraphResolutionError as exc:
+                if str(exc) == "secret-content":
+                    continue
                 raise GraphResolutionError("malformed-accepted-node") from None
             fingerprint = _identity_fingerprint(node)
             prior = seen.get(node_id)
