@@ -42,6 +42,7 @@ from project_atlas.intelligence.derived_state import StateContext
 from project_atlas.intelligence.query import SlotStatus
 from project_atlas.intelligence.timewin import IntelligenceTimeError, parse_instant
 from project_atlas.intelligence.types import AssessableClaim, ValidityWindowInput
+from project_atlas.secrets import scan_text
 
 PACKAGE_ID = "AS-2.0-API-001"
 CERTIFIED_QUERY_KINDS: frozenset[str] = frozenset(
@@ -568,6 +569,13 @@ def read_project_state(
         StateContext(as_of_valid_time=as_of, validity_windows=windows),
     )
     payload = state.model_dump(mode="json")
+    for bucket in ("known_facts", "unknown_facts", "stale_facts", "contested_facts"):
+        for fact in payload.get(bucket) or []:
+            if not isinstance(fact, dict):
+                continue
+            value = fact.get("value")
+            if isinstance(value, str) and scan_text(value):
+                fact["value"] = "[redacted: secret-shaped value]"
     present = claims_file_present(vault, token)
     if state.contested_facts:
         honesty = HonestyClass.CONTESTED.value

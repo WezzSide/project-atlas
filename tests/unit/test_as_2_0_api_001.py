@@ -511,3 +511,13 @@ def test_http_enametoolong_and_portfolio_scope(tmp_path: Path) -> None:
         assert after == before
     finally:
         server.shutdown()
+
+
+def test_project_state_redacts_secret_shaped_fact_values(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    secret = "aws_secret_access_key=AKIAAAAAAAAAAAAAAAAA"
+    _write_claims(vault, "harbor-api", [_row("claim-secret", secret)])
+    state = read_project_state(vault, "harbor-api")
+    dumped = json.dumps(state)
+    assert secret not in dumped
+    assert "AKIAAAAAAAAAAAAAAAAA" not in dumped
