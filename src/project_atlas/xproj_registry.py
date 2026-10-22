@@ -399,17 +399,18 @@ def register_global_entity(
         display_name=label,
         notes=notes,
         attributes=attributes,
-    ):
+    ) or scan_text(str(global_entity_id).strip()):
+        # AS-SEC-SCAN-XPROJ-ID-JSON-ESC-001: identity tokens are scanned
+        # too; never persist a decoded secret as global_entity_id.
         return QuarantineCandidate(
-            candidate_id=f"q-secret-{_safe_name(str(global_entity_id))}",
+            candidate_id="q-secret-identity",
             category="secret-finding",
             reason="secret-finding",
             inputs_considered={
                 "entity_class": entity_class or "",
                 "display_name": "[redacted-scan]",
-                "global_entity_id": str(global_entity_id).strip(),
+                "global_entity_id": "[redacted-scan]",
             },
-            global_entity_id=str(global_entity_id).strip(),
         )
 
     normalized = _normalize_class(entity_class)
@@ -482,6 +483,21 @@ def register_join(
 
     gid = _validate_global_id(global_entity_id)
     refs = _validate_evidence(evidence_refs)
+    if any(
+        scan_text(part)
+        for part in (pid, local, gid, *(ref.relative_path for ref in refs))
+    ):
+        # AS-SEC-SCAN-XPROJ-ID-JSON-ESC-001: join identity / evidence paths.
+        return QuarantineCandidate(
+            candidate_id="q-secret-join",
+            category="secret-finding",
+            reason="secret-finding",
+            inputs_considered={
+                "project_id": "[redacted-scan]",
+                "project_local_entity_id": "[redacted-scan]",
+                "global_entity_id": "[redacted-scan]",
+            },
+        )
 
     entities: dict[str, GlobalEntityRecord]
     if isinstance(registry, Mapping):

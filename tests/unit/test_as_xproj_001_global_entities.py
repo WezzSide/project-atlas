@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from project_atlas.schema import available_schemas, validate_record
+from project_atlas.secrets import scan_text
 from project_atlas.xproj_registry import (
     AUTHORITY_LEVEL,
     PACKAGE_ID,
@@ -428,3 +429,22 @@ def test_xp_fx_018_prior_vault_state_enables_join(tmp_path: Path) -> None:
     )
     assert second.joined_count == 1
     assert second.quarantined_count == 0
+
+
+def test_json_escape_global_entity_id_is_not_persisted(tmp_path: Path) -> None:
+    """AS-SEC-SCAN-XPROJ-ID-JSON-ESC-001: decoded JSON-\\u identity must not persist."""
+    token = "AKIAAAAAAAAAAAAAAAAA"
+    raw = (
+        '{"registrations":[{"kind":"entity","global_entity_id":'
+        '"\\u0041KIAAAAAAAAAAAAAAAAA","entity_class":"service","display_name":"payments"}]}'
+    )
+    assert scan_text(raw) == []
+    payload = json.loads(raw)
+    result = apply_registrations(payload["registrations"])
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    written = write_registry_outputs(result, vault=vault)
+    blob = "".join((vault / path).read_text(encoding="utf-8") for path in written)
+    assert token not in blob
+    assert token not in "".join(written)
+    assert any(item.category == "secret-finding" for item in result.quarantine)
