@@ -17,6 +17,7 @@ from typing import Any
 import yaml
 
 from project_atlas.schema import validate_record
+from project_atlas.secrets import scan_text
 from project_atlas.source_identity import validate_project_uuid
 
 GENERATOR_ID = "atlas-sync-001-scaffold"
@@ -146,6 +147,16 @@ def build_dry_run_registry(
         project = marker.get("project")
         if isinstance(project, dict) and isinstance(project.get("name"), str):
             display = project["name"]
+        # AS-SEC-SCAN-WSREG-YAML-001: yaml.safe_load decodes quoted \u/\x
+        # after any raw-byte scan; refuse decoded secret persist.
+        if isinstance(display, str) and scan_text(display):
+            quarantine.append(
+                {
+                    "path": root.as_posix(),
+                    "reason": "secret_findings",
+                }
+            )
+            continue
         projects.append(
             {
                 "project_uuid": project_uuid,
