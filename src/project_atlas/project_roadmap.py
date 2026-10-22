@@ -27,6 +27,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from project_atlas.secrets import scan_text
+
 PACKAGE_ID = "AS-PROJECT-ROADMAP-001"
 GENERATOR_ID = "atlas-project-roadmap-001"
 SCHEMA_ID = "atlas.project-roadmap.v1"
@@ -121,6 +123,26 @@ def _read_json(path: Path) -> dict[str, Any] | None:
     return raw if isinstance(raw, dict) else None
 
 
+def _redact_secret_scalars(value: Any) -> Any:
+    """Replace decoded secret-shaped strings before any lens persist.
+
+    AS-SEC-SCAN-ROADMAP-JSON-ESC-001: ``json.loads`` of fenced roadmap JSON
+    can decode ``\\u`` escapes that ``scan_text`` misses on the raw markdown.
+    Those decoded scalars must not reach ``ans-roadmap-*.json``.
+    """
+    if isinstance(value, str):
+        return "UNKNOWN" if scan_text(value) else value
+    if isinstance(value, dict):
+        out: dict[Any, Any] = {}
+        for key, child in value.items():
+            safe_key = "UNKNOWN" if isinstance(key, str) and scan_text(key) else key
+            out[safe_key] = _redact_secret_scalars(child)
+        return out
+    if isinstance(value, list):
+        return [_redact_secret_scalars(child) for child in value]
+    return value
+
+
 def _parse_fenced_record(markdown: str) -> dict[str, Any] | None:
     match = _JSON_FENCE_RE.search(markdown)
     if not match:
@@ -129,7 +151,10 @@ def _parse_fenced_record(markdown: str) -> dict[str, Any] | None:
         raw = json.loads(match.group(1))
     except json.JSONDecodeError:
         return None
-    return raw if isinstance(raw, dict) else None
+    if not isinstance(raw, dict):
+        return None
+    redacted = _redact_secret_scalars(raw)
+    return redacted if isinstance(redacted, dict) else None
 
 
 def _evidence_exists(vault: Path, ref: str) -> bool:
