@@ -79,6 +79,13 @@ def import_cursor_export(
             payload = json.loads(source)
         except json.JSONDecodeError as exc:
             raise Atlas3Error("CURSOR_EXPORT_INVALID", "export is not readable JSON") from exc
+    if isinstance(payload, dict) and project_id is not None:
+        explicit = payload.get("project_id")
+        if explicit is not None and str(explicit) != project_id:
+            raise Atlas3Error(
+                "PROJECT_MISMATCH",
+                f"export project_id {explicit!r} != requested {project_id!r}",
+            )
     turns = _turns_from_payload(payload)
     return normalize_turns(
         turns,
