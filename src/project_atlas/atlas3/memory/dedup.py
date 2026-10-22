@@ -33,9 +33,18 @@ def deduplicate_items(items: list[dict[str, Any]]) -> dict[str, Any]:
         raise Atlas3Error("DEDUP_INVALID", "items must be a list")
     groups: dict[str, list[dict[str, Any]]] = {}
     order: list[str] = []
+    scoped: set[str] = set()
     for item in items:
         if not isinstance(item, dict):
             raise Atlas3Error("DEDUP_INVALID", "item is not an object")
+        explicit = item.get("project_id")
+        if explicit is not None and str(explicit).strip():
+            scoped.add(str(explicit))
+        if len(scoped) > 1:
+            raise Atlas3Error(
+                "PROJECT_MISMATCH",
+                f"mixed-project dedup batch: {sorted(scoped)}",
+            )
         key = _normalize_text(str(item.get("text") or ""))
         if not key:
             key = str(item.get("source_content_hash") or id(item))
