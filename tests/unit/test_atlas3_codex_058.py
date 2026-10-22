@@ -163,6 +163,38 @@ def test_cli_help_is_ascii(capsys: pytest.CaptureFixture[str]) -> None:
     assert all(ord(char) < 128 for char in help_text)
 
 
+def test_foreign_export_project_fails_closed() -> None:
+    payload = json.dumps(
+        {
+            "project_id": "other-api",
+            "messages": [
+                {"role": "user", "content": "status?"},
+                {"role": "assistant", "content": "unknown"},
+            ],
+        }
+    )
+    with pytest.raises(Atlas3Error) as exc:
+        import_codex_export(payload, conversation_id="c1", project_id="harbor-api")
+    assert exc.value.code == "PROJECT_MISMATCH"
+
+
+def test_same_project_export_label_still_imports() -> None:
+    payload = json.dumps(
+        {
+            "project_id": "harbor-api",
+            "messages": [
+                {"role": "user", "content": "status?"},
+                {"role": "assistant", "content": "unknown"},
+            ],
+        }
+    )
+    envelopes = import_codex_export(
+        payload, conversation_id="c1", project_id="harbor-api"
+    )
+    assert len(envelopes) == 2
+    assert {row["project_id"] for row in envelopes} == {"harbor-api"}
+
+
 def test_module_does_not_touch_2x_bridges() -> None:
     root = Path(__file__).resolve().parents[2]
     source = (root / "src/project_atlas/atlas3/memory/codex.py").read_text(encoding="utf-8")
