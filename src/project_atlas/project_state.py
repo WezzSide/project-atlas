@@ -211,6 +211,11 @@ def build_state_lens(vault: Path, project_id: str) -> dict[str, Any]:
         sources_failed=sources_failed,
         status_file_present=status_present,
     )
+    # Unreadable pending is integrity-unknown, not a confirmed-empty queue.
+    # A declared lifecycle must not promote that hole to rollup=stable
+    # (AS-STATE-UNREADABLE-PENDING-ROLLUP-001). Keep attention/review.
+    if pending_unreadable and rollup == "stable":
+        rollup = "unknown"
 
     summary_bits = [
         f"lifecycle={lifecycle or 'unknown'}",
