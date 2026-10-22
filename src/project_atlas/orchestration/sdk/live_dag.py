@@ -637,9 +637,11 @@ class LiveDagController:
             fid = self._failure_id_for_current()
             if fid and fid in state.remediation_failure_ids:
                 return items
-            # Only candidate defects remediates; stale/infra do not.
+            # Only a *readable* CANDIDATE_DEFECT remediates; stale/infra do not.
+            # Unreadable or missing observer JSON is not a candidate defect
+            # (AS-ORCH-SDK-UNREADABLE-CI-OBSERVER-REMEDIATE-001).
             path = self.root / STATE_DIR_RELATIVE / "ci-observer.json"
-            failure_class = "CANDIDATE_DEFECT"
+            failure_class = "UNKNOWN_DIAGNOSTIC"
             if path.is_file():
                 try:
                     obs = CiObservation.model_validate_json(
@@ -647,7 +649,7 @@ class LiveDagController:
                     )
                     failure_class = obs.failure_class
                 except (OSError, ValueError):
-                    pass
+                    return items
             if failure_class != "CANDIDATE_DEFECT":
                 return items
             if fid:
