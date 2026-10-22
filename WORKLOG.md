@@ -5,6 +5,23 @@ exact commands run, exact results, deviations, and remaining risks.
 
 ---
 
+## AS-INTEL-MIXED-UNKNOWN-001 — mixed UNKNOWN is not observed
+
+Base: `b87b4a226f4aa8b2f669edf112aa3476454f754f` / tree `46d1989b026a2f15920ec5e1c78a106799bd1249`.
+
+`_status_from_facts` returned `observed` when an OBSERVED fact was mixed
+with an UNKNOWN sibling (`all(unknown)` was false). The same hole existed
+on `_status_from_assessments` (HIGH + UNKNOWN → `derived`).
+
+Fix: any UNKNOWN member keeps the aggregate UNKNOWN. Contested/stale
+still precede. Regression in
+`tests/unit/test_as_intel_mixed_unknown_status_001.py`.
+
+Does not merge, wake OPT, or treat intelligence query as authority.
+`MERGE_AUTHORIZATION = NOT_GRANTED`.
+
+---
+
 ## D-193 — Atlas 3.0 foundation convergence
 
 **Date:** 2026-08-25
