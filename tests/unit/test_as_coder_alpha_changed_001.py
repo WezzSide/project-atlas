@@ -9,6 +9,7 @@ from project_atlas.ask_atlas_live import ask_atlas_live
 from project_atlas.cli import EXIT_OK, main
 from project_atlas.connect import connect_project
 from project_atlas.project_changed import materialize_changed_lenses
+from project_atlas.secrets import scan_text
 from project_atlas.web_api.knowledge import list_knowledge_answers
 
 
@@ -126,3 +127,42 @@ def test_cli_changed_reads_existing_inventory(tmp_path: Path) -> None:
     report = materialize_changed_lenses(vault, project_ids=[project_id])
     assert report["package"] == "AS-CODER-ALPHA-CHANGED-001"
     assert "generated_at" not in report
+
+
+def test_json_unicode_escape_inventory_path_is_not_persisted(tmp_path: Path) -> None:
+    """AS-SEC-SCAN-CHANGED-PATH-JSON-ESC-001: decoded inventory path must not persist."""
+    token = "AKIAAAAAAAAAAAAAAAAA"
+    sha = "a" * 64
+    vault = tmp_path / "vault"
+    (vault / "projects" / "harbor-api").mkdir(parents=True)
+    ops = vault / "generated" / "ops"
+    ops.mkdir(parents=True)
+    prev = {
+        "schema_version": 1,
+        "schema": "atlas.coder-alpha.connect-inventory.v1",
+        "package": "AS-CODER-ALPHA-CHANGED-001",
+        "sources": [],
+        "by_path": {},
+        "generated": {"by": "atlas-coder-alpha-changed-001"},
+    }
+    (ops / "connect-inventory.prev.json").write_text(
+        json.dumps(prev), encoding="utf-8"
+    )
+    raw = (
+        '{"schema_version":1,"schema":"atlas.coder-alpha.connect-inventory.v1",'
+        '"package":"AS-CODER-ALPHA-CHANGED-001","sources":[{"path":"docs/'
+        '\\u0041KIAAAAAAAAAAAAAAAAA.md","sha256":"'
+        + sha
+        + '","project_id":"harbor-api"}],"by_path":{"docs/'
+        '\\u0041KIAAAAAAAAAAAAAAAAA.md":"'
+        + sha
+        + '"},"generated":{"by":"x"}}'
+    )
+    (ops / "connect-inventory.json").write_text(raw, encoding="utf-8")
+    assert scan_text(raw) == []
+    materialize_changed_lenses(vault, project_ids=["harbor-api"])
+    answer = (vault / "generated" / "answers" / "ans-changed-harbor-api.json").read_text(
+        encoding="utf-8"
+    )
+    assert token not in answer
+    assert scan_text(answer) == []
