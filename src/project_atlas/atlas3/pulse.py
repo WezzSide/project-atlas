@@ -15,6 +15,7 @@ from project_atlas.atlas3.contracts import (
     GENERATOR_ID,
     OPS_RELATIVE,
     TRUTH_BOUNDARY,
+    Atlas3Error,
     honesty_block,
     load_answer,
     require_project,
@@ -44,13 +45,40 @@ def _unknown(reason: str) -> dict[str, Any]:
     return {"status": "UNKNOWN", "reason": reason, "items": []}
 
 
-def _from_answer(answer: dict[str, Any] | None, *, missing: str) -> dict[str, Any]:
+def _bind_answer(
+    answer: dict[str, Any] | None,
+    *,
+    project_id: str,
+    label: str,
+) -> dict[str, Any] | None:
+    """Unlabeled answers stay allowed. Explicit foreign project_id fails closed."""
     if answer is None:
+        return None
+    if not isinstance(answer, dict):
+        raise Atlas3Error("PULSE_ANSWER_CORRUPT", f"{label} must be an object")
+    explicit = answer.get("project_id")
+    if explicit is not None and str(explicit) != project_id:
+        raise Atlas3Error(
+            "PROJECT_MISMATCH",
+            f"{label} project_id {explicit!r} != requested {project_id!r}",
+        )
+    return answer
+
+
+def _from_answer(
+    answer: dict[str, Any] | None,
+    *,
+    missing: str,
+    project_id: str,
+    label: str,
+) -> dict[str, Any]:
+    bound = _bind_answer(answer, project_id=project_id, label=label)
+    if bound is None:
         return _unknown(missing)
-    status = str(answer.get("status") or answer.get("disposition") or "derived")
+    status = str(bound.get("status") or bound.get("disposition") or "derived")
     return {
         "status": status if status else "derived",
-        "items": [answer],
+        "items": [bound],
         "authority": "derived",
     }
 
@@ -58,12 +86,36 @@ def _from_answer(answer: dict[str, Any] | None, *, missing: str) -> dict[str, An
 def compile_pulse(vault: Any, project_id: str) -> dict[str, Any]:
     root = require_vault(vault)
     pid = require_project(root, project_id)
-    changed = load_answer(root, f"ans-changed-{pid}")
-    unknown = load_answer(root, f"ans-unknown-{pid}")
-    state = load_answer(root, f"ans-state-{pid}")
-    decisions = load_answer(root, f"ans-decisions-{pid}")
-    nxt = load_answer(root, f"ans-next-{pid}")
-    attention = load_answer(root, f"ans-attention-{pid}")
+    changed = _bind_answer(
+        load_answer(root, f"ans-changed-{pid}"),
+        project_id=pid,
+        label="ans-changed",
+    )
+    unknown = _bind_answer(
+        load_answer(root, f"ans-unknown-{pid}"),
+        project_id=pid,
+        label="ans-unknown",
+    )
+    state = _bind_answer(
+        load_answer(root, f"ans-state-{pid}"),
+        project_id=pid,
+        label="ans-state",
+    )
+    decisions = _bind_answer(
+        load_answer(root, f"ans-decisions-{pid}"),
+        project_id=pid,
+        label="ans-decisions",
+    )
+    nxt = _bind_answer(
+        load_answer(root, f"ans-next-{pid}"),
+        project_id=pid,
+        label="ans-next",
+    )
+    attention = _bind_answer(
+        load_answer(root, f"ans-attention-{pid}"),
+        project_id=pid,
+        label="ans-attention",
+    )
     events = list_events(root, pid)
     failures = [
         item
@@ -82,7 +134,12 @@ def compile_pulse(vault: Any, project_id: str) -> dict[str, Any]:
         if (item.get("payload") or {}).get("freshness") == "STALE"
         or item.get("event_type") == "CONTEXT_INVALIDATED"
     ]
-    conflict_block = _from_answer(unknown, missing="unknown/conflict lens not materialized")
+    conflict_block = _from_answer(
+        unknown,
+        missing="unknown/conflict lens not materialized",
+        project_id=pid,
+        label="ans-unknown",
+    )
     failed_block = (
         {"status": "derived", "items": failures, "authority": "derived"}
         if failures
@@ -101,10 +158,17 @@ def compile_pulse(vault: Any, project_id: str) -> dict[str, Any]:
     )
 
     questions = {
-        "what_changed": _from_answer(changed, missing="changed lens not materialized"),
+        "what_changed": _from_answer(
+            changed,
+            missing="changed lens not materialized",
+            project_id=pid,
+            label="ans-changed",
+        ),
         "what_matters": _from_answer(
             attention or nxt,
             missing="attention/next lens not materialized",
+            project_id=pid,
+            label="ans-matters",
         ),
         "what_became_stale": (
             {"status": "derived", "items": stale_events, "authority": "derived"}
@@ -116,12 +180,19 @@ def compile_pulse(vault: Any, project_id: str) -> dict[str, Any]:
         "what_was_decided": (
             {"status": "derived", "items": decisions_ev, "authority": "derived"}
             if decisions_ev
-            else _from_answer(decisions, missing="decisions lens not materialized")
+            else _from_answer(
+                decisions,
+                missing="decisions lens not materialized",
+                project_id=pid,
+                label="ans-decisions",
+            )
         ),
         "what_requires_attention": attention_block,
         "what_should_i_look_at_next": _from_answer(
             nxt,
             missing="next lens not materialized",
+            project_id=pid,
+            label="ans-next",
         ),
     }
 
