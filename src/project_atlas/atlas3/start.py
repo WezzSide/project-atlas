@@ -105,8 +105,14 @@ def compile_start(
         truth_text = "UNKNOWN — stale evidence refused as current truth"
         truth_status = "UNKNOWN"
     elif state is not None:
-        truth_text = str(state.get("summary") or state.get("title") or "state lens present")
-        truth_status = "derived"
+        state_status = str(state.get("status") or "").upper()
+        summary = state.get("summary") or state.get("title")
+        if state_status == "UNKNOWN" or not summary:
+            truth_text = "UNKNOWN — state lens has no verified summary"
+            truth_status = "UNKNOWN"
+        else:
+            truth_text = str(summary)
+            truth_status = "derived"
     sections["current_verified_truth"] = take(truth_status, truth_text)
 
     mapping = (
