@@ -5,6 +5,24 @@ exact commands run, exact results, deviations, and remaining risks.
 
 ---
 
+## AS-AUTHZ-RECEIPT-ID-PATH-001 — confine authz audit receipt_id
+
+Base: `b87b4a226f4aa8b2f669edf112aa3476454f754f` / tree `46d1989b026a2f15920ec5e1c78a106799bd1249`.
+
+`write_authz_audit_receipt` interpolated unsanitized `receipt_id` into
+`generated/ops/authz/{receipt_id}.json`. Default operator was enough.
+`receipt_id=../../../projects/harbor-api/project` wrote Layer B
+`projects/harbor-api/project.json`; the ops/authz directory stayed empty.
+
+Fix: apply the shared 2.1 `_ID_RE` (`^[a-z][a-z0-9-]{0,63}$`) before the
+path is built. Regression in
+`tests/unit/test_as_authz_receipt_id_path_001.py`.
+
+Does not merge, wake OPT, or treat the audit receipt as authority.
+`MERGE_AUTHORIZATION = NOT_GRANTED`.
+
+---
+
 ## D-193 — Atlas 3.0 foundation convergence
 
 **Date:** 2026-08-25
