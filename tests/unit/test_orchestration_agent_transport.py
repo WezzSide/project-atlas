@@ -21,6 +21,7 @@ from project_atlas.orchestration.agent_transport import (
     frame_result_payload,
     parse_structured_cursor_output,
     resolve_cursor_transport,
+    resolve_windows_comspec,
     sanitize_inherited_env,
 )
 from project_atlas.schema import validate_record
@@ -29,14 +30,12 @@ from project_atlas.schema import validate_record
 def test_windows_cmd_wrapper_uses_trusted_comspec(tmp_path) -> None:
     launcher = tmp_path / "agent.CMD"
     launcher.write_text("@echo off\n", encoding="utf-8")
-    cmd = tmp_path / "System32" / "cmd.exe"
-    cmd.parent.mkdir(parents=True)
-    cmd.write_text("", encoding="utf-8")
+    trusted = r"C:\Windows\System32\cmd.exe"
 
     resolved = resolve_cursor_transport(
         str(launcher),
         os_name="nt",
-        exists=lambda path: path in {str(launcher), str(cmd)},
+        exists=lambda path: path in {str(launcher), trusted},
         which=lambda _name: None,
     )
     assert resolved.logical_name == "agent"
@@ -47,10 +46,10 @@ def test_windows_cmd_wrapper_uses_trusted_comspec(tmp_path) -> None:
         "trusted prompt body",
         cwd=tmp_path,
         os_name="nt",
-        comspec=str(cmd),
-        exists=lambda path: path in {str(launcher), str(cmd)},
+        comspec=trusted,
+        exists=lambda path: path in {str(launcher), trusted},
     )
-    assert plan.argv[0] == str(cmd.resolve())
+    assert plan.argv[0] == trusted
     assert plan.argv[1:3] == ("/d", "/c")
     assert plan.argv[3] == resolved.path
     assert plan.argv[4:] == READ_ONLY_CURSOR_FLAGS
@@ -60,6 +59,19 @@ def test_windows_cmd_wrapper_uses_trusted_comspec(tmp_path) -> None:
     assert plan.stdin_payload == "trusted prompt body"
     assert plan.uses_force is False
     assert not any(" " in token and "--print" in token for token in plan.argv)
+
+
+def test_windows_comspec_rejects_name_only_system32(tmp_path: Path) -> None:
+    """AS-ORCH-COMSPEC-F1: any .../System32/cmd.exe is not trusted cmd.exe."""
+    fake = tmp_path / "System32" / "cmd.exe"
+    fake.parent.mkdir(parents=True)
+    fake.write_text("@echo MALICIOUS\n", encoding="utf-8")
+    with pytest.raises(TransportError) as exc:
+        resolve_windows_comspec(
+            environ={"ComSpec": str(fake)},
+            exists=lambda path: Path(path).is_file(),
+        )
+    assert exc.value.code == "COMSPEC_REJECTED"
 
 
 @pytest.mark.skipif(os.name != "nt", reason="authentic Windows CreateProcess for .cmd wrapper")
