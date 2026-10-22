@@ -12,6 +12,7 @@ from typing import Any, Final
 from pydantic import BaseModel, ConfigDict
 
 from project_atlas.pilot_auth_prep import MARKER, is_fixture_or_temp_marker
+from project_atlas.secrets import scan_text
 
 PACKAGE_ID: Final[str] = "AS-D148-AUTHENTIC-ESTATE-001"
 _CREDENTIAL_REL = Path(".atlas/orchestration/sdk-runtime/d148-authentic-estate-credential.json")
@@ -172,6 +173,24 @@ def d148_evidence_applies(
     return bool(current_fp) and recorded_fp == current_fp
 
 
+def _identity_without_secret(value: str | None) -> str | None:
+    """Return ``value`` only when it is non-empty and not secret-shaped.
+
+    AS-SEC-SCAN-ESTATE-YAML-001: ``yaml.safe_load`` decodes quoted ``\\u``/``\\x``
+    after any raw-byte scan. Decoded bearer/token identities must not become
+    ``project_id`` / ``project_uuid`` or be persisted into the D-148 credential.
+    Findings are metadata-only; matched content is never returned.
+    """
+    if not isinstance(value, str):
+        return None
+    token = value.strip()
+    if not token:
+        return None
+    if scan_text(token):
+        return None
+    return token
+
+
 def run_estate_preflight(estate_root: Path) -> EstatePreflight:
     root = estate_root.resolve()
     marker = root / MARKER
@@ -188,16 +207,24 @@ def run_estate_preflight(estate_root: Path) -> EstatePreflight:
             data = yaml.safe_load(marker.read_text(encoding="utf-8"))
             if isinstance(data, dict):
                 proj = data.get("project")
+                raw_id = ""
                 if isinstance(proj, dict):
                     raw_id = str(proj.get("id") or "").strip()
-                    if raw_id:
-                        project_id = raw_id
-                        marker_parse_ok = True
+                project_id = _identity_without_secret(raw_id)
                 raw_uuid = str(data.get("project_uuid") or "").strip()
-                if raw_uuid:
-                    project_uuid = raw_uuid
+                project_uuid = _identity_without_secret(raw_uuid)
+                # Secret-shaped decoded identities fail closed: do not treat the
+                # marker as authentic and do not keep the decoded secret.
+                if (raw_id and project_id is None) or (raw_uuid and project_uuid is None):
+                    marker_parse_ok = False
+                    project_id = None
+                    project_uuid = None
+                elif project_id:
+                    marker_parse_ok = True
         except Exception:
             marker_parse_ok = False
+            project_id = None
+            project_uuid = None
     authentic_marker = (
         marker.is_file()
         and marker_parse_ok
@@ -233,7 +260,18 @@ def run_estate_preflight(estate_root: Path) -> EstatePreflight:
 def write_estate_credential(repo_root: Path, estate_root: Path, preflight: EstatePreflight) -> Path:
     path = _rt(repo_root) / "d148-authentic-estate-credential.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    satisfied = bool(preflight.preflight_pass)
+    safe_id = _identity_without_secret(preflight.project_id)
+    safe_uuid = _identity_without_secret(preflight.project_uuid)
+    secret_blocked = (preflight.project_id is not None and safe_id is None) or (
+        preflight.project_uuid is not None and safe_uuid is None
+    )
+    satisfied = bool(preflight.preflight_pass) and not secret_blocked
+    preflight_payload = preflight.model_dump()
+    preflight_payload["project_id"] = safe_id
+    preflight_payload["project_uuid"] = safe_uuid
+    if secret_blocked:
+        preflight_payload["preflight_pass"] = False
+        preflight_payload["root_is_authentic"] = False
     payload = {
         "directive": "D-148",
         "AUTHENTIC_ESTATE_ROOT": str(estate_root.resolve()),
@@ -242,12 +280,12 @@ def write_estate_credential(repo_root: Path, estate_root: Path, preflight: Estat
         # Valid estate path satisfies AUTHENTIC_ESTATE_ROOT only — not owner authority.
         "AUTHENTIC_ESTATE_CREDENTIAL_SATISFIED": satisfied,
         "OWNER_CAPABILITY_GRANTED": False,
-        "preflight": preflight.model_dump(),
-        "preflight_pass": preflight.preflight_pass,
+        "preflight": preflight_payload,
+        "preflight_pass": satisfied,
         "estate_fingerprint": preflight.estate_fingerprint,
         "marker_fingerprint": marker_fingerprint(estate_root),
-        "project_id": preflight.project_id,
-        "project_uuid": preflight.project_uuid,
+        "project_id": safe_id,
+        "project_uuid": safe_uuid,
         "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "merge_authorized": False,
     }
