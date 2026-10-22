@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .safe_project import confined_file, require_project_id
+
 
 @dataclass
 class IngestionValidationReport:
@@ -23,10 +25,11 @@ class IngestionValidationReport:
 
 
 def validate(vault_root: Path, project_id: str) -> IngestionValidationReport:
-    report = IngestionValidationReport(project_id)
+    pid = require_project_id(project_id)
+    report = IngestionValidationReport(pid)
     base = vault_root / "ingestion"
-    inventory_path = base / "inventory" / f"{project_id}.json"
-    state_path = base / "state" / f"{project_id}.json"
+    inventory_path = confined_file(base / "inventory", pid, "{project_id}.json")
+    state_path = confined_file(base / "state", pid, "{project_id}.json")
     if not inventory_path.is_file():
         report.errors.append(f"missing inventory: {inventory_path}")
         return report
@@ -38,15 +41,15 @@ def validate(vault_root: Path, project_id: str) -> IngestionValidationReport:
     state = json.loads(state_path.read_text(encoding="utf-8"))
     for item in inventory.get("documents", []):
         report.documents_checked += 1
-        if not item.get("document_id", "").startswith(f"{project_id}:"):
+        if not item.get("document_id", "").startswith(f"{pid}:"):
             report.errors.append(f"invalid document id: {item.get('document_id')}")
         if item.get("processing", {}).get("state") not in {"discovered", "unsupported", "sensitive", "failed"}:
             report.warnings.append(f"unexpected inventory state: {item.get('document_id')}")
-    if state.get("project_id") != project_id:
+    if state.get("project_id") != pid:
         report.errors.append("state project_id mismatch")
-    if not (vault_root / "projects" / project_id / "documentation-map.md").is_file():
+    if not confined_file(vault_root / "projects" / pid, pid, "documentation-map.md").is_file():
         report.errors.append("missing documentation-map.md projection")
-    receipts = sorted((base / "receipts").glob(f"{project_id}-*.json"))
+    receipts = sorted((base / "receipts").glob(f"{pid}-*.json"))
     if not receipts:
         report.errors.append("missing ingestion receipt")
     return report
