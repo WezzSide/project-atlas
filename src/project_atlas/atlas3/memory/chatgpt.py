@@ -71,6 +71,13 @@ def import_chatgpt_export(
         except json.JSONDecodeError as exc:
             raise Atlas3Error("CHATGPT_EXPORT_INVALID", "export is not readable JSON") from exc
         _preflight_json_payload(payload)
+        if isinstance(payload, dict) and project_id is not None:
+            explicit = payload.get("project_id")
+            if explicit is not None and str(explicit) != project_id:
+                raise Atlas3Error(
+                    "PROJECT_MISMATCH",
+                    f"export project_id {explicit!r} != requested {project_id!r}",
+                )
     try:
         turns = parse_chat_export(text)
     except OpenAIImportFixtureError as exc:
