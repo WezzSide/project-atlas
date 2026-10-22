@@ -66,6 +66,47 @@ def test_declared_caused_by_edges(tmp_path: Path) -> None:
     assert report["honesty"]["graph_is_authority"] is False
 
 
+def test_foreign_edge_project_fails_closed(tmp_path: Path) -> None:
+    vault = _vault(tmp_path)
+    _write_declared(
+        vault,
+        {
+            "project_id": "harbor-api",
+            "edges": [
+                {
+                    "from_id": "outage-1",
+                    "to_id": "deploy-1",
+                    "evidence_refs": ["doc:incident.md#cause"],
+                    "project_id": "other-api",
+                }
+            ],
+        },
+    )
+    with pytest.raises(Atlas3Error) as exc:
+        compile_causal_graph(vault, "harbor-api")
+    assert exc.value.code == "CROSS_PROJECT"
+
+
+def test_unlabeled_edge_still_compiles(tmp_path: Path) -> None:
+    vault = _vault(tmp_path)
+    _write_declared(
+        vault,
+        {
+            "project_id": "harbor-api",
+            "edges": [
+                {
+                    "from_id": "outage-1",
+                    "to_id": "deploy-1",
+                    "evidence_refs": ["doc:incident.md#cause"],
+                }
+            ],
+        },
+    )
+    report = compile_causal_graph(vault, "harbor-api")
+    assert report["status"] == "derived"
+    assert report["edges"][0]["project_id"] == "harbor-api"
+
+
 def test_cross_project_corrupt_and_authority_fail_closed(tmp_path: Path) -> None:
     vault = _vault(tmp_path)
     _write_declared(vault, {"project_id": "foreign"})
