@@ -129,13 +129,43 @@ def _source_authority_rank(path: str) -> tuple[int, int, str]:
     return (9, depth, posix)
 
 
-def _readme_blurb(vault: Path, semantic: dict[str, Any] | None) -> tuple[str | None, list[str]]:
+def _source_id_owners(vault: Path) -> dict[str, str]:
+    """Map connect-manifest source_id → likely_project when declared."""
+    path = vault / "generated" / "ops" / "connect-manifest.json"
+    if not path.is_file():
+        return {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    rows = raw.get("sources")
+    if not isinstance(rows, list):
+        return {}
+    owners: dict[str, str] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        source_id = str(row.get("source_id") or "").strip()
+        likely = str(row.get("likely_project") or "").strip()
+        if source_id and likely:
+            owners[source_id] = likely
+    return owners
+
+
+def _readme_blurb(
+    vault: Path,
+    semantic: dict[str, Any] | None,
+    project_id: str,
+) -> tuple[str | None, list[str]]:
     inspected: list[str] = []
     if not isinstance(semantic, dict):
         return None, inspected
     sources = semantic.get("sources")
     if not isinstance(sources, list):
         return None, inspected
+    owners = _source_id_owners(vault)
     candidates: list[tuple[tuple[int, int, str], str, str]] = []
     for row in sources:
         if not isinstance(row, dict):
@@ -143,6 +173,9 @@ def _readme_blurb(vault: Path, semantic: dict[str, Any] | None) -> tuple[str | N
         path = str(row.get("path") or "")
         source_id = str(row.get("source_id") or "")
         if not path or not source_id:
+            continue
+        owner = owners.get(source_id)
+        if owner and owner != project_id:
             continue
         rank = _source_authority_rank(path)
         if rank[0] >= 9:
@@ -226,7 +259,7 @@ def build_overview_lens(vault: Path, project_id: str) -> dict[str, Any]:
         raise OverviewError(f"unreadable project note: {project_note}: {exc}") from exc
 
     semantic = _parse_semantic_record(note_text)
-    blurb, readme_inspected = _readme_blurb(vault, semantic)
+    blurb, readme_inspected = _readme_blurb(vault, semantic, project_id)
     inspected.extend(readme_inspected)
     coverage = _coverage_summary(semantic)
     # D-044 A3: coverage PRESENT must not contradict architecture lens UNKNOWN.
