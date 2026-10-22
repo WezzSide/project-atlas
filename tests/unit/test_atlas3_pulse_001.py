@@ -47,6 +47,27 @@ def test_pulse_composes_changed_and_failures(tmp_path: Path) -> None:
     assert report["questions"]["what_requires_attention"]["items"]
 
 
+def test_pulse_unknown_lens_does_not_become_derived_attention(tmp_path: Path) -> None:
+    vault = _vault(tmp_path)
+    answers = vault / "generated" / "answers"
+    answers.mkdir(parents=True)
+    (answers / "ans-unknown-harbor-api.json").write_text(
+        json.dumps(
+            {
+                "status": "UNKNOWN",
+                "summary": None,
+                "project_id": "harbor-api",
+                "items": [],
+                "authority": "none",
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    report = compile_pulse(vault, "harbor-api")
+    assert report["questions"]["what_requires_attention"]["status"] == "UNKNOWN"
+
+
 def test_pulse_stale_is_not_changed_and_attention_unknown(tmp_path: Path) -> None:
     vault = _vault(tmp_path)
     report = compile_pulse(vault, "harbor-api")
