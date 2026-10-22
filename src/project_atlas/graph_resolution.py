@@ -27,6 +27,7 @@ from project_atlas.graph_acceptance import (
     accept_graphify_artifacts,
 )
 from project_atlas.schema import validate_record
+from project_atlas.secrets import scan_text
 from project_atlas.source_identity import validate_project_uuid
 
 PACKAGE_ID = "AS-GRAPH-002"
@@ -1140,6 +1141,10 @@ def write_resolution_outputs(
     # Sanitize project token for path segment (fail closed on traversal).
     if not project or "/" in project or "\\" in project or project in {".", ".."}:
         raise GraphResolutionError("project-id-unsafe-for-path")
+    # AS-SEC-SCAN-GRAPH-YAML-PROJECTID-001: decoded YAML marker ids must
+    # not land under generated/graph/resolved/<project>/.
+    if scan_text(project):
+        raise GraphResolutionError("secret-content")
 
     for node in result.nodes:
         safe_name = re.sub(r"[^A-Za-z0-9._-]+", "-", node.graphify_node_id).strip("-") or "node"
