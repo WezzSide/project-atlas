@@ -166,9 +166,10 @@ def _load_source_metadata(vault_root: Path, project_id: str) -> dict[str, _Sourc
     selected_uuid = next(iter(requested_uuids), None)
     if selected_uuid is None and project_id in registry_uuids:
         selected_uuid = project_id
-    if selected_uuid is None and len(registry_uuids) == 1:
-        selected_uuid = next(iter(registry_uuids))
-    if selected_uuid is None and len(registry_uuids) > 1:
+    if selected_uuid is None and registry_uuids:
+        # Do not adopt the sole remaining registry UUID when --project
+        # matches no manifest row. That writes aliases for a foreign
+        # project identity under the requested id.
         raise ValueError(
             f"cannot resolve project identity from source evidence: {project_id}"
         )

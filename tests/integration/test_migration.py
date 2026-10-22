@@ -261,6 +261,54 @@ def test_projects_have_isolated_alias_bundles_and_history(tmp_path: Path) -> Non
     }
 
 
+def test_migrate_v2_does_not_adopt_sole_foreign_uuid(tmp_path: Path) -> None:
+    """AS-CLAIM-V2-UUID-FALLBACK-001: --project must not inherit another UUID."""
+    vault = tmp_path / "vault"
+    (vault / "state").mkdir(parents=True)
+    imported = vault / "sources" / "imported-documents"
+    imported.mkdir(parents=True)
+    (vault / "sources" / "manifests").mkdir(parents=True)
+    (vault / "generated" / "reports").mkdir(parents=True)
+    (imported / "s1.md").write_text(
+        "# Architecture\n\nThe datastore is PostgreSQL 15.\n",
+        encoding="utf-8",
+    )
+    _run_git(["init"], vault)
+    _run_git(["config", "user.name", "Test"], vault)
+    _run_git(["config", "user.email", "test@test.com"], vault)
+    _run_git(["add", "sources"], vault)
+    _run_git(["commit", "-m", "src"], vault)
+    foreign_uuid = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    (vault / "state" / "sources.json").write_text(
+        json.dumps(
+            {
+                "sources": [
+                    {
+                        "source_id": "s1",
+                        "canonical_project_id": foreign_uuid,
+                        "source_lineage_id": "lin-1",
+                        "current_path": "sources/imported-documents/s1.md",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (vault / "sources" / "manifests" / "source-manifest.json").write_text(
+        json.dumps(
+            {"sources": [{"source_id": "s1", "likely_project": "other-project"}]}
+        ),
+        encoding="utf-8",
+    )
+    (vault / "generated" / "reports" / "ingestion-report.json").write_text(
+        json.dumps({"classifications": {"s1": {"type": "architecture"}}}),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="cannot resolve project identity"):
+        migrate_v2(vault, "requested-project")
+    assert not (vault / "state" / "claim-alias-maps" / "requested-project").exists()
+
+
 def test_historical_recognized_claim_without_locator_fails_closed(tmp_path: Path) -> None:
     vault = tmp_path / "vault"
     (vault / "sources").mkdir(parents=True)
