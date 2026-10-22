@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import stat
 from pathlib import Path
 from typing import Any, Literal
 
@@ -83,6 +85,54 @@ def _confined(root: Path, relative: str) -> Path:
     return candidate
 
 
+def _component_entry_kind(mode: int) -> str:
+    """Human-readable file type for a governed non-regular refusal."""
+    if stat.S_ISDIR(mode):
+        return "directory"
+    if stat.S_ISFIFO(mode):
+        return "fifo"
+    if stat.S_ISSOCK(mode):
+        return "socket"
+    if stat.S_ISCHR(mode):
+        return "character-device"
+    if stat.S_ISBLK(mode):
+        return "block-device"
+    if stat.S_ISLNK(mode):
+        return "symlink"
+    return "non-regular"
+
+
+def _reject_nonregular_components(package: Path) -> None:
+    """Refuse components that are not regular files before they are opened.
+
+    #713: a FIFO under a required component name hung ``_sha256``
+    indefinitely; a directory or socket raised a raw ``OSError`` that
+    escaped ``inspect_event_package`` (which only catches
+    ``PackageValidationError`` / ``ValueError``). Only regular files are
+    evidence (CODEX-SEC-001 / SEC-SCAN-A-014). Detection uses ``lstat``
+    so the answer is about the directory entry, not a followable target.
+
+    This predicate does not close hardlinked regular files (#712) and
+    does not own symlink-component policy (#694). Symlinks are skipped
+    here so this package does not duplicate or pre-empt #694.
+    """
+    for name in sorted(EVENT_PACKAGE_FILES):
+        path = package / name
+        try:
+            mode = os.lstat(path).st_mode
+        except OSError as exc:
+            raise PackageValidationError(
+                f"event package component is unreadable: {name}"
+            ) from exc
+        if stat.S_ISLNK(mode):
+            continue
+        if not stat.S_ISREG(mode):
+            kind = _component_entry_kind(mode)
+            raise PackageValidationError(
+                f"event package component is not a regular file: {name} ({kind})"
+            )
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -105,6 +155,7 @@ def _raw_inventory(root: Path, package_path: str) -> tuple[Path, dict[str, str]]
         missing = sorted(EVENT_PACKAGE_FILES - names)
         extra = sorted(names - EVENT_PACKAGE_FILES)
         raise PackageValidationError(f"package structure invalid; missing={missing}, extra={extra}")
+    _reject_nonregular_components(package)
     hashes = {name: _sha256(package / name) for name in sorted(EVENT_PACKAGE_FILES)}
     return package, hashes
 
