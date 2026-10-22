@@ -5,6 +5,24 @@ exact commands run, exact results, deviations, and remaining risks.
 
 ---
 
+## AT3-014-F2 — append-path event_id collision is not replay
+
+Base: `b87b4a226f4aa8b2f669edf112aa3476454f754f` / tree `46d1989b026a2f15920ec5e1c78a106799bd1249`.
+
+Read-path `query_events` already raises `EVENT_ID_COLLISION` when the same
+`event_id` appears with an altered `content_hash` (P1-B). `append_event`
+treated any matching `event_id` as `idempotency=replay` without comparing
+hashes, so a same-id altered payload was silently dropped and reported
+healthy.
+
+Fix: replay only when `content_hash` matches; otherwise raise
+`EVENT_ID_COLLISION`. Regression in `tests/unit/test_atlas3_ledger_001.py`.
+
+Does not merge, wake OPT, or treat the ledger as Truth Core.
+`MERGE_AUTHORIZATION = NOT_GRANTED`.
+
+---
+
 ## D-193 — Atlas 3.0 foundation convergence
 
 **Date:** 2026-08-25
