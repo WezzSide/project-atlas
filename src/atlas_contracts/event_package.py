@@ -105,7 +105,19 @@ def _raw_inventory(root: Path, package_path: str) -> tuple[Path, dict[str, str]]
         missing = sorted(EVENT_PACKAGE_FILES - names)
         extra = sorted(names - EVENT_PACKAGE_FILES)
         raise PackageValidationError(f"package structure invalid; missing={missing}, extra={extra}")
-    hashes = {name: _sha256(package / name) for name in sorted(EVENT_PACKAGE_FILES)}
+    hashes: dict[str, str] = {}
+    package_real = package.resolve()
+    for name in sorted(EVENT_PACKAGE_FILES):
+        member = package / name
+        if member.is_symlink():
+            raise PackageValidationError(f"event package member is a symlink: {name}")
+        try:
+            member.resolve().relative_to(package_real)
+        except ValueError as exc:
+            raise PackageValidationError(
+                f"event package member escapes package: {name}"
+            ) from exc
+        hashes[name] = _sha256(member)
     return package, hashes
 
 
