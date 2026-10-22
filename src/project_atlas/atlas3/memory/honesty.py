@@ -125,13 +125,35 @@ def wrap_intent_state_honesty(
     layers = report.get("layers")
     if not isinstance(layers, dict):
         raise Atlas3Error("LAYER_COLLAPSE", "intent report layers are missing")
-    typed_layers = {
-        name: [row for row in rows if isinstance(row, dict)]
-        for name, rows in layers.items()
-        if isinstance(rows, list)
-    }
+    report_pid = report.get("project_id")
+    if report_pid is not None and str(report_pid) != pid:
+        raise Atlas3Error(
+            "CROSS_PROJECT",
+            f"REQUESTED_PROJECT_ID={pid} ITEM_PROJECT_ID={report_pid}",
+        )
+    typed_layers: dict[str, list[dict[str, Any]]] = {}
+    for name, rows in layers.items():
+        if not isinstance(rows, list):
+            raise Atlas3Error("LAYER_COLLAPSE", f"layer {name!r} must be a list")
+        typed: list[dict[str, Any]] = []
+        for index, row in enumerate(rows):
+            if not isinstance(row, dict):
+                raise Atlas3Error(
+                    "INTENT_ITEM_INVALID",
+                    f"layer {name!r} row[{index}] is not an object",
+                )
+            row_pid = row.get("project_id")
+            if row_pid is not None and str(row_pid) != pid:
+                raise Atlas3Error(
+                    "CROSS_PROJECT",
+                    f"REQUESTED_PROJECT_ID={pid} ITEM_PROJECT_ID={row_pid}",
+                )
+            typed.append(row)
+        typed_layers[name] = typed
     _assert_layers_disjoint(typed_layers)
     honesty = report.get("honesty")
+    if honesty is not None and not isinstance(honesty, dict):
+        raise Atlas3Error("LAYER_COLLAPSE", "composed honesty block must be an object")
     if isinstance(honesty, dict) and honesty.get("intent_is_current_state") is True:
         raise Atlas3Error("INTENT_COLLAPSED_TO_STATE", "composed report collapsed intent")
     return {
