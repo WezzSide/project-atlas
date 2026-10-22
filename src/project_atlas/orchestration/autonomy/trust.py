@@ -122,7 +122,12 @@ def require_full_pin(value: str, label: str) -> str:
 
 
 def normalize_repository_identity(remote_url: str) -> str:
-    """Normalize a git remote to ``host/owner/name`` without a scheme."""
+    """Normalize a git remote to ``host/owner/name`` without a scheme.
+
+    AS-ORCH-TRUST-ID-F1: credential userinfo (insteadOf / ``x-access-token``)
+    is stripped and never becomes part of the identity. ``:`` after that
+    strip still fails closed (drive letters, leftover ``host:path``).
+    """
     raw = remote_url.strip()
     if not raw:
         raise TrustError("repository identity is empty", code="REPO_IDENTITY_UNVERIFIABLE")
@@ -132,6 +137,9 @@ def normalize_repository_identity(remote_url: str) -> str:
     for prefix in ("https://", "http://", "ssh://", "git://"):
         if raw.lower().startswith(prefix):
             raw = raw[len(prefix) :]
+            break
+    if "@" in raw:
+        raw = raw.rsplit("@", 1)[1]
     raw = raw.removesuffix(".git").strip("/")
     if ".." in raw.split("/") or "\\" in raw or ":" in raw:
         raise TrustError("repository identity is unsafe", code="REPO_IDENTITY_UNVERIFIABLE")
@@ -1606,7 +1614,9 @@ class LiveGitObserver:
         return result.returncode == 0
 
     def repository_identity(self) -> str:
-        return normalize_repository_identity(self._run("remote", "get-url", "origin"))
+        # Prefer the configured origin URL. ``git remote get-url`` applies
+        # insteadOf rewrites and can inject credential userinfo.
+        return normalize_repository_identity(self._run("config", "--get", "remote.origin.url"))
 
 
 class FixtureGitObserver:
