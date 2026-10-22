@@ -25,6 +25,20 @@ class CollabError(ValueError):
     """Fail-closed collaboration error."""
 
 
+def _require_session_id(session_id: str) -> str:
+    """Confine session_id before it is interpolated into a vault path.
+
+    AS-COLLAB-SESSION-ID-PATH-001: ``open_collab_session`` already applied
+    ``_ID_RE``. ``append_collab_action`` / ``close_collab_session`` did
+    not, so ``../../outside`` could target a file outside
+    ``generated/ops/collab``.
+    """
+    sid = session_id.strip()
+    if not _ID_RE.fullmatch(sid):
+        raise CollabError("collab-session-id-invalid")
+    return sid
+
+
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
@@ -48,9 +62,7 @@ def open_collab_session(
     require_compatibility_anchor()
     op = operator or default_operator()
     op.require("collab.session")
-    sid = session_id.strip()
-    if not _ID_RE.fullmatch(sid):
-        raise CollabError("collab-session-id-invalid")
+    sid = _require_session_id(session_id)
     if kind not in {"review-queue", "shared-receipt"}:
         raise CollabError(f"collab-kind-not-enabled:{kind}")
     subj = subject.strip()
@@ -102,7 +114,7 @@ def append_collab_action(
     require_compatibility_anchor()
     op = operator or default_operator()
     op.require("collab.session")
-    sid = session_id.strip()
+    sid = _require_session_id(session_id)
     path = vault / "generated" / "ops" / "collab" / f"{sid}-session.json"
     if not path.is_file():
         raise CollabError("collab-session-missing")
@@ -137,7 +149,7 @@ def close_collab_session(
     require_compatibility_anchor()
     op = operator or default_operator()
     op.require("collab.session")
-    sid = session_id.strip()
+    sid = _require_session_id(session_id)
     path = vault / "generated" / "ops" / "collab" / f"{sid}-session.json"
     if not path.is_file():
         raise CollabError("collab-session-missing")
