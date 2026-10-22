@@ -5,6 +5,23 @@ exact commands run, exact results, deviations, and remaining risks.
 
 ---
 
+## AS-DECISIONS-UNKNOWN-PROJECT-HARVEST-001 — unowned ADRs are not governing
+
+Base: `b87b4a226f4aa8b2f669edf112aa3476454f754f` / tree `46d1989b026a2f15920ec5e1c78a106799bd1249`.
+
+`_decision_headings_from_imports` treated missing / `unknown-project`
+`likely_project` as owned by every requested project. An unowned ADR
+heading became `ACTIVE_GOVERNING` on an unrelated decisions lens
+(`status=derived`).
+
+Fix: harvest only when `likely_project` equals the requested project id.
+Regression in `tests/unit/test_as_decisions_unknown_project_harvest_001.py`.
+
+Does not merge, wake OPT, or treat the decisions lens as authority.
+`MERGE_AUTHORIZATION = NOT_GRANTED`.
+
+---
+
 ## D-193 — Atlas 3.0 foundation convergence
 
 **Date:** 2026-08-25

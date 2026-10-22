@@ -387,8 +387,10 @@ def _decision_headings_from_imports(vault: Path, project_id: str) -> list[dict[s
     rows = _manifest_sources(vault)
     found: list[dict[str, str]] = []
     for row in rows:
-        likely = str(row.get("likely_project") or "unknown-project")
-        if likely not in {project_id, "unknown-project"}:
+        likely = str(row.get("likely_project") or "").strip()
+        # unknown-project / missing owner is not this project's ADR.
+        # Harvesting it made unowned imports ACTIVE_GOVERNING on any lens.
+        if likely != project_id:
             continue
         path = str(row.get("path") or "")
         source_id = str(row.get("source_id") or "")
