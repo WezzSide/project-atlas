@@ -71,6 +71,12 @@ def _edges(raw: object, *, project_id: str) -> list[dict[str, Any]]:
         to_id = str(item.get("to_id") or item.get("to") or "").strip()
         if not from_id or not to_id:
             raise Atlas3Error("DECIDED_IDENTITY_INCOMPLETE", "edge requires from_id and to_id")
+        explicit = item.get("project_id")
+        if explicit is not None and str(explicit) != project_id:
+            raise Atlas3Error(
+                "CROSS_PROJECT",
+                f"DECIDED_BY edge project_id {explicit!r} != requested {project_id!r}",
+            )
         origin = item.get("owner_origin")
         if not _valid_owner_origin(origin if isinstance(origin, dict) else None):
             raise Atlas3Error(
