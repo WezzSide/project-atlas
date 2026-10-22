@@ -164,7 +164,11 @@ class VaultRetriever:
         for path in sorted(root.glob("*.json")) if root.is_dir() else []:
             raw = self._json(path, {})
             for item in raw.get(key, []) if isinstance(raw, dict) else []:
-                if isinstance(item, dict) and item.get(id_key):
+                if (
+                    isinstance(item, dict)
+                    and item.get(id_key)
+                    and _item_bound_to_stem(item, path.stem)
+                ):
                     result[str(item[id_key])] = item
         return result
 
@@ -184,6 +188,27 @@ class VaultRetriever:
         if not path.is_file():
             return default
         return json.loads(path.read_text(encoding="utf-8"))
+
+
+_AGGREGATE_STATE_STEMS = frozenset(
+    {"claims", "concepts", "authorities", "authority", "conflicts"}
+)
+
+
+def _item_bound_to_stem(item: dict[str, Any], stem: str) -> bool:
+    """Filename stem is project ownership. In-record project_id is not authority.
+
+    AS-RET-FILENAME-PROJECT-BIND-001: a sibling ``attacker.json`` that
+    declares ``project_id: victim`` must not be loaded into victim
+    retrieval or BM25 corpora.
+
+    Aggregate test/legacy stems (``claims.json``, ``conflicts.json``) are
+    still loaded; scoped consumers filter them by requested project_id.
+    """
+    if stem in _AGGREGATE_STATE_STEMS:
+        return True
+    value = item.get("project_id")
+    return isinstance(value, str) and value.strip() == stem
 
 
 def _record_scope_id(kind: str, record: dict[str, Any]) -> str | None:

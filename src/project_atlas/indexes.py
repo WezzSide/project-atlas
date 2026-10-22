@@ -33,6 +33,29 @@ def _json(path: Path, default: Any, overlay: dict[Path, bytes] | None = None) ->
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+_AGGREGATE_STATE_STEMS = frozenset(
+    {"claims", "concepts", "authorities", "authority", "conflicts"}
+)
+
+
+def _item_bound_to_stem(item: dict[str, Any], stem: str) -> bool:
+    """Filename stem is project ownership. In-record project_id is not authority.
+
+    AS-RET-FILENAME-PROJECT-BIND-001: ``state/<kind>/<project>.json`` (and
+    ``review/conflicts/<project>.json``) must not contribute records that
+    declare a different ``project_id``. A planted sibling file cannot
+    enter another project's lexical index.
+
+    Aggregate test/legacy stems (``claims.json``, ``conflicts.json``) are
+    still loaded; scoped consumers filter them by requested project_id.
+    Those names are not a cross-project forge of ``attacker.json``.
+    """
+    if stem in _AGGREGATE_STATE_STEMS:
+        return True
+    value = item.get("project_id")
+    return isinstance(value, str) and value.strip() == stem
+
+
 def _add(index: dict[str, list[str]], key: object, value: str) -> None:
     index.setdefault(str(key), []).append(value)
 
@@ -52,7 +75,7 @@ def _state_records(
     for path in paths:
         raw = _json(path, {}, overlay)
         for item in raw.get(key, []) if isinstance(raw, dict) else []:
-            if isinstance(item, dict):
+            if isinstance(item, dict) and _item_bound_to_stem(item, path.stem):
                 result.append(item)
     return result
 
@@ -119,7 +142,11 @@ def _conflict_index(vault: Path, overlay: dict[Path, bytes] | None = None) -> di
     paths = sorted(paths_set)
     for path in paths:
         raw = _json(path, {}, overlay)
-        records.extend(item for item in raw.get("entries", []) if isinstance(item, dict))
+        records.extend(
+            item
+            for item in raw.get("entries", [])
+            if isinstance(item, dict) and _item_bound_to_stem(item, path.stem)
+        )
     by_id: dict[str, list[str]] = {}
     by_pair: dict[str, list[str]] = {}
     for conflict in records:
@@ -190,7 +217,11 @@ def _authority_index(
     conflict_paths = sorted(conflict_paths_set)
     for path in conflict_paths:
         raw = _json(path, {}, overlay)
-        sources.extend(item for item in raw.get("entries", []) if isinstance(item, dict))
+        sources.extend(
+            item
+            for item in raw.get("entries", [])
+            if isinstance(item, dict) and _item_bound_to_stem(item, path.stem)
+        )
     for record in sources:
         record_id = str(
             record.get("claim_id") or record.get("concept_id") or record.get("conflict_id")
