@@ -51,10 +51,11 @@ def evaluate_proof(
     present = 0
     for name in PROOF_STAGES:
         raw = supplied.get(name)
-        if isinstance(raw, dict) and raw.get("evidence_ref"):
+        ref = raw.get("evidence_ref") if isinstance(raw, dict) else None
+        if isinstance(ref, str) and ref.strip():
             stages[name] = {
                 "status": "PRESENT",
-                "evidence_ref": str(raw["evidence_ref"]),
+                "evidence_ref": ref.strip(),
                 "authority": "derived",
             }
             present += 1
