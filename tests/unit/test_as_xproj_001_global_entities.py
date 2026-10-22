@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from project_atlas.schema import available_schemas, validate_record
+from project_atlas.secrets import scan_text
 from project_atlas.xproj_registry import (
     AUTHORITY_LEVEL,
     PACKAGE_ID,
@@ -428,3 +429,26 @@ def test_xp_fx_018_prior_vault_state_enables_join(tmp_path: Path) -> None:
     )
     assert second.joined_count == 1
     assert second.quarantined_count == 0
+
+
+def test_xp_fx_019_json_escape_name_only_does_not_persist_secret(tmp_path: Path) -> None:
+    """AS-SEC-SCAN-XPROJ-QUAR-JSON-ESC-001: mint_from_name after JSON \\u decode."""
+    token = "AKIAAAAAAAAAAAAAAAAA"
+    raw = (
+        '{"registrations":[{"kind":"entity","mint_from_name":true,'
+        '"entity_class":"service","display_name":"\\u0041KIAAAAAAAAAAAAAAAAA"}]}'
+    )
+    assert scan_text(raw) == []
+    payload = json.loads(raw)
+    assert payload["registrations"][0]["display_name"] == token
+    result = apply_registrations(payload["registrations"])
+    assert result.quarantined_count == 1
+    assert result.quarantine[0].category == "secret-finding"
+    assert result.quarantine[0].inputs_considered["display_name"] == "[redacted-scan]"
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    written = write_registry_outputs(result, vault=vault)
+    blob = "".join((vault / path).read_text(encoding="utf-8") for path in written)
+    assert token not in blob
+    assert token not in "".join(written)
+    assert scan_text(blob) == []

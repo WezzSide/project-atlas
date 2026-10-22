@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
 from project_atlas.schema import available_schemas, validate_record
+from project_atlas.secrets import scan_text
 from project_atlas.xproj_edges import (
     AUTHORITY_LEVEL,
     PACKAGE_ID,
@@ -446,3 +448,25 @@ def test_xp2_adv_malformed_edge_id() -> None:
     )
     assert isinstance(outcome, EdgeQuarantineCandidate)
     assert outcome.category == "edge-id-invalid"
+
+
+def test_xp2_json_escape_name_only_does_not_persist_secret(tmp_path: Path) -> None:
+    """AS-SEC-SCAN-XPROJ-QUAR-JSON-ESC-001: name-only edge after JSON \\u decode."""
+    token = "AKIAAAAAAAAAAAAAAAAA"
+    raw = (
+        '{"edges":[{"kind":"edge","source_display_name":'
+        '"\\u0041KIAAAAAAAAAAAAAAAAA","target_display_name":"other"}]}'
+    )
+    assert scan_text(raw) == []
+    payload = json.loads(raw)
+    result = apply_edge_registrations(payload["edges"], entities={}, joins=[])
+    assert result.quarantine
+    assert result.quarantine[0].category == "secret-finding"
+    assert result.quarantine[0].inputs_considered["source_display_name"] == "[redacted-scan]"
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    written = write_edge_outputs(result, vault=vault)
+    blob = "".join((vault / path).read_text(encoding="utf-8") for path in written)
+    assert token not in blob
+    assert token not in "".join(written)
+    assert scan_text(blob) == []

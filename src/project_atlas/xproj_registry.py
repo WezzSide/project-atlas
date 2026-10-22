@@ -376,6 +376,32 @@ def register_global_entity(
     fuzzy: bool = False,
 ) -> GlobalEntityRecord | QuarantineCandidate:
     """Explicit registration. Name-only / fuzzy mint attempts fail closed."""
+    # AS-SEC-SCAN-XPROJ-QUAR-JSON-ESC-001: scan decoded scalars before any
+    # early-return quarantine so name-only / fuzzy paths cannot persist
+    # JSON-``\\u``-decoded secrets in candidate_id, filename, or inputs.
+    if _secret_findings_present(
+        display_name=display_name,
+        notes=notes,
+        attributes=attributes,
+    ):
+        gid_raw = str(global_entity_id).strip() if global_entity_id is not None else ""
+        safe_gid = gid_raw if gid_raw and not scan_text(gid_raw) else ""
+        if safe_gid:
+            candidate_id = f"q-secret-{_safe_name(safe_gid)}"
+        else:
+            digest = hashlib.sha256((display_name or "").encode("utf-8")).hexdigest()[:12]
+            candidate_id = f"q-secret-name-only--{digest}"
+        return QuarantineCandidate(
+            candidate_id=candidate_id,
+            category="secret-finding",
+            reason="secret-finding",
+            inputs_considered={
+                "entity_class": entity_class or "",
+                "display_name": "[redacted-scan]",
+                "global_entity_id": safe_gid,
+            },
+            global_entity_id=safe_gid or None,
+        )
     if fuzzy:
         return QuarantineCandidate(
             candidate_id=f"q-fuzzy-{_safe_name(display_name or 'unknown')}",
@@ -394,23 +420,6 @@ def register_global_entity(
     label = (display_name or "").strip()
     if not label:
         raise XprojRegistryError("display-name-required")
-
-    if _secret_findings_present(
-        display_name=label,
-        notes=notes,
-        attributes=attributes,
-    ):
-        return QuarantineCandidate(
-            candidate_id=f"q-secret-{_safe_name(str(global_entity_id))}",
-            category="secret-finding",
-            reason="secret-finding",
-            inputs_considered={
-                "entity_class": entity_class or "",
-                "display_name": "[redacted-scan]",
-                "global_entity_id": str(global_entity_id).strip(),
-            },
-            global_entity_id=str(global_entity_id).strip(),
-        )
 
     normalized = _normalize_class(entity_class)
     if normalized is None:
