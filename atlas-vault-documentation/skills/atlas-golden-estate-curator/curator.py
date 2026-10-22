@@ -15,8 +15,10 @@ import re
 import stat
 import subprocess
 import sys
+import unicodedata
 from pathlib import Path
 from typing import Any, Final
+from urllib.parse import unquote, urlsplit, urlunsplit
 
 PACKAGE_ID: Final[str] = "ATLAS-GOLDEN-ESTATE-SKILL-001"
 SKILL_ID: Final[str] = "atlas-golden-estate-curator"
@@ -281,11 +283,35 @@ def _secret_hit(path: Path) -> dict[str, str] | None:
     return None
 
 
+# DISCOVER_ONLY must not honor repo-local executors (fsmonitor / hooks /
+# diff.external). Command-line -c overrides local .git/config.
+_GIT_SANDBOX: Final[tuple[str, ...]] = (
+    "-c",
+    "core.fsmonitor=",
+    "-c",
+    "core.useBuiltinFSMonitor=false",
+    "-c",
+    "core.hooksPath=",
+    "-c",
+    "diff.external=",
+)
+
+
 def _git(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
     env = dict(os.environ)
     env["GIT_OPTIONAL_LOCKS"] = "0"
+    # Operator/process GIT_DIR / GIT_CONFIG_* must not retarget or inject
+    # executors into DISCOVER_ONLY inspection.
+    env.pop("GIT_DIR", None)
+    env.pop("GIT_WORK_TREE", None)
+    env.pop("GIT_COMMON_DIR", None)
+    env.pop("GIT_CONFIG_COUNT", None)
+    env.pop("GIT_CONFIG_PARAMETERS", None)
+    env.pop("GIT_CONFIG_SYSTEM", None)
+    env.pop("GIT_CONFIG_GLOBAL", None)
+    env["GIT_CONFIG_NOSYSTEM"] = "1"
     return subprocess.run(
-        ["git", "--no-optional-locks", "-C", str(root), *args],
+        ["git", "--no-optional-locks", *_GIT_SANDBOX, "-C", str(root), *args],
         check=False,
         capture_output=True,
         text=True,
@@ -293,22 +319,196 @@ def _git(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def _is_git_repo(path: Path) -> bool:
-    exists = _safe_exists(path / ".git")
-    return bool(exists)
+def _read_git_text(path: Path, limit: int = 1_000_000) -> str | None:
+    """Read git metadata. Do not use the 4KiB secret-scan cap."""
+    return _read_text_limited(path, limit=limit)
 
 
-def _dirty(path: Path) -> bool:
-    result = _git(path, "status", "--porcelain")
-    return result.returncode == 0 and bool(result.stdout.strip())
+_SCHEME_USERINFO_RE = re.compile(r":///*[^/@]*@")
+_CREDENTIAL_AT_RE = re.compile(r"[^/@\s]*:[^/@\s]+@")
+_TOKENISH_RE = re.compile(
+    r"(?i)(ghp_|github_pat_|xox[baprs]-|sk-[a-z0-9_-]{8,}|glpat-|gho_|ghu_)"
+)
+_COLON_LOOKALIKES = ("\u2236", "\ua789", "\u02d0", "\uff1a")
 
 
-def _remote_url(path: Path) -> str | None:
-    result = _git(path, "config", "--get", "remote.origin.url")
-    if result.returncode != 0:
+def _redact_remote_url(url: str) -> str:
+    """Return a remote locator with userinfo stripped. Never echo credentials.
+
+    Fail closed: leftover token-shaped text after stripping is replaced, not
+    copied onto inventory. ``urlsplit`` ValueError never escapes with the URL.
+    """
+    text = unicodedata.normalize("NFKC", url.strip())
+    for lookalike in _COLON_LOOKALIKES:
+        text = text.replace(lookalike, ":")
+    text = unquote(text)
+    text = _CREDENTIAL_AT_RE.sub("", text)
+    text = _SCHEME_USERINFO_RE.sub("://", text, count=1)
+    if _TOKENISH_RE.search(text) or re.search(r":[^/@\s]{8,}@", text):
+        return "redacted-secret-shaped-remote"
+    try:
+        parts = urlsplit(text) if "://" in text else None
+    except ValueError:
+        return "redacted-invalid-remote"
+    if parts is not None and (parts.username is not None or parts.password is not None):
+        host = parts.hostname or ""
+        if parts.port:
+            host = f"{host}:{parts.port}"
+        return urlunsplit((parts.scheme, host, parts.path, parts.query, parts.fragment))
+    at = text.rfind("@")
+    if at > 0 and ":" in text[:at]:
+        return "redacted-userinfo@" + text[at + 1 :]
+    return text
+
+
+def _gitdir_target(project: Path) -> Path | None:
+    """The .git file/dir/link, or None if absent."""
+    marker = project / ".git"
+    st = _safe_lstat(marker)
+    if st is None:
         return None
-    url = result.stdout.strip()
-    return url or None
+    if stat.S_ISREG(st.st_mode):
+        text = _read_text_limited(marker)
+        if text is None:
+            return None
+        line = text.strip()
+        if line.lower().startswith("gitdir:"):
+            target = Path(line.split(":", 1)[1].strip())
+            if not target.is_absolute():
+                target = marker.parent / target
+            return target
+        return None
+    return marker
+
+
+def _contained_git_repo(project: Path, source_root: Path) -> bool:
+    """True only when git metadata resolves inside the scanned source root."""
+    target = _gitdir_target(project)
+    if target is None:
+        return False
+    return not _escapes(target, source_root)
+
+
+def _git_head_readable(project: Path, source_root: Path) -> bool:
+    """HEAD must be a readable regular-file payload. Absence/ACL ≠ git."""
+    target = _gitdir_target(project)
+    if target is None or _escapes(target, source_root):
+        return False
+    text = _read_text_limited(target / "HEAD")
+    return text is not None and bool(text.strip())
+
+
+def _is_git_repo(path: Path, source_root: Path) -> bool:
+    return _contained_git_repo(path, source_root) and _git_head_readable(path, source_root)
+
+
+def _git_config_has_executor(text: str) -> bool:
+    """True when local git config can run a process during inspect."""
+    section = ""
+    for raw in text.splitlines():
+        line = raw.split(";", 1)[0].split("#", 1)[0].strip()
+        if not line:
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            section = line[1:-1].strip().lower()
+            continue
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        if not value.strip():
+            continue
+        key = key.strip().lower()
+        if section == "core" and key in {
+            "fsmonitor",
+            "usebuiltinfsmonitor",
+            "hookspath",
+            "sshcommand",
+        }:
+            return True
+        if section == "diff" and key == "external":
+            return True
+        if (
+            section.startswith("filter ") or section.startswith("filter.")
+        ) and key in {"clean", "smudge", "process"}:
+            return True
+        if section in {"include", "includeif"} or section.startswith("includeif "):
+            return True
+    return False
+
+
+def _git_unsafe_to_invoke(project: Path, source_root: Path) -> bool:
+    """Fail closed when git metadata may execute helpers or is incomplete."""
+    target = _gitdir_target(project)
+    if target is None or _escapes(target, source_root):
+        return True
+    texts: list[str] = []
+    for rel in ("config", "config.worktree"):
+        payload = _read_git_text(target / rel)
+        if rel == "config" and payload is None:
+            return True
+        if payload:
+            texts.append(payload)
+    commondir = _read_git_text(target / "commondir")
+    if commondir is not None and commondir.strip():
+        common = Path(commondir.strip())
+        if not common.is_absolute():
+            common = target / common
+        if _escapes(common, source_root):
+            return True
+        common_cfg = _read_git_text(common / "config")
+        if common_cfg is None:
+            return True
+        texts.append(common_cfg)
+    return any(_git_config_has_executor(text) for text in texts)
+
+
+def _dirty(path: Path) -> bool | None:
+    """Name-only dirty. Never ``status`` or ``ls-files -m`` (both run filters)."""
+    tracked = _git(path, "ls-files", "-z")
+    extra = _git(path, "ls-files", "-o", "--exclude-standard", "-z")
+    if tracked.returncode != 0 or extra.returncode != 0:
+        return None
+    if extra.stdout.strip("\x00").strip():
+        return True
+    for name in tracked.stdout.split("\x00"):
+        if not name:
+            continue
+        exists = _safe_exists(path / name)
+        if exists is None:
+            return None
+        if exists is False:
+            return True
+    return False
+
+
+def _remote_url(path: Path, source_root: Path) -> str | None:
+    """Parse origin URL from contained git config. Never ``git config``."""
+    target = _gitdir_target(path)
+    if target is None or _escapes(target, source_root):
+        return None
+    text = _read_git_text(target / "config")
+    if text is None:
+        return None
+    section = ""
+    for raw in text.splitlines():
+        line = raw.split(";", 1)[0].split("#", 1)[0].strip()
+        if not line:
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            section = line[1:-1].strip().lower()
+            continue
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        if section == 'remote "origin"' and key.strip().lower() == "url":
+            url = value.strip().strip('"').strip("'")
+            if not url:
+                return None
+            try:
+                return _redact_remote_url(url)
+            except (ValueError, UnicodeError):
+                return "redacted-invalid-remote"
+    return None
 
 
 def _walk_projects(root: Path) -> list[dict[str, Any]]:
@@ -372,7 +572,21 @@ def _walk_projects(root: Path) -> list[dict[str, Any]]:
                 generated.append(report_relpath(current, root))
             return
 
-        git_here = _is_git_repo(current)
+        git_here = _is_git_repo(current, root)
+        git_marker = current / ".git"
+        git_st = _safe_lstat(git_marker)
+        git_target = _gitdir_target(current)
+        if git_st is not None and not git_here:
+            if git_target is not None and _escapes(git_target, root):
+                exclusions.append(
+                    {
+                        "path": report_relpath(git_marker, root),
+                        "reason": "GITDIR_ESCAPE",
+                        "action": "fail_closed_skip_git",
+                    }
+                )
+            else:
+                _record_inaccessible(exclusions, git_marker, root)
         marker = current / ".atlas-project.yaml"
         readme = current / "README.md"
         signals = current / ".atlas-estate" / "signals"
@@ -470,6 +684,23 @@ def _walk_projects(root: Path) -> list[dict[str, Any]]:
                 _record_inaccessible(exclusions, current / "build.sh", root)
                 inspection_complete = False
                 malice = False
+            dirty = False
+            remote: str | None = None
+            if git_here:
+                if _git_unsafe_to_invoke(current, root):
+                    _record_inaccessible(exclusions, current / ".git" / "config", root)
+                    inspection_complete = False
+                else:
+                    dirty_state = _dirty(current)
+                    if dirty_state is None:
+                        _record_inaccessible(exclusions, current / ".git", root)
+                        inspection_complete = False
+                    else:
+                        dirty = dirty_state
+                remote = _remote_url(current, root)
+            elif git_st is not None:
+                # Present .git that is not a contained readable repo.
+                inspection_complete = False
             records.append(
                 {
                     "path": rel,
@@ -485,7 +716,7 @@ def _walk_projects(root: Path) -> list[dict[str, Any]]:
                     "git": git_here,
                     "nested_repo": bool(git_here and parent_git),
                     "monorepo": bool(packages_dir or apps_dir),
-                    "dirty_worktree": _dirty(current) if git_here else False,
+                    "dirty_worktree": dirty,
                     "missing_readme": not readme_file,
                     "stale_docs": stale,
                     "test_failure_signal": bool(test_signal),
@@ -493,7 +724,7 @@ def _walk_projects(root: Path) -> list[dict[str, Any]]:
                     "secret_findings": secret_findings,
                     "duplicate_identity": duplicate,
                     "duplicate_of": seen_ids.get(identity) if duplicate else None,
-                    "remote": _remote_url(current) if git_here else None,
+                    "remote": remote,
                     "malicious_build_script": malice,
                     "executed_build": False,
                     "source_mutated": False,

@@ -13,6 +13,8 @@ Fail closed on:
 - symlink / junction escape
 - report output written inside the source root
 - execution of project test or build scripts
+- execution of repo-local git helpers (`core.fsmonitor`, filters, hooks, `diff.external`)
+- treating failed or unreadable git inspection as clean / GOLDEN
 
 Secrets: record pattern metadata only. Never echo matched content.
 
