@@ -9,6 +9,7 @@ D-042 / CAPTURE-002. Transcript extraction is not implemented in Core.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -78,13 +79,18 @@ class ConversationCaptureError(ValueError):
 
 
 def _write_atomic(path: Path, content: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
     try:
+        path.parent.mkdir(parents=True, exist_ok=True)
         tmp.write_bytes(content)
         os.replace(tmp, path)
+    except OSError as exc:
+        raise ConversationCaptureError(
+            "UNWRITABLE_CAPTURE",
+            f"unwritable-conversation-capture:{type(exc).__name__}:{path}",
+        ) from exc
     finally:
-        if tmp.exists():
+        with contextlib.suppress(OSError):
             tmp.unlink(missing_ok=True)
 
 
