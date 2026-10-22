@@ -13,18 +13,18 @@ Two real gaps compounded:
    reaches ``STOPPED``, ``governor.release_lease()`` is permanently
    unreachable for that lease through the normal flow -- there is no
    session boundary that hands it back.
-2. ``rehydration._originate()`` treats ANY ``RELEASED`` lease for a
-   ``(package_id, base_pin)`` as proof the work reached a real terminal
-   outcome (a "CERTIFIED witness" -- see that function's own docstring).
-   That is correct under the real system, where a lease is only ever
-   released AFTER ``apply_observed_result()`` succeeds. A bare hand-edit
-   of the lease projection file (flipping ``ACTIVE`` -> ``RELEASED``
-   directly, with nothing behind it) exploits that same assumption
-   in reverse: it fabricates a CERTIFIED result with zero real
-   verification. This was attempted once during the M3 investigation,
-   caught before it reached anywhere durable (``sync_terminal_governed_
-   states()`` only writes back for ``dag.TERMINAL_STATES = {CLOSED}``,
-   which CERTIFIED is not), and reverted.
+2. ``rehydration._originate()`` historically treated ANY ``RELEASED``
+   lease for a ``(package_id, base_pin)`` as proof the work reached a
+   real terminal outcome (a "CERTIFIED witness"). AS-LEASE-RELEASED-
+   CERTIFIED-WITNESS-001 now requires durable
+   ``LoopState.completed_lease_ids`` to corroborate that ``lease_id``
+   before stamping CERTIFIED. A bare hand-edit of the lease projection
+   file (flipping ``ACTIVE`` -> ``RELEASED`` with nothing behind it)
+   must not fabricate a CERTIFIED result. This was attempted once
+   during the M3 investigation, caught before it reached anywhere
+   durable (``sync_terminal_governed_states()`` only writes back for
+   ``dag.TERMINAL_STATES = {CLOSED}``, which CERTIFIED is not), and
+   reverted.
 
 This module is the one legitimate way to release a lease stranded by gap
 (1), built so it cannot be used to reproduce the gap-(2) fabrication: it
@@ -59,16 +59,14 @@ failure, never discards real in-flight or successful work, and never
 manufactures failure evidence out of its own absence.
 
 Even a fully evidence-gated release is not enough on its own: writing
-``status: "RELEASED"`` would still trip gap (2), since ``_originate()``
-cannot tell "released because it succeeded" from "released because this
-module proved it exhaustedly failed" -- both look identical to it. This
+``status: "RELEASED"`` would still look like a success row. This
 module therefore writes the lease projection's separate ``ABANDONED``
 status (``lease_projection.project_abandon()``) instead of ``RELEASED``.
-``_originate()``'s CERTIFIED-witness set only ever looks at ``RELEASED``
-rows, so an ``ABANDONED`` row is invisible to it -- the node it names
-simply falls through to the ordinary ``add_node()``/``mark_ready()`` path
-on its next materialization, a genuine fresh retry, never a fabricated
-certificate.
+``_originate()``'s CERTIFIED-witness set only ever looks at
+corroborated ``RELEASED`` rows, so an ``ABANDONED`` row is invisible
+to it -- the node it names simply falls through to the ordinary
+``add_node()``/``mark_ready()`` path on its next materialization, a
+genuine fresh retry, never a fabricated certificate.
 """
 
 from __future__ import annotations

@@ -236,6 +236,7 @@ def rehydrate_governor(
                 trusted=trusted,
                 origination_projection_store=origination_projection_store,
                 lease_projection_store=lease_projection_store,
+                completed_lease_ids=(),
             )
             return
         # STATE_CORRUPT / TARGET_MOVED / etc: genuinely fail closed. The
@@ -277,6 +278,7 @@ def rehydrate_governor(
         trusted=trusted,
         origination_projection_store=origination_projection_store,
         lease_projection_store=lease_projection_store,
+        completed_lease_ids=loop_state.completed_lease_ids,
     )
 
     if loop_state.phase in _NO_ACTIVE_LEASE_PHASES:
@@ -335,6 +337,7 @@ def _originate(
     trusted: TrustedAnchorRecord,
     origination_projection_store: Path | None = None,
     lease_projection_store: Path | None = None,
+    completed_lease_ids: tuple[str, ...] = (),
 ) -> tuple[frozenset[str], DiscoveryReport]:
     """Run the existing, already-deterministic discovery pass. Fixes
     "originate new work on a fresh process" for the IDLE case, and is a
@@ -387,12 +390,21 @@ def _originate(
 
     Replay protection must not erase a completed node from the DAG.
     ``select_next()`` and ``lease()`` both treat a missing dependency as
-    unsatisfied, so omitting a RELEASED package as a CERTIFIED witness
-    stranded every later dependent. An ACTIVE row stays excluded so the
-    LEASED restore path can rebuild it READY. A later content revision
-    that materializes under the same ``package_id`` with a new
-    ``base_pin`` (prior origination record already ``TERMINAL``) is not
-    the leased revision and must still be ``add_node``/``mark_ready``'d.
+    unsatisfied, so omitting a *corroborated* RELEASED package as a
+    CERTIFIED witness stranded every later dependent. An ACTIVE row
+    stays excluded so the LEASED restore path can rebuild it READY. A
+    later content revision that materializes under the same
+    ``package_id`` with a new ``base_pin`` (prior origination record
+    already ``TERMINAL``) is not the leased revision and must still be
+    ``add_node``/``mark_ready``'d.
+
+    AS-LEASE-RELEASED-CERTIFIED-WITNESS-001: ``leases.json``
+    ``status=RELEASED`` is recovery evidence, not a completion proof.
+    ``DURABLE_PROJECTION_IS_AUTHORITY = NO``. A planted RELEASED row
+    must not stamp CERTIFIED or unblock dependents. Only a RELEASED
+    row whose ``lease_id`` also appears in durable
+    ``LoopState.completed_lease_ids`` is a CERTIFIED witness.
+    Uncorroborated RELEASED stays out of rediscovery.
 
     A materialized node whose ``base_pin`` is stale against live main is
     not marked READY -- leasing it would raise uncaught ``STALE_LEASE``.
@@ -408,6 +420,8 @@ def _originate(
 
     active_ids: set[str] = set()
     released_revisions: set[tuple[str, str]] = set()
+    released_lease_ids: dict[tuple[str, str], set[str]] = {}
+    completed_ids = frozenset(completed_lease_ids)
     if lease_projection_store is not None:
         try:
             ever_leased_projection = load_projection(lease_projection_store)
@@ -420,11 +434,12 @@ def _originate(
                 durable_sequence = max(durable_sequence, row.released_sequence)
         governor.adopt_durable_sequence(durable_sequence)
         active_ids = {row.package_id for row in active_rows(ever_leased_projection)}
-        released_revisions = {
-            (row.package_id, row.base_pin)
-            for row in ever_leased_projection.leases
-            if row.status == "RELEASED" and row.package_id not in active_ids
-        }
+        for row in ever_leased_projection.leases:
+            if row.status != "RELEASED" or row.package_id in active_ids:
+                continue
+            key = (row.package_id, row.base_pin)
+            released_revisions.add(key)
+            released_lease_ids.setdefault(key, set()).add(row.lease_id)
 
     if origination_projection_store is not None:
         from project_atlas.orchestration.origination.projection import (
@@ -463,9 +478,15 @@ def _originate(
                 continue
             try:
                 if (candidate.package_id, candidate.base_pin) in released_revisions:
-                    governor.add_node(
-                        candidate.model_copy(update={"state": NodeState.CERTIFIED})
-                    )
+                    key = (candidate.package_id, candidate.base_pin)
+                    witness_ids = released_lease_ids.get(key, set())
+                    corroborated = bool(completed_ids.intersection(witness_ids))
+                    if corroborated:
+                        governor.add_node(
+                            candidate.model_copy(update={"state": NodeState.CERTIFIED})
+                        )
+                    # Uncorroborated RELEASED is not a completion witness
+                    # and is not rediscovered as READY work.
                     known.add(candidate.package_id)
                     continue
                 if candidate.base_pin != inventory.current_main:
