@@ -549,6 +549,30 @@ def test_restore_scaffold_flag_gives_structural_parity(tmp_path: Path) -> None:
         restore_bundle(bundle, dirty, tier="T3", scaffold=True)
 
 
+def test_restore_scaffold_does_not_mint_identity_before_members(tmp_path: Path) -> None:
+    """AS-BACKUP-RESTORE-F1: restore --scaffold must not mint a leftover vault_uuid.
+
+    If member restore fails after the skeleton is laid, a minted identity
+    bricks remount (wrong-mount). Identity comes only from bundle D6.
+    """
+    vault = _fixture_vault(tmp_path)
+    bundle = tmp_path / "bundle"
+    create_snapshot(vault, bundle, include_d5=False)
+    leftover = tmp_path / "failed-scaffold"
+    create_scaffold(leftover, mint_identity=False)
+    assert not (leftover / ".atlas" / "vault.json").exists()
+    restored = restore_bundle(
+        bundle,
+        leftover,
+        tier="T3",
+        scaffold=True,
+        allow_nonempty=True,
+        expected_vault_logical_id=VAULT_LOGICAL_ID,
+    )
+    assert restored["identity_samples"]["vault_logical_id"] == VAULT_LOGICAL_ID
+    assert read_vault_logical_id(leftover) == VAULT_LOGICAL_ID
+
+
 def test_create_snapshot_fail_closed_on_unclassified_content(tmp_path: Path) -> None:
     """Fail-closed completeness: an unclassified persisted vault file must abort
     the whole bundle rather than be silently omitted (root-cause of F1)."""
