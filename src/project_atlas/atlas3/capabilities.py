@@ -20,6 +20,15 @@ MATURITIES: Final[frozenset[str]] = frozenset(
 SECURITY_CLASSES: Final[frozenset[str]] = frozenset(
     {"read-derived", "evidence-append", "privacy-sensitive", "owner-gated"}
 )
+AUTHORITY_CLAIM_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "is_authority",
+        "grants_authority",
+        "catalog_is_authority",
+        "mint_authority",
+        "owner_authority",
+    }
+)
 
 Capability = dict[str, Any]
 
@@ -143,6 +152,22 @@ def register_capability(capability: Capability) -> Capability:
     surfaces = [str(item) for item in (capability.get("available_surfaces") or [])]
     if any(item not in SURFACES for item in surfaces):
         raise Atlas3Error("UNKNOWN_SURFACE", "surface is a projection, not a capability")
+    # AT3-004: catalog honesty. SECURITY_CLASSES is closed; "authority" is not a
+    # capability class. LLM/model/owner-authority must not be minted here.
+    security_class = str(capability.get("security_class") or "").strip()
+    if security_class == "authority":
+        raise Atlas3Error(
+            "AUTHORITY_SECURITY_CLASS",
+            "capability registry must not mint authority",
+        )
+    if security_class not in SECURITY_CLASSES:
+        raise Atlas3Error("UNKNOWN_SECURITY_CLASS", security_class)
+    for key in AUTHORITY_CLAIM_KEYS:
+        if capability.get(key) is True:
+            raise Atlas3Error(
+                "AUTHORITY_CLAIM_FORBIDDEN",
+                "capability registry must not persist authority claims",
+            )
     REGISTRY[cid] = capability
     return capability
 
