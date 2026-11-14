@@ -559,9 +559,11 @@ class SpoolTransport:
         was started", in another store than the executor's own ledger, so that losing that
         ledger alone does not make the record look new. True when this call created the
         mark, False when one was there (the first stands; nothing here removes or rewrites
-        it). Exclusive creation (``os.link``), the content and the directory entry are
-        flushed before this returns; an ``OSError`` means the mark may not exist and the
-        caller must not act. The mark is delivery-side metadata like an address: unkeyed,
+        it). Exclusive creation (``os.link``): of several callers exactly one gets True, and
+        only that one may act. The content is flushed before the name is created and the
+        directory entry after it, where the platform can flush a directory (not on Windows,
+        and a filesystem may refuse); an ``OSError`` means the mark may or may not exist and
+        the caller must not act. The mark is delivery-side metadata like an address: unkeyed,
         outside the record's seal, and whoever can write the spool can create one (which
         only ever stops a dispatch) or remove one (which returns that record to what the
         ledger alone says). It is lost with the spool directory.
@@ -581,7 +583,11 @@ class SpoolTransport:
             except FileExistsError:
                 return False
         finally:
-            os.unlink(tmp)
+            # A temp name that cannot be removed (Windows: someone holds it open) must not
+            # turn a mark that was taken into an error: the caller would fail and the mark
+            # would stand.
+            with contextlib.suppress(OSError):
+                os.unlink(tmp)
         _sync_dir(mark.parent)
         return True
 

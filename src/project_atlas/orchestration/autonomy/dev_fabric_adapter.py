@@ -26,18 +26,23 @@ approved it.
 Crash safety: DISPATCH is written ahead to the Crosswalk ledger, so a work item is dispatched at
 most once; run discovery is fail-closed on ambiguity.
 
-Dispatch-once across a lost ledger: on a transport that offers it (``mark_dispatched`` /
-``dispatch_marked``: the spool) the adapter also leaves a dispatch mark for the work record in
-the TRANSPORT, after the ledger record and before the send, and sends nothing when the mark
-cannot be written. A work item that has a mark but no DISPATCH in the ledger is refused
-(``DISPATCH_LEDGER_LOST``, terminal for that work item): the ledger was lost or replaced after
-a dispatch was started, a run may exist that this adapter can no longer tie to anything, and a
-second send would be a second executor attempt for one execution identity. Nothing is
-reconstructed: no DISPATCH is invented, and the lineage stays where the planner's journal has
-it until an operator acts. NOT covered: ledger and transport record lost together (the planner
-then publishes the record again and it is dispatched again), a transport without marks, and
-anyone who can write the spool removing a mark. The mark is unkeyed; it is a second memory in
-a second store, not a grant, not run correlation and not proof that a run exists.
+Dispatch-once across ledgers: on a transport that offers it (``mark_dispatched`` /
+``dispatch_marked``: the spool) a dispatch starts by TAKING the dispatch mark of the work
+record in the transport: exclusive creation, so of all adapters on one spool, whatever ledger
+each of them holds, exactly one takes it. Order: mark, then ledger DISPATCH, then send. An
+adapter that does not take the mark (it stands already, or another adapter took it meanwhile)
+refuses with ``DISPATCH_ALREADY_MARKED``, terminal for that work item, and writes no DISPATCH
+and sends nothing. That is the case of a ledger that was lost or replaced after a dispatch was
+started, of a second adapter instance on the same spool, and of a crash between mark and
+ledger; they cannot be told apart, in all of them a run may or may not exist, and a second
+send would be a second executor attempt for one execution identity. Nothing is reconstructed:
+no DISPATCH is invented, and the lineage stays where the planner's journal has it until an
+operator acts. A mark that could not be written at all is a transient error: the work is kept
+and tried again, nothing is in the ledger. NOT covered: ledger and transport record lost
+together (the planner then publishes the record again and it is dispatched again), a transport
+without marks, and anyone who can write the spool removing a mark. The mark is unkeyed; it is
+a second memory in a second store, not a grant, not run correlation and not proof that a run
+exists.
 
 OPERATING ASSUMPTIONS (documented residuals, enforced by deployment, not by this module):
   * the execute workflow has no ``run-name``, so a run cannot be tied to a dispatch except by
@@ -150,6 +155,14 @@ class PackageBindingRefused(DispatchRefused):
 
 class DispatchDeferred(AdapterError):
     code = "DEV_FABRIC_DEFERRED"
+
+
+_ALREADY_MARKED = (
+    "DISPATCH_ALREADY_MARKED:the transport holds a dispatch mark for this work item and this "
+    "ledger holds no DISPATCH for it (ledger lost or replaced, another adapter on the same "
+    "spool, or a crash between mark and ledger); a run may exist that cannot be correlated; "
+    "refusing to dispatch"
+)
 
 
 class AmbiguousRun(AdapterError):
@@ -465,11 +478,11 @@ class FabricAdapter:
             task_statement=statement,
             acceptance_commands=commands,
         )
+        self._take_dispatch_mark(work)  # exactly one adapter per spool gets past this line
         # write-ahead: from here on this work item can never be dispatched again
         self.xw.bind_dispatch(
             work.seal, dispatched_at=self.clock(), payload_sha256=payload.sha256()
         )
-        self._mark_dispatch(work)
         try:
             self.port.dispatch_workflow(payload.workflow, payload.ref, dict(payload.inputs))
         except AdapterError as exc:  # write-ahead already recorded: never retried, surfaced
@@ -528,6 +541,7 @@ class FabricAdapter:
             raise DispatchRefused("bound payload does not check out the package branch")
         if self.port.branch_head(base_branch) != work.base_revision:
             raise DispatchRefused(f"{base_branch} is not at the sealed base revision")
+        self._take_dispatch_mark(work)  # exactly one adapter per spool gets past this line
         # write-ahead: from here on this work item can never be dispatched again
         self.xw.bind_dispatch(
             work.seal,
@@ -535,7 +549,6 @@ class FabricAdapter:
             payload_sha256=payload.sha256(),
             package_sha256=binding.package_sha256,
         )
-        self._mark_dispatch(work)
         try:
             self.port.dispatch_workflow(payload.workflow, payload.ref, dict(payload.inputs))
         except AdapterError as exc:  # write-ahead already recorded: never retried, surfaced
@@ -547,29 +560,31 @@ class FabricAdapter:
         if self.xw.hop(work.seal, "DISPATCH") is not None:
             raise AdapterError("work item already dispatched; refusing to dispatch twice")
         marked = getattr(self.transport, "dispatch_marked", None)
-        if callable(marked) and marked(work):
-            raise DispatchRefused(
-                "DISPATCH_LEDGER_LOST:the transport holds a dispatch mark for this work item "
-                "and the ledger holds no DISPATCH for it; a run may exist that cannot be "
-                "correlated; refusing to dispatch again"
-            )
+        if callable(marked) and marked(work):  # early and cheap; the mark itself decides
+            raise DispatchRefused(_ALREADY_MARKED)
 
-    def _mark_dispatch(self, work: WorkItem) -> None:
-        """Second write-ahead record, in the transport; no send unless it stands.
+    def _take_dispatch_mark(self, work: WorkItem) -> None:
+        """Take the transport's dispatch mark for ``work`` or do not dispatch (the one gate).
 
-        Called after the ledger DISPATCH: a crash in between leaves the ledger in charge
-        (never dispatched again, nothing was sent), and a mark can only exist for a dispatch
-        the ledger recorded first.
+        The exclusive creation in the transport is the decision, not the look in
+        ``_refuse_second_dispatch``: between that look and here are a port call and the
+        ledger, and another adapter on the same spool may have dispatched meanwhile. Called
+        BEFORE the ledger DISPATCH, so an adapter that loses writes no DISPATCH (which would
+        hold up every other dispatch until the dispatch deadline) and sends nothing. A mark
+        that could not be written raises a plain ``AdapterError``: transient for the tick,
+        the work is kept; if the mark was created after all, the next try is refused.
         """
         mark = getattr(self.transport, "mark_dispatched", None)
         if not callable(mark):
             return
         try:
-            mark(work, identity=self.executor_identity)
+            taken = mark(work, identity=self.executor_identity)
         except (OSError, ContractError) as exc:
-            raise RemoteExecutionFailed(
-                f"dispatch mark could not be written; nothing was sent: {exc}"
+            raise AdapterError(
+                f"dispatch mark could not be written; nothing was recorded or sent: {exc}"
             ) from exc
+        if taken is not True:
+            raise DispatchRefused(_ALREADY_MARKED)
 
     def _unbound_dispatches(self, *, exclude: str = "") -> list[str]:
         """Dispatches without a bound run, taken from the DURABLE ledger (not from live works).

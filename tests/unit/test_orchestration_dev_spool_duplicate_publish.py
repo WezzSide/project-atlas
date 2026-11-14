@@ -137,6 +137,46 @@ def test_a_publish_whose_own_record_was_claimed_at_once_still_reports_fresh(tmp_
     assert claim(tmp_path) is None
 
 
+def test_a_symlink_in_the_claimed_slot_is_a_blocked_slot_even_with_the_same_bytes(tmp_path):
+    """A link is not this record's claim, whatever it points at: parked, not dropped."""
+    w = work()
+    SpoolTransport(tmp_path).publish(w)
+    elsewhere = tmp_path / "elsewhere.json"
+    elsewhere.write_text(encode(w), encoding="utf-8")
+    slot = tmp_path / "WORK" / "claimed" / f"{w.seal}.json"
+    try:
+        slot.symlink_to(elsewhere)
+    except OSError:
+        pytest.skip("cannot create a symbolic link here")
+    with pytest.raises(TransportError, match="could not be claimed"):
+        claim(tmp_path)
+    assert (tmp_path / "WORK" / "rejected" / f"{w.seal}.json").exists()
+
+
+def test_a_publish_that_cannot_tell_whose_claim_it_is_takes_its_name_back(tmp_path, monkeypatch):
+    """``samefile`` failing is "cannot tell": cleanup, never a second pending copy."""
+    w = work()
+    t = SpoolTransport(tmp_path)
+    t.publish(w)
+    assert claim(tmp_path) is not None
+    (tmp_path / "WORK" / "claimed" / f"{w.seal}.json").rename(tmp_path / "aside.json")
+    real_link = mod.os.link
+
+    def claimed_again_just_before_the_name_exists(src, dst, *args, **kw):
+        if Path(dst).parent.name == "WORK":
+            monkeypatch.setattr(mod.os, "link", real_link)
+            (tmp_path / "aside.json").rename(tmp_path / "WORK" / "claimed" / f"{w.seal}.json")
+        return real_link(src, dst, *args, **kw)
+
+    def cannot_tell(_a, _b):
+        raise PermissionError(13, "access denied")
+
+    monkeypatch.setattr(mod.os, "link", claimed_again_just_before_the_name_exists)
+    monkeypatch.setattr(mod.os.path, "samefile", cannot_tell)
+    assert t.publish(w) is False
+    assert not (tmp_path / "WORK" / f"{w.seal}.json").exists()
+
+
 # -- real concurrency: several publishers of one seal against several claimers ---------------------
 PUBLISHERS, CLAIMERS, ROUNDS = 6, 4, 40
 
