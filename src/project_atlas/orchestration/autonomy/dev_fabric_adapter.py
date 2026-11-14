@@ -26,6 +26,19 @@ approved it.
 Crash safety: DISPATCH is written ahead to the Crosswalk ledger, so a work item is dispatched at
 most once; run discovery is fail-closed on ambiguity.
 
+Dispatch-once across a lost ledger: on a transport that offers it (``mark_dispatched`` /
+``dispatch_marked``: the spool) the adapter also leaves a dispatch mark for the work record in
+the TRANSPORT, after the ledger record and before the send, and sends nothing when the mark
+cannot be written. A work item that has a mark but no DISPATCH in the ledger is refused
+(``DISPATCH_LEDGER_LOST``, terminal for that work item): the ledger was lost or replaced after
+a dispatch was started, a run may exist that this adapter can no longer tie to anything, and a
+second send would be a second executor attempt for one execution identity. Nothing is
+reconstructed: no DISPATCH is invented, and the lineage stays where the planner's journal has
+it until an operator acts. NOT covered: ledger and transport record lost together (the planner
+then publishes the record again and it is dispatched again), a transport without marks, and
+anyone who can write the spool removing a mark. The mark is unkeyed; it is a second memory in
+a second store, not a grant, not run correlation and not proof that a run exists.
+
 OPERATING ASSUMPTIONS (documented residuals, enforced by deployment, not by this module):
   * the execute workflow has no ``run-name``, so a run cannot be tied to a dispatch except by
     time window + serialisation; humans must not dispatch ``atlas-agent-execute.yml`` by hand
@@ -427,8 +440,7 @@ class FabricAdapter:
             raise AdapterError("no dispatch source configured")
         work.verify_seal()
         self.xw.bind_work(work)
-        if self.xw.hop(work.seal, "DISPATCH") is not None:
-            raise AdapterError("work item already dispatched; refusing to dispatch twice")
+        self._refuse_second_dispatch(work)
         if self._unbound_dispatches(exclude=work.seal):
             raise DispatchDeferred("another dispatch has not been bound to a run yet")
         if work.attempt == 1:
@@ -457,6 +469,7 @@ class FabricAdapter:
         self.xw.bind_dispatch(
             work.seal, dispatched_at=self.clock(), payload_sha256=payload.sha256()
         )
+        self._mark_dispatch(work)
         try:
             self.port.dispatch_workflow(payload.workflow, payload.ref, dict(payload.inputs))
         except AdapterError as exc:  # write-ahead already recorded: never retried, surfaced
@@ -496,8 +509,7 @@ class FabricAdapter:
             raise PackageBindingRefused(exc.reason, exc.detail) from None
         payload = binding.payload
         self.xw.bind_work(work)
-        if self.xw.hop(work.seal, "DISPATCH") is not None:
-            raise AdapterError("work item already dispatched; refusing to dispatch twice")
+        self._refuse_second_dispatch(work)
         if self._unbound_dispatches(exclude=work.seal):
             raise DispatchDeferred("another dispatch has not been bound to a run yet")
         base_branch = binding.base_branch
@@ -523,11 +535,41 @@ class FabricAdapter:
             payload_sha256=payload.sha256(),
             package_sha256=binding.package_sha256,
         )
+        self._mark_dispatch(work)
         try:
             self.port.dispatch_workflow(payload.workflow, payload.ref, dict(payload.inputs))
         except AdapterError as exc:  # write-ahead already recorded: never retried, surfaced
             raise RemoteExecutionFailed(f"dispatch failed: {exc}") from exc
         return payload
+
+    def _refuse_second_dispatch(self, work: WorkItem) -> None:
+        """Both memories of a started dispatch are asked; either one refuses a second send."""
+        if self.xw.hop(work.seal, "DISPATCH") is not None:
+            raise AdapterError("work item already dispatched; refusing to dispatch twice")
+        marked = getattr(self.transport, "dispatch_marked", None)
+        if callable(marked) and marked(work):
+            raise DispatchRefused(
+                "DISPATCH_LEDGER_LOST:the transport holds a dispatch mark for this work item "
+                "and the ledger holds no DISPATCH for it; a run may exist that cannot be "
+                "correlated; refusing to dispatch again"
+            )
+
+    def _mark_dispatch(self, work: WorkItem) -> None:
+        """Second write-ahead record, in the transport; no send unless it stands.
+
+        Called after the ledger DISPATCH: a crash in between leaves the ledger in charge
+        (never dispatched again, nothing was sent), and a mark can only exist for a dispatch
+        the ledger recorded first.
+        """
+        mark = getattr(self.transport, "mark_dispatched", None)
+        if not callable(mark):
+            return
+        try:
+            mark(work, identity=self.executor_identity)
+        except (OSError, ContractError) as exc:
+            raise RemoteExecutionFailed(
+                f"dispatch mark could not be written; nothing was sent: {exc}"
+            ) from exc
 
     def _unbound_dispatches(self, *, exclude: str = "") -> list[str]:
         """Dispatches without a bound run, taken from the DURABLE ledger (not from live works).

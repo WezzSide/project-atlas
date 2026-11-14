@@ -17,6 +17,8 @@ Layout::
     <root>/<CHANNEL>/claimed/<seal>.json          consumed (content kept as durable evidence), or
                                                   linked by a claim that found it withdrawn
     <root>/<CHANNEL>/claimed/<seal>.claim.json    who claimed it
+    <root>/<CHANNEL>/claimed/<seal>.dispatched    dispatch mark of a WORK record, kept for good
+                                                  (``mark_dispatched``)
 
 ``<root>`` is the directory given to ``SpoolTransport(root)``, or, for a transport bound to a
 store (``SpoolTransport.create`` / ``attach``), ``<home>/<store id>``: see the class.
@@ -26,6 +28,11 @@ consume-once across concurrent claimers: the ownership transition is the EXCLUSI
 the ``claimed/<seal>.json`` name with ``os.link`` (it fails with ``FileExistsError`` for every
 claimer but one, on POSIX and on Windows; that one claimer does not hand the record out when
 it finds the record withdrawn after its link, see ``withdraw``, and the name stays).
+A consumed record is never pending again (ATLAS-DEVQ-0015): a ``publish`` that creates the
+record's name after another publication of the same seal was claimed takes the name back,
+and ``claim`` drops a pending file whose bytes are exactly those of the claimed record
+(neither handed out nor parked). This holds while ``claimed/<seal>.json`` exists; a spool
+that lost it has no memory of the delivery.
 ``os.rename`` is deliberately NOT the ownership
 primitive: on Windows it opens the source by name and renames by handle, so several claimers that
 opened the same file before the first rename completed can each report success. Removing the
@@ -66,6 +73,7 @@ from project_atlas.orchestration.autonomy.dev_transport import (
 )
 
 _CLAIMED = "claimed"
+_DISPATCHED = ".dispatched"  # not ``.json``: never listed, claimed or decoded as a record
 _WITHDRAWN = "withdrawn"
 _STORE_ID = re.compile(r"[0-9a-f]{32}")
 MAX_ADDRESS_BYTES = 256
@@ -141,6 +149,61 @@ def _lost_race(path: Path, dest: Path) -> bool:
         return True  # vanished between the checks: the winner finished
     except OSError:
         return False
+
+
+def _consumed_copy(path: Path, dest: Path) -> bool:
+    """Is pending ``path`` a second publication of the record that ``dest`` already holds?
+
+    True only when ``dest`` is a regular file (no symlink) with exactly the bytes of ``path``:
+    the record was consumed and this name is a late copy of it, not a new record and not a
+    blocked slot. Anything unreadable or different is not a copy (the caller parks it).
+    Raises ``FileNotFoundError`` when the pending name is gone: its publisher took it back
+    meanwhile, so there is nothing to judge. The caller must not park then, because the
+    name can be created again by the next publisher at any moment and parking THAT file
+    would reject a valid record over a race.
+    """
+    if path.is_symlink():
+        return False
+    mine = _read_bytes(path)  # FileNotFoundError propagates
+    try:
+        if dest.is_symlink() or not dest.is_file():
+            return False
+        return mine == _read_bytes(dest)
+    except OSError:
+        return False
+
+
+def _claimed_by_another_file(mine: str, taken: Path) -> bool:
+    """Does the claimed name exist and hold another file than ``mine`` (this publish's own)?
+
+    Compared by file identity against the publisher's still-linked temp name, never against
+    the pending name: a claimer may already have removed that one, or a second publisher
+    created it again.
+    """
+    try:
+        return not os.path.samefile(mine, taken)
+    except FileNotFoundError:
+        return False  # not claimed
+    except OSError:
+        return True  # cannot tell: take the name back (cleanup only, never ownership)
+
+
+def _sync_dir(path: Path) -> None:
+    """Flush a directory entry where the platform can (POSIX); a no-op where it cannot."""
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return  # e.g. Windows: a directory cannot be opened this way
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass  # a filesystem that does not sync directories: the file itself was synced
+    finally:
+        os.close(fd)
+
+
+def _read_bytes(path: Path) -> bytes:
+    return _retry_transient(path.read_bytes, still_valid=path.exists)
 
 
 class SpoolTransport:
@@ -263,6 +326,10 @@ class SpoolTransport:
         A seal that was withdrawn (``withdraw``) is not published again: this returns False
         for it, before and after creating the record's name (a name it created and cannot
         remove again stays, and is not handed out).
+        A seal that was claimed is not published again either, also when the claim happened
+        between this call's look and its creation of the record's name (two publishers of
+        one seal, e.g. a dispatcher and a peer's ``recover``): the name is taken back and
+        this returns False. A copy that could not be taken back is dropped by ``claim``.
         """
         self._check_binding()
         channel = CHANNEL_FOR_KIND[record.KIND]
@@ -299,10 +366,21 @@ class SpoolTransport:
                 os.link(tmp, final)  # atomic, refuses to overwrite
             except FileExistsError:
                 return False
+            # Claimed while this publish was on its way? An earlier publication of the seal
+            # was then consumed after this call looked and before it created the name. A
+            # claimer links the claimed name BEFORE it removes the pending one, so whenever
+            # this call's link could succeed after a claim, the claimed name is already
+            # there to see. The name created here is then a second copy of a delivered
+            # record, not a delivery. (When the claimed name IS the file created here, this
+            # publication is the one that was claimed: that is fresh.)
+            late = _claimed_by_another_file(tmp, d / _CLAIMED / f"{record.seal}.json")
         finally:
             os.unlink(tmp)
         if tomb.exists():  # withdrawn while this publish was on its way: take the name back
             _release_pending(final)
+            return False
+        if late:
+            _release_pending(final)  # take the copy back; ``claim`` drops one that stays
             return False
         return True
 
@@ -359,6 +437,17 @@ class SpoolTransport:
                     continue  # persistent contention: the record stays pending, nothing rejected
                 if _lost_race(path, dest):
                     continue  # another claimer linked it; a lost race never becomes a second claim
+                try:
+                    copy = _consumed_copy(path, dest)
+                except FileNotFoundError:
+                    continue  # the copy's publisher took it back between the two looks
+                if copy:
+                    # A second publication of a record that was already consumed (its
+                    # publisher has not taken it back yet, or died first). It is the same
+                    # record, delivered once: not handed out again, and not a hostile file,
+                    # so neither parked nor raised. Removing the name is cleanup only.
+                    _release_pending(path)
+                    continue
                 # the claimed/ slot holds something that is not this record's claim: blocked slot
                 if self._park(d, path):
                     raise TransportError("record could not be claimed and was parked") from None
@@ -457,6 +546,53 @@ class SpoolTransport:
             return False
         _release_pending(d / name)
         return fresh and not (d / _CLAIMED / name).exists()
+
+    def _mark(self, record: Record) -> Path:
+        self._check_binding()
+        encode(record)  # verifies the seal: a mark is only ever about a sealed record
+        return self._dir(CHANNEL_FOR_KIND[record.KIND]) / _CLAIMED / f"{record.seal}{_DISPATCHED}"
+
+    def mark_dispatched(self, record: Record, *, identity: str) -> bool:
+        """Leave a permanent mark that ``identity`` is about to act on ``record``, once.
+
+        For the executor side of a WORK record: a second memory of "a dispatch for this seal
+        was started", in another store than the executor's own ledger, so that losing that
+        ledger alone does not make the record look new. True when this call created the
+        mark, False when one was there (the first stands; nothing here removes or rewrites
+        it). Exclusive creation (``os.link``), the content and the directory entry are
+        flushed before this returns; an ``OSError`` means the mark may not exist and the
+        caller must not act. The mark is delivery-side metadata like an address: unkeyed,
+        outside the record's seal, and whoever can write the spool can create one (which
+        only ever stops a dispatch) or remove one (which returns that record to what the
+        ledger alone says). It is lost with the spool directory.
+        """
+        mark = self._mark(record)
+        if os.path.lexists(mark):
+            return False
+        body = json.dumps({"identity": identity, "seal": record.seal}, sort_keys=True)
+        fd, tmp = tempfile.mkstemp(dir=mark.parent, prefix=".tmp-")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(body)
+                fh.flush()
+                os.fsync(fh.fileno())
+            try:
+                os.link(tmp, mark)
+            except FileExistsError:
+                return False
+        finally:
+            os.unlink(tmp)
+        _sync_dir(mark.parent)
+        return True
+
+    def dispatch_marked(self, record: Record) -> bool:
+        """Does anything stand under the record's dispatch-mark name? (Never reads it.)
+
+        Deliberately the weakest test: a mark that is torn, unreadable, a directory or a
+        dangling link still counts, because the question a caller asks is "may I act as if
+        nothing was started?" and the answer to that is no.
+        """
+        return os.path.lexists(self._mark(record))
 
     def published(self, channel: Channel) -> list[Record]:
         """The decodable records this spool holds on ``channel``, pending or claimed.
