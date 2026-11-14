@@ -17199,3 +17199,110 @@ stand as recorded on the PR. GitHub attributes the merge to the account `WezzSid
 shared: that is not evidence of which human or agent initiated it, and nothing in this
 repository establishes who did. Proven scope of #1073: single-process, threaded
 spool-fencing semantics.
+
+## 2026-11-14 — ATLAS-DEVQ-0015: recovery / duplicate semantics (a second publication is not a second delivery; a lost ledger is not a licence to dispatch)
+
+Work on the owner's ACTIVATION BLOCKER "recovery / duplicate semantics" (2026-10-05), based
+on main at `c5508f87`. It addresses the two defects that entry names as known. It does not
+decide whether the blocker is closed: that stays the owner's call, and one case stays open
+and is pinned by a test (below).
+
+Both defects were reproduced on the unmodified base before anything was changed.
+
+1. Spool: a duplicate publication became an ambiguous delivery. Two publishers of one seal
+   (a dispatcher and a peer's `recover`): the second decided "not there yet", the first
+   publication was then claimed and its pending name removed, and the second created the
+   name again. The spool held a pending copy of a consumed record; the next `claim` parked
+   it in `rejected/` and raised `TransportError`. Reproduced with a deterministic
+   interleaving and with threads (6 publishers, 4 claimers, 40 rounds: fails on the base).
+   Now `publish` looks at the claimed name after it created the pending one and takes its
+   name back when the claimed name is another file than its own (compared by file identity
+   against the publisher's still-linked temp name); a claimer links the claimed name before
+   it removes the pending one, so a publish whose link succeeds after a claim always finds
+   it. `claim` drops a pending file whose bytes are exactly those of the claimed record:
+   not handed out, not parked, no error. A claimed slot that holds anything else is still a
+   blocked slot (parked once, raised), as before.
+2. Adapter: a lost ledger became a second dispatch. Dispatch-once rested on one record, the
+   DISPATCH line of the crosswalk ledger. With the ledger and the pending directory lost
+   and the spool intact, a restarted adapter re-adopted its claimed work record (it cannot
+   be told from one claimed just before a crash) and sent the workflow dispatch again:
+   measured, 2 sends for one execution identity. This is a wider case than the backlog
+   wording ("republished ... if the crosswalk is lost too"): no republication is needed.
+   Now a dispatch starts by TAKING a dispatch mark for the work record in the transport
+   (`SpoolTransport.mark_dispatched`: exclusive creation, never removed; the content is
+   flushed, and the directory entry where the platform can). Order: mark, ledger DISPATCH,
+   send. An adapter that does not take the mark refuses with `DISPATCH_ALREADY_MARKED` (a
+   `DispatchRefused`, terminal for that work item, reported once by the tick), writes no
+   DISPATCH and sends nothing. No DISPATCH is reconstructed. A mark that cannot be written
+   is transient: the work is kept and tried again.
+
+A first version of the spool change was wrong and the stress test showed it: run on the home
+filesystem instead of `/tmp` it failed in about 4 of 10 runs. A claimer that lost the
+exclusive create found the copy gone (its publisher had taken it back), then parked the NEXT
+publisher's copy under the same name and raised. `claim` now leaves a name that vanished
+between its two looks alone, and a deterministic test covers that window.
+
+Review of the first pushed head (`2d9eace0`) and what changed because of it. A second
+session of the same account read the diff adversarially: a fresh context, NOT an independent
+verification. It demonstrated a hole in the adapter half. At that head the order was ledger,
+mark, send, and the adapter did not look at what `mark_dispatched` returned. A second adapter
+with its own empty ledger on the same spool (the ledger-loss case, or a second instance)
+that re-adopted the record could look for the mark, find none, and send after the first
+adapter had sent in between: 2 sends with the spool intact. The same order made a mark that
+could not be written terminal, with a ledger DISPATCH that had no run and held up every other
+dispatch until the 15 minute dispatch deadline. Both are gone with the mark taken first and
+its result deciding. The cost, stated: a crash between mark and ledger now leaves a work
+item that is refused although nothing was sent (before, a crash between ledger and send did
+the same through the ledger; that case is unchanged). The reviewer also found five mutants
+no test caught (package mode without the mark, package mode without the refusal, a
+non-exclusive mark, the "cannot tell" branch of the publish take-back, a symlinked claimed
+slot); each now fails a test. Its multi-process run of the spool half (5 publisher and 4
+claimer processes plus a withdrawer, 150 rounds) found nothing on this branch and 86 bad
+rounds on main; that figure is the reviewer's and was not re-run here.
+
+What this is not, and what stays open:
+- Ledger and spool record lost together: the planner publishes the record again and it is
+  dispatched again. `test_limit_ledger_and_spool_record_both_lost_is_still_a_second_dispatch`
+  asserts the two sends so the limit cannot silently move. Closing it needs something outside
+  both local stores (run correlation token / dispatch grant; neither is built).
+- The mark is an unkeyed file in the spool, outside the record's seal. Whoever can write the
+  spool can create one (stops a dispatch) or remove one (back to the ledger alone). It is
+  not a grant, not run correlation, and not evidence that a run exists.
+- A `DISPATCH_ALREADY_MARKED` refusal cannot tell a lost ledger from a second adapter or
+  from a crash between mark and ledger. It is reported by the adapter's tick only: the
+  planner is not told, the lineage stays DISPATCHED, and there is no operator procedure.
+- A silent drop replaces a loud park for one more case than the duplicate publication: a
+  pending record whose claimed name holds the same bytes without a completed claim (a
+  claimer that died after its link). The record is not lost, `claimed_records` still returns
+  it; but nothing lands in `rejected/`.
+- A transport without marks (`InMemoryTransport`) behaves as before.
+- The spool guarantee holds while `claimed/<seal>.json` exists; it compares bytes, so a
+  pending file of the same seal with other bytes is still parked.
+- "No second authority consumption" is untested because no authority consumption exists.
+- Local runs only: one host, Linux, one process with threads. Not run on Windows (no
+  Windows host here); `mypy --platform win32` on the two changed modules is clean, which is
+  a type check and not a behaviour check. The directory flush is skipped where a directory
+  cannot be opened. No CI run existed for this branch when this was written, and no
+  independent verification has been done.
+
+Commands and results (a virtualenv built for this worktree, so subprocess tests import this
+tree and not another checkout):
+- `python -m pytest` (repository defaults) on the final code, tests and `docs/backlog.md`:
+  7950 passed, 8 skipped, 4 xfailed, exit 0. Only this "Commands and results" list was
+  edited after that run. (The first pushed head had 7939 passed, 8 skipped, 4 xfailed.)
+- `python -m ruff check src tests`: clean. `python -m mypy src`: no issues in 420 files.
+- New tests: `test_orchestration_dev_spool_duplicate_publish.py` (10) and
+  `test_orchestration_dev_dispatch_once_ledger_loss.py` (20). Measured on the base at the
+  first head: 5 of the 7 spool tests that existed then and 8 of the 11 adapter tests that
+  existed then failed; the ones that passed there are controls and the pinned limit. The
+  tests added since were measured against mutants, not against the base.
+- Both new files 8 consecutive times on the home filesystem at the final code: 8 times all
+  passed. Before the rework, the spool file alone 40 consecutive times: 40 passed.
+- Scratch mutants at the final code, each failing at least one test of the two new files:
+  no mark taken in `dispatch` (12 fail); none in `dispatch_package` (1); the mark's result
+  ignored (1); no early look (1); a non-exclusive mark (3); "cannot tell" treated as "not
+  claimed" in `publish` (1); no symlink check on the claimed slot (1); a temp name that
+  cannot be removed raising out of `mark_dispatched` (1). Measured before the rework and
+  not repeated after it: no take-back in `publish` (2 fail); no drop in `claim` (2 to 3);
+  parking after a vanished name (the deterministic test fails; the stress test alone
+  caught it in 2 of 6 runs).
